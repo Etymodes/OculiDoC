@@ -4,7 +4,7 @@ from datetime import UTC, date
 
 import pytest
 
-from oculidoc.domain import Patient, Sex
+from oculidoc.domain import ClinicalDiagnosis, Patient, Sex
 
 
 def test_patient_normalizes_text_fields() -> None:
@@ -99,3 +99,11 @@ def test_patient_can_be_deactivated_and_reactivated() -> None:
     patient.activate()
 
     assert patient.is_active is True
+
+
+def test_clinical_diagnosis_enum_values() -> None:
+    assert ClinicalDiagnosis.UNKNOWN.value == "unknown"
+    assert ClinicalDiagnosis.UWS.value == "uws"
+    assert ClinicalDiagnosis.MCS_MINUS.value == "mcs_minus"
+    assert ClinicalDiagnosis.MCS_PLUS.value == "mcs_plus"
+    assert ClinicalDiagnosis.EMCS.value == "emcs"

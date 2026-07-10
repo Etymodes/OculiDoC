@@ -1,5 +1,5 @@
 """Domain models and scoring rules."""
 
-from oculidoc.domain.patient import Patient, Sex
+from oculidoc.domain.patient import ClinicalDiagnosis, Patient, Sex
 
-__all__ = ["Patient", "Sex"]
+__all__ = ["ClinicalDiagnosis", "Patient", "Sex"]

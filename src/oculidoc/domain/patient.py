@@ -14,6 +14,18 @@ class Sex(StrEnum):
     UNKNOWN = "unknown"
 
 
+class ClinicalDiagnosis(StrEnum):
+    """Standardized disorders-of-consciousness diagnosis."""
+
+    UNKNOWN = "unknown"
+    COMA = "coma"
+    UWS = "uws"
+    MCS_MINUS = "mcs_minus"
+    MCS_PLUS = "mcs_plus"
+    EMCS = "emcs"
+    OTHER = "other"
+
+
 def _utc_now() -> datetime:
     """Return the current timezone-aware UTC time."""
     return datetime.now(UTC)
