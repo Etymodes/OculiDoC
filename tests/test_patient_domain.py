@@ -15,14 +15,14 @@ def test_patient_normalizes_text_fields() -> None:
         date_of_birth=date(1980, 7, 11),
         enrollment_date=date(2026, 7, 10),
         etiology=" TBI ",
-        clinical_diagnosis=" MCS+ ",
+        clinical_diagnosis=ClinicalDiagnosis.MCS_PLUS,
         notes=" 首次测试 ",
     )
 
     assert patient.patient_code == "DOC-001"
     assert patient.family_name == "王"
     assert patient.etiology == "TBI"
-    assert patient.clinical_diagnosis == "MCS+"
+    assert patient.clinical_diagnosis is ClinicalDiagnosis.MCS_PLUS
     assert patient.notes == "首次测试"
     assert patient.display_label == "王患者（DOC-001）"
     assert patient.created_at.tzinfo is UTC
@@ -107,3 +107,42 @@ def test_clinical_diagnosis_enum_values() -> None:
     assert ClinicalDiagnosis.MCS_MINUS.value == "mcs_minus"
     assert ClinicalDiagnosis.MCS_PLUS.value == "mcs_plus"
     assert ClinicalDiagnosis.EMCS.value == "emcs"
+
+
+def test_patient_defaults_to_unknown_diagnosis() -> None:
+    patient = Patient(
+        patient_code="DOC-007",
+        family_name="?",
+    )
+
+    assert patient.clinical_diagnosis is ClinicalDiagnosis.UNKNOWN
+
+
+def test_patient_normalizes_stored_diagnosis_string() -> None:
+    patient = Patient(
+        patient_code="DOC-008",
+        family_name="?",
+        clinical_diagnosis="uws",  # type: ignore[arg-type]
+    )
+
+    assert patient.clinical_diagnosis is ClinicalDiagnosis.UWS
+
+
+def test_patient_normalizes_diagnosis_details() -> None:
+    patient = Patient(
+        patient_code="DOC-009",
+        family_name="?",
+        diagnosis_details=" ????? MCS+ ",
+    )
+
+    assert patient.diagnosis_details == "????? MCS+"
+
+
+def test_empty_diagnosis_details_become_none() -> None:
+    patient = Patient(
+        patient_code="DOC-010",
+        family_name="?",
+        diagnosis_details="   ",
+    )
+
+    assert patient.diagnosis_details is None

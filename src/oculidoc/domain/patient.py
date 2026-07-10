@@ -50,7 +50,8 @@ class Patient:
     sex: Sex = Sex.UNKNOWN
     date_of_birth: date | None = None
     etiology: str | None = None
-    clinical_diagnosis: str | None = None
+    clinical_diagnosis: ClinicalDiagnosis = ClinicalDiagnosis.UNKNOWN
+    diagnosis_details: str | None = None
     enrollment_date: date = field(default_factory=date.today)
     notes: str = ""
 
@@ -64,7 +65,8 @@ class Patient:
         self.patient_code = self.patient_code.strip()
         self.family_name = self.family_name.strip()
         self.etiology = _clean_optional_text(self.etiology)
-        self.clinical_diagnosis = _clean_optional_text(self.clinical_diagnosis)
+        self.clinical_diagnosis = ClinicalDiagnosis(self.clinical_diagnosis)
+        self.diagnosis_details = _clean_optional_text(self.diagnosis_details)
         self.notes = self.notes.strip()
 
         if not self.patient_code:
