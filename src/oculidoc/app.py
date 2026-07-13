@@ -34,7 +34,10 @@ def create_admin_window(
     settings: Settings,
 ) -> tuple[AdminMainWindow, DatabaseRuntime]:
     """Initialize storage and construct the administrator window."""
-    database_runtime = initialize_database(settings.database_path)
+    database_runtime = initialize_database(
+        settings.database_path,
+        data_root=settings.data_dir,
+    )
 
     try:
         window = AdminMainWindow(

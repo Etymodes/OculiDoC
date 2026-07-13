@@ -3,6 +3,7 @@
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
+import sqlalchemy as sa
 from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -120,5 +121,119 @@ class PatientAuditRecord(Base):
     )
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
+        nullable=False,
+    )
+
+
+class ExperimentSessionRecord(Base):
+    """Persistence model for one experiment session."""
+
+    __tablename__ = "experiment_sessions"
+
+    session_id: Mapped[str] = mapped_column(
+        sa.String(36),
+        primary_key=True,
+    )
+    patient_id: Mapped[str] = mapped_column(
+        sa.ForeignKey("patients.patient_id"),
+        index=True,
+        nullable=False,
+    )
+    module_id: Mapped[str] = mapped_column(
+        sa.String(128),
+        index=True,
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(
+        sa.String(32),
+        index=True,
+        nullable=False,
+    )
+    data_directory: Mapped[str] = mapped_column(
+        sa.Text,
+        nullable=False,
+    )
+    schema_version: Mapped[str] = mapped_column(
+        sa.String(32),
+        nullable=False,
+    )
+    clock_origin_monotonic_ns: Mapped[int | None] = mapped_column(
+        sa.BigInteger,
+        nullable=True,
+    )
+    clock_origin_utc: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=True,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=True,
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=True,
+    )
+    failure_reason: Mapped[str | None] = mapped_column(
+        sa.Text,
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
+        nullable=False,
+    )
+
+
+class SessionArtifactRecord(Base):
+    """Persistence model for one session data file."""
+
+    __tablename__ = "session_artifacts"
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "session_id",
+            "relative_path",
+            name="uq_session_artifact_path",
+        ),
+    )
+
+    artifact_id: Mapped[str] = mapped_column(
+        sa.String(36),
+        primary_key=True,
+    )
+    session_id: Mapped[str] = mapped_column(
+        sa.ForeignKey("experiment_sessions.session_id"),
+        index=True,
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(
+        sa.String(32),
+        index=True,
+        nullable=False,
+    )
+    relative_path: Mapped[str] = mapped_column(
+        sa.Text,
+        nullable=False,
+    )
+    source: Mapped[str] = mapped_column(
+        sa.String(64),
+        nullable=False,
+    )
+    mime_type: Mapped[str | None] = mapped_column(
+        sa.String(128),
+        nullable=True,
+    )
+    size_bytes: Mapped[int | None] = mapped_column(
+        sa.BigInteger,
+        nullable=True,
+    )
+    sha256: Mapped[str | None] = mapped_column(
+        sa.String(64),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True),
         nullable=False,
     )
