@@ -7,9 +7,15 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from oculidoc.application import PatientService
+from oculidoc.infrastructure.database.audit_repositories import (
+    SQLitePatientAuditRepository,
+)
 from oculidoc.infrastructure.database.base import Base
 from oculidoc.infrastructure.database.engine import (
     create_sqlite_engine,
+)
+from oculidoc.infrastructure.database.models import (
+    PatientAuditRecord as PatientAuditRecord,
 )
 from oculidoc.infrastructure.database.models import (
     PatientRecord as PatientRecord,
@@ -29,6 +35,7 @@ class DatabaseRuntime:
     engine: Engine
     session_factory: sessionmaker[Session]
     patient_repository: SQLitePatientRepository
+    patient_audit_repository: SQLitePatientAuditRepository
     patient_service: PatientService
 
     def dispose(self) -> None:
@@ -51,11 +58,16 @@ def initialize_database(
 
     session_factory = create_session_factory(engine)
     patient_repository = SQLitePatientRepository(session_factory)
-    patient_service = PatientService(patient_repository)
+    patient_audit_repository = SQLitePatientAuditRepository(session_factory)
+    patient_service = PatientService(
+        patient_repository,
+        patient_audit_repository,
+    )
 
     return DatabaseRuntime(
         engine=engine,
         session_factory=session_factory,
         patient_repository=patient_repository,
+        patient_audit_repository=patient_audit_repository,
         patient_service=patient_service,
     )

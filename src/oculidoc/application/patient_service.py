@@ -4,8 +4,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from uuid import UUID
 
-from oculidoc.application.patient_repository import PatientRepository
+from oculidoc.application.patient_audit_repository import (
+    PatientAuditRepository,
+)
+from oculidoc.application.patient_repository import (
+    PatientRepository,
+)
 from oculidoc.domain import ClinicalDiagnosis, Patient, Sex
+from oculidoc.domain.patient_audit import (
+    PatientAuditAction,
+    PatientAuditEvent,
+)
 
 
 class DuplicatePatientCodeError(ValueError):
@@ -47,14 +56,51 @@ class UpdatePatientRequest:
     notes: str = ""
 
 
+_EDITABLE_FIELDS = (
+    "patient_code",
+    "family_name",
+    "sex",
+    "date_of_birth",
+    "etiology",
+    "clinical_diagnosis",
+    "diagnosis_details",
+    "enrollment_date",
+    "notes",
+)
+
+
 class PatientService:
     """Coordinate patient use cases independently of UI and storage."""
 
     def __init__(
         self,
         repository: PatientRepository,
+        audit_repository: PatientAuditRepository | None = None,
+        *,
+        actor: str = "local_admin",
     ) -> None:
         self._repository = repository
+        self._audit_repository = audit_repository
+        self._actor = actor
+
+    def _record_audit(
+        self,
+        patient_id: UUID,
+        action: PatientAuditAction,
+        changed_fields: tuple[str, ...] = (),
+    ) -> None:
+        """Persist an audit event when audit storage is available."""
+        if self._audit_repository is None:
+            return
+
+        self._audit_repository.add(
+            PatientAuditEvent(
+                patient_id=patient_id,
+                action=action,
+                changed_fields=changed_fields,
+                actor=self._actor,
+            )
+        )
 
     def register_patient(
         self,
@@ -80,7 +126,15 @@ class PatientService:
             notes=request.notes,
         )
 
-        return self._repository.add(patient)
+        saved_patient = self._repository.add(patient)
+
+        self._record_audit(
+            saved_patient.patient_id,
+            PatientAuditAction.REGISTERED,
+            _EDITABLE_FIELDS,
+        )
+
+        return saved_patient
 
     def update_patient(
         self,
@@ -114,7 +168,22 @@ class PatientService:
             updated_at=datetime.now(UTC),
         )
 
-        return self._repository.update(updated_patient)
+        changed_fields = tuple(
+            field_name
+            for field_name in _EDITABLE_FIELDS
+            if getattr(current_patient, field_name) != getattr(updated_patient, field_name)
+        )
+
+        saved_patient = self._repository.update(updated_patient)
+
+        if changed_fields:
+            self._record_audit(
+                saved_patient.patient_id,
+                PatientAuditAction.UPDATED,
+                changed_fields,
+            )
+
+        return saved_patient
 
     def get_patient(self, patient_id: UUID) -> Patient:
         """Return one patient or raise a domain-facing error."""
@@ -133,15 +202,42 @@ class PatientService:
         """Return patients for the administrator interface."""
         return self._repository.list_all(active_only=active_only)
 
+    def list_patient_audit(
+        self,
+        patient_id: UUID,
+        *,
+        limit: int = 20,
+    ) -> list[PatientAuditEvent]:
+        """Return recent audit events for one patient."""
+        self.get_patient(patient_id)
+
+        if self._audit_repository is None:
+            return []
+
+        return self._audit_repository.list_for_patient(
+            patient_id,
+            limit=limit,
+        )
+
     def deactivate_patient(
         self,
         patient_id: UUID,
     ) -> Patient:
         """Deactivate a patient while preserving historical data."""
         patient = self.get_patient(patient_id)
+        was_active = patient.is_active
         patient.deactivate()
 
-        return self._repository.update(patient)
+        saved_patient = self._repository.update(patient)
+
+        if was_active:
+            self._record_audit(
+                saved_patient.patient_id,
+                PatientAuditAction.DEACTIVATED,
+                ("is_active",),
+            )
+
+        return saved_patient
 
     def activate_patient(
         self,
@@ -149,6 +245,16 @@ class PatientService:
     ) -> Patient:
         """Reactivate a previously deactivated patient."""
         patient = self.get_patient(patient_id)
+        was_active = patient.is_active
         patient.activate()
 
-        return self._repository.update(patient)
+        saved_patient = self._repository.update(patient)
+
+        if not was_active:
+            self._record_audit(
+                saved_patient.patient_id,
+                PatientAuditAction.ACTIVATED,
+                ("is_active",),
+            )
+
+        return saved_patient

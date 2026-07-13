@@ -3,7 +3,7 @@
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Date, DateTime, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from oculidoc.domain import ClinicalDiagnosis, Sex
@@ -87,4 +87,38 @@ class PatientRecord(Base):
         nullable=False,
         default=_utc_now,
         onupdate=_utc_now,
+    )
+
+
+class PatientAuditRecord(Base):
+    """Persistence model for immutable patient audit events."""
+
+    __tablename__ = "patient_audit_events"
+
+    event_id: Mapped[str] = mapped_column(
+        String(36),
+        primary_key=True,
+    )
+    patient_id: Mapped[str] = mapped_column(
+        ForeignKey("patients.patient_id"),
+        index=True,
+        nullable=False,
+    )
+    action: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+    )
+    changed_fields: Mapped[list[str]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=list,
+    )
+    actor: Mapped[str] = mapped_column(
+        String(128),
+        nullable=False,
+        default="local_admin",
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
     )

@@ -30,6 +30,7 @@ from oculidoc.application import (
     UpdatePatientRequest,
 )
 from oculidoc.domain import ClinicalDiagnosis, Patient, Sex
+from oculidoc.domain.patient_audit import PatientAuditAction
 
 SEX_LABELS = {
     Sex.UNKNOWN: "\u672a\u77e5",
@@ -350,6 +351,21 @@ class PatientManagementDialog(QDialog):
         self.patient_list.setObjectName("patientList")
         self.patient_list.itemDoubleClicked.connect(self._select_patient)
 
+        self.patient_list.currentItemChanged.connect(self._refresh_detail)
+
+        self.patient_detail_label = QLabel(
+            "\u8bf7\u9009\u62e9\u4e00\u540d\u60a3\u8005\u67e5\u770b\u8be6\u60c5\u3002"
+        )
+        self.patient_detail_label.setObjectName("patientDetailLabel")
+        self.patient_detail_label.setWordWrap(True)
+        self.patient_detail_label.setMinimumHeight(145)
+        self.patient_detail_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.patient_detail_label.setStyleSheet(
+            "background: #f5f8fb; border: 1px solid #d9e3ec; border-radius: 8px; padding: 10px;"
+        )
+
         self.new_button = QPushButton("\u767b\u8bb0\u65b0\u60a3\u8005")
         self.new_button.setObjectName("newPatientButton")
         self.new_button.clicked.connect(self._open_registration_dialog)
@@ -380,6 +396,7 @@ class PatientManagementDialog(QDialog):
         root = QVBoxLayout(self)
         root.addWidget(title)
         root.addWidget(self.patient_list, 1)
+        root.addWidget(self.patient_detail_label)
         root.addLayout(actions)
 
         self.refresh_patients()
@@ -438,6 +455,86 @@ class PatientManagementDialog(QDialog):
             )
 
         return patient
+
+    def _refresh_detail(
+        self,
+        current: QListWidgetItem | None = None,
+        previous: QListWidgetItem | None = None,
+    ) -> None:
+        """Display information for the highlighted patient."""
+        del current, previous
+
+        patient = self._current_patient()
+
+        if patient is None:
+            self.patient_detail_label.setText(
+                "\u8bf7\u9009\u62e9\u4e00\u540d\u60a3\u8005\u67e5\u770b\u8be6\u60c5\u3002"
+            )
+            return
+
+        status = "\u542f\u7528" if patient.is_active else "\u5df2\u505c\u7528"
+        birth_date = (
+            patient.date_of_birth.isoformat()
+            if patient.date_of_birth is not None
+            else "\u672a\u77e5"
+        )
+
+        action_labels = {
+            PatientAuditAction.REGISTERED: ("\u767b\u8bb0\u60a3\u8005"),
+            PatientAuditAction.UPDATED: ("\u4fee\u6539\u8d44\u6599"),
+            PatientAuditAction.DEACTIVATED: ("\u505c\u7528\u60a3\u8005"),
+            PatientAuditAction.ACTIVATED: ("\u6062\u590d\u60a3\u8005"),
+        }
+
+        field_labels = {
+            "patient_code": "\u60a3\u8005\u7f16\u53f7",
+            "family_name": "\u663e\u793a\u79f0\u547c",
+            "sex": "\u6027\u522b",
+            "date_of_birth": "\u51fa\u751f\u65e5\u671f",
+            "etiology": "\u75c5\u56e0",
+            "clinical_diagnosis": "\u4e34\u5e8a\u8bca\u65ad",
+            "diagnosis_details": "\u8bca\u65ad\u8865\u5145",
+            "enrollment_date": "\u5165\u7ec4\u65e5\u671f",
+            "notes": "\u5907\u6ce8",
+            "is_active": "\u542f\u7528\u72b6\u6001",
+        }
+
+        events = self.patient_service.list_patient_audit(
+            patient.patient_id,
+            limit=5,
+        )
+        audit_lines: list[str] = []
+
+        for event in events:
+            changed = "\u3001".join(
+                field_labels.get(field_name, field_name) for field_name in event.changed_fields
+            )
+            occurred_at = event.occurred_at.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+            audit_lines.append(
+                f"{occurred_at}  "
+                f"{action_labels[event.action]}" + (f" [{changed}]" if changed else "")
+            )
+
+        if not audit_lines:
+            audit_lines.append("\u6682\u65e0\u53d8\u66f4\u8bb0\u5f55")
+
+        details = [
+            f"\u60a3\u8005\uff1a{patient.display_label}",
+            f"\u72b6\u6001\uff1a{status}",
+            f"\u6027\u522b\uff1a{SEX_LABELS[patient.sex]}",
+            f"\u51fa\u751f\u65e5\u671f\uff1a{birth_date}",
+            f"\u75c5\u56e0\uff1a{patient.etiology or '-'}",
+            (f"\u4e34\u5e8a\u8bca\u65ad\uff1a{diagnosis_display_name(patient.clinical_diagnosis)}"),
+            (f"\u8bca\u65ad\u8865\u5145\uff1a{patient.diagnosis_details or '-'}"),
+            (f"\u5165\u7ec4\u65e5\u671f\uff1a{patient.enrollment_date.isoformat()}"),
+            f"\u5907\u6ce8\uff1a{patient.notes or '-'}",
+            "",
+            "\u6700\u8fd1\u53d8\u66f4\uff1a",
+            *audit_lines,
+        ]
+
+        self.patient_detail_label.setText("\n".join(details))
 
     def _open_registration_dialog(
         self,
