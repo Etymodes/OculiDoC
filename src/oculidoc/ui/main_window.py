@@ -17,16 +17,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from oculidoc.application import PatientService
 from oculidoc.config import Settings
 from oculidoc.modules.registry import DEFAULT_MODULES, ModuleDefinition
 from oculidoc.ui.patient_window import PatientDisplayWindow
 
 
 class AdminMainWindow(QMainWindow):
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        patient_service: PatientService | None = None,
+    ) -> None:
         super().__init__()
 
         self.settings = settings
+        self.patient_service = patient_service
         self.module_buttons: dict[str, QPushButton] = {}
         self._patient_window = PatientDisplayWindow()
         self._patient_window.exit_requested.connect(self._restore_admin_window)
@@ -78,6 +84,37 @@ class AdminMainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
+    def _patient_counts(self) -> tuple[int, int]:
+        """Return total and active patient counts."""
+        if self.patient_service is None:
+            return 0, 0
+
+        patients = self.patient_service.list_patients()
+        active_count = sum(patient.is_active for patient in patients)
+
+        return len(patients), active_count
+
+    def _patient_panel_text(self) -> str:
+        """Return patient summary text."""
+        if self.patient_service is None:
+            return "患者数据库未连接。"
+
+        total_count, active_count = self._patient_counts()
+
+        if total_count == 0:
+            return "患者数据库已连接，尚未登记患者。"
+
+        return f"已登记 {total_count} 名患者，其中 {active_count} 名启用；尚未选择当前患者。"
+
+    def _patient_status_text(self) -> str:
+        """Return compact database status text."""
+        if self.patient_service is None:
+            return "患者数据：未连接"
+
+        total_count, active_count = self._patient_counts()
+
+        return f"患者数据：已初始化 · 总计 {total_count} · 启用 {active_count}"
+
     def _build_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
         titles = QVBoxLayout()
@@ -110,7 +147,7 @@ class AdminMainWindow(QMainWindow):
         text = QVBoxLayout()
         title = QLabel("当前患者")
         title.setObjectName("sectionTitle")
-        self.patient_label = QLabel("尚未选择患者。患者档案将在下一里程碑实现。")
+        self.patient_label = QLabel(self._patient_panel_text())
         self.patient_label.setObjectName("subtitle")
         text.addWidget(title)
         text.addWidget(self.patient_label)
@@ -189,7 +226,7 @@ class AdminMainWindow(QMainWindow):
         for text in (
             "眼动源：模拟数据源",
             f"本地后台：未启动 · {self.settings.admin_base_url}",
-            "患者数据：未初始化",
+            self._patient_status_text(),
         ):
             label = QLabel(text)
             label.setObjectName("subtitle")
