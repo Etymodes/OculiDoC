@@ -1,13 +1,12 @@
 """Application services and storage ports."""
 
-from oculidoc.application.patient_repository import (
-    PatientRepository,
-)
+from oculidoc.application.patient_repository import PatientRepository
 from oculidoc.application.patient_service import (
     DuplicatePatientCodeError,
     PatientNotFoundError,
     PatientService,
     RegisterPatientRequest,
+    UpdatePatientRequest,
 )
 
 __all__ = [
@@ -16,4 +15,5 @@ __all__ = [
     "PatientRepository",
     "PatientService",
     "RegisterPatientRequest",
+    "UpdatePatientRequest",
 ]

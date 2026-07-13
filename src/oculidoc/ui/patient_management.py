@@ -1,4 +1,4 @@
-"""Patient registration and selection dialogs."""
+"""Patient registration, editing, and selection dialogs."""
 
 from datetime import date
 from uuid import UUID
@@ -27,6 +27,7 @@ from oculidoc.application import (
     DuplicatePatientCodeError,
     PatientService,
     RegisterPatientRequest,
+    UpdatePatientRequest,
 )
 from oculidoc.domain import ClinicalDiagnosis, Patient, Sex
 
@@ -63,21 +64,39 @@ def _qdate_to_date(value: QDate) -> date:
     )
 
 
+def _date_to_qdate(value: date) -> QDate:
+    """Convert a Python date into a Qt date."""
+    return QDate(
+        value.year,
+        value.month,
+        value.day,
+    )
+
+
 class RegisterPatientDialog(QDialog):
-    """Collect the minimum patient registration information."""
+    """Register a new patient or edit an existing patient."""
 
     def __init__(
         self,
         patient_service: PatientService,
         parent: QWidget | None = None,
+        *,
+        patient: Patient | None = None,
     ) -> None:
         super().__init__(parent)
 
         self.patient_service = patient_service
+        self.patient = patient
+        self.saved_patient: Patient | None = None
         self.registered_patient: Patient | None = None
+        self.edited_patient: Patient | None = None
 
-        self.setWindowTitle("\u767b\u8bb0\u65b0\u60a3\u8005")
-        self.setMinimumWidth(540)
+        if patient is None:
+            self.setWindowTitle("\u767b\u8bb0\u65b0\u60a3\u8005")
+        else:
+            self.setWindowTitle("\u7f16\u8f91\u60a3\u8005\u8d44\u6599")
+
+        self.setMinimumWidth(560)
 
         self.patient_code_edit = QLineEdit()
         self.patient_code_edit.setObjectName("patientCodeEdit")
@@ -196,8 +215,37 @@ class RegisterPatientDialog(QDialog):
         root.addLayout(form)
         root.addWidget(buttons)
 
+        if patient is not None:
+            self._populate_patient(patient)
+
+    def _populate_patient(
+        self,
+        patient: Patient,
+    ) -> None:
+        """Populate the form with existing patient information."""
+        self.patient_code_edit.setText(patient.patient_code)
+        self.family_name_edit.setText(patient.family_name)
+
+        sex_index = self.sex_combo.findData(patient.sex.value)
+        self.sex_combo.setCurrentIndex(sex_index)
+
+        if patient.date_of_birth is None:
+            self.birth_unknown_checkbox.setChecked(True)
+        else:
+            self.birth_unknown_checkbox.setChecked(False)
+            self.birth_date_edit.setDate(_date_to_qdate(patient.date_of_birth))
+
+        self.etiology_edit.setText(patient.etiology or "")
+
+        diagnosis_index = self.diagnosis_combo.findData(patient.clinical_diagnosis.value)
+        self.diagnosis_combo.setCurrentIndex(diagnosis_index)
+
+        self.diagnosis_details_edit.setPlainText(patient.diagnosis_details or "")
+        self.enrollment_date_edit.setDate(_date_to_qdate(patient.enrollment_date))
+        self.notes_edit.setPlainText(patient.notes or "")
+
     def _register_patient(self) -> None:
-        """Validate the form and register one patient."""
+        """Validate and save the patient form."""
         patient_code = self.patient_code_edit.text().strip()
         family_name = self.family_name_edit.text().strip()
 
@@ -216,20 +264,33 @@ class RegisterPatientDialog(QDialog):
         if not self.birth_unknown_checkbox.isChecked():
             date_of_birth = _qdate_to_date(self.birth_date_edit.date())
 
-        request = RegisterPatientRequest(
-            patient_code=patient_code,
-            family_name=family_name,
-            sex=Sex(self.sex_combo.currentData()),
-            date_of_birth=date_of_birth,
-            etiology=self.etiology_edit.text(),
-            clinical_diagnosis=ClinicalDiagnosis(self.diagnosis_combo.currentData()),
-            diagnosis_details=(self.diagnosis_details_edit.toPlainText()),
-            enrollment_date=_qdate_to_date(self.enrollment_date_edit.date()),
-            notes=self.notes_edit.toPlainText(),
-        )
+        common_fields = {
+            "patient_code": patient_code,
+            "family_name": family_name,
+            "sex": Sex(self.sex_combo.currentData()),
+            "date_of_birth": date_of_birth,
+            "etiology": self.etiology_edit.text(),
+            "clinical_diagnosis": ClinicalDiagnosis(self.diagnosis_combo.currentData()),
+            "diagnosis_details": (self.diagnosis_details_edit.toPlainText()),
+            "enrollment_date": _qdate_to_date(self.enrollment_date_edit.date()),
+            "notes": self.notes_edit.toPlainText(),
+        }
 
         try:
-            patient = self.patient_service.register_patient(request)
+            if self.patient is None:
+                saved_patient = self.patient_service.register_patient(
+                    RegisterPatientRequest(**common_fields)
+                )
+                self.registered_patient = saved_patient
+            else:
+                saved_patient = self.patient_service.update_patient(
+                    UpdatePatientRequest(
+                        patient_id=self.patient.patient_id,
+                        **common_fields,
+                    )
+                )
+                self.edited_patient = saved_patient
+
         except DuplicatePatientCodeError:
             QMessageBox.warning(
                 self,
@@ -240,17 +301,34 @@ class RegisterPatientDialog(QDialog):
         except ValueError as error:
             QMessageBox.warning(
                 self,
-                "\u767b\u8bb0\u5931\u8d25",
+                "\u4fdd\u5b58\u5931\u8d25",
                 str(error),
             )
             return
 
-        self.registered_patient = patient
+        self.saved_patient = saved_patient
+        self.patient = saved_patient
         self.accept()
 
 
+class EditPatientDialog(RegisterPatientDialog):
+    """Edit one existing patient."""
+
+    def __init__(
+        self,
+        patient_service: PatientService,
+        patient: Patient,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(
+            patient_service,
+            parent,
+            patient=patient,
+        )
+
+
 class PatientManagementDialog(QDialog):
-    """List patients, register patients, and choose one patient."""
+    """Manage registered patients and choose the active patient."""
 
     def __init__(
         self,
@@ -263,7 +341,7 @@ class PatientManagementDialog(QDialog):
         self.selected_patient: Patient | None = None
 
         self.setWindowTitle("\u60a3\u8005\u7ba1\u7406")
-        self.resize(720, 480)
+        self.resize(820, 500)
 
         title = QLabel("\u5df2\u767b\u8bb0\u60a3\u8005")
         title.setStyleSheet("font-size: 20px; font-weight: 700;")
@@ -276,6 +354,14 @@ class PatientManagementDialog(QDialog):
         self.new_button.setObjectName("newPatientButton")
         self.new_button.clicked.connect(self._open_registration_dialog)
 
+        self.edit_button = QPushButton("\u7f16\u8f91\u60a3\u8005\u8d44\u6599")
+        self.edit_button.setObjectName("editPatientButton")
+        self.edit_button.clicked.connect(self._open_edit_dialog)
+
+        self.status_button = QPushButton("\u505c\u7528/\u6062\u590d")
+        self.status_button.setObjectName("togglePatientStatusButton")
+        self.status_button.clicked.connect(self._toggle_patient_status)
+
         self.select_button = QPushButton("\u9009\u4e3a\u5f53\u524d\u60a3\u8005")
         self.select_button.setObjectName("selectPatientButton")
         self.select_button.clicked.connect(self._select_patient)
@@ -285,6 +371,8 @@ class PatientManagementDialog(QDialog):
 
         actions = QHBoxLayout()
         actions.addWidget(self.new_button)
+        actions.addWidget(self.edit_button)
+        actions.addWidget(self.status_button)
         actions.addStretch(1)
         actions.addWidget(self.select_button)
         actions.addWidget(close_button)
@@ -296,7 +384,10 @@ class PatientManagementDialog(QDialog):
 
         self.refresh_patients()
 
-    def refresh_patients(self) -> None:
+    def refresh_patients(
+        self,
+        select_patient_id: UUID | None = None,
+    ) -> None:
         """Reload the visible patient list."""
         self.patient_list.clear()
 
@@ -314,7 +405,39 @@ class PatientManagementDialog(QDialog):
                 Qt.ItemDataRole.UserRole,
                 str(patient.patient_id),
             )
+
+            if not patient.is_active:
+                item.setForeground(Qt.GlobalColor.gray)
+
             self.patient_list.addItem(item)
+
+            if patient.patient_id == select_patient_id:
+                self.patient_list.setCurrentItem(item)
+
+    def _current_patient(self) -> Patient | None:
+        """Return the patient highlighted in the list."""
+        item = self.patient_list.currentItem()
+
+        if item is None:
+            return None
+
+        patient_id = UUID(item.data(Qt.ItemDataRole.UserRole))
+        return self.patient_service.get_patient(patient_id)
+
+    def _require_current_patient(
+        self,
+    ) -> Patient | None:
+        """Return the highlighted patient or show guidance."""
+        patient = self._current_patient()
+
+        if patient is None:
+            QMessageBox.information(
+                self,
+                "\u672a\u9009\u62e9\u60a3\u8005",
+                "\u8bf7\u5148\u5728\u5217\u8868\u4e2d\u9009\u62e9\u4e00\u540d\u60a3\u8005\u3002",
+            )
+
+        return patient
 
     def _open_registration_dialog(
         self,
@@ -329,37 +452,90 @@ class PatientManagementDialog(QDialog):
         )
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.refresh_patients()
+            if dialog.saved_patient is not None:
+                self.refresh_patients(dialog.saved_patient.patient_id)
 
-            if dialog.registered_patient is not None:
-                patient_id = str(dialog.registered_patient.patient_id)
+    def _open_edit_dialog(
+        self,
+        checked: bool = False,
+    ) -> None:
+        """Edit the highlighted patient."""
+        del checked
 
-                for row in range(self.patient_list.count()):
-                    item = self.patient_list.item(row)
+        patient = self._require_current_patient()
 
-                    if item.data(Qt.ItemDataRole.UserRole) == patient_id:
-                        self.patient_list.setCurrentRow(row)
-                        break
+        if patient is None:
+            return
+
+        dialog = EditPatientDialog(
+            self.patient_service,
+            patient,
+            self,
+        )
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            if dialog.saved_patient is not None:
+                self.refresh_patients(dialog.saved_patient.patient_id)
+
+    def _toggle_patient_status(
+        self,
+        checked: bool = False,
+    ) -> None:
+        """Deactivate or reactivate the highlighted patient."""
+        del checked
+
+        patient = self._require_current_patient()
+
+        if patient is None:
+            return
+
+        if patient.is_active:
+            result = QMessageBox.question(
+                self,
+                "\u505c\u7528\u60a3\u8005",
+                "\u505c\u7528\u540e\u5c06\u4fdd\u7559"
+                "\u6240\u6709\u5386\u53f2\u6570\u636e\uff0c"
+                "\u4f46\u4e0d\u80fd\u5c06\u5176"
+                "\u9009\u4e3a\u5f53\u524d\u60a3\u8005\u3002"
+                "\u786e\u5b9a\u505c\u7528\u5417\uff1f",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+
+            if result != QMessageBox.StandardButton.Yes:
+                return
+
+            updated_patient = self.patient_service.deactivate_patient(patient.patient_id)
+        else:
+            updated_patient = self.patient_service.activate_patient(patient.patient_id)
+
+        self.refresh_patients(updated_patient.patient_id)
 
     def _select_patient(
         self,
-        item: QListWidgetItem | None = None,
+        item: QListWidgetItem | bool | None = None,
         checked: bool = False,
     ) -> None:
-        """Choose the highlighted patient."""
+        """Choose the highlighted active patient."""
         del checked
 
-        selected_item = item or self.patient_list.currentItem()
+        if isinstance(item, QListWidgetItem):
+            self.patient_list.setCurrentItem(item)
 
-        if selected_item is None:
+        patient = self._require_current_patient()
+
+        if patient is None:
+            return
+
+        if not patient.is_active:
             QMessageBox.information(
                 self,
-                "\u672a\u9009\u62e9\u60a3\u8005",
-                "\u8bf7\u5148\u5728\u5217\u8868\u4e2d\u9009\u62e9\u4e00\u540d\u60a3\u8005\u3002",
+                "\u60a3\u8005\u5df2\u505c\u7528",
+                "\u8bf7\u5148\u6062\u590d\u8be5\u60a3\u8005\uff0c"
+                "\u518d\u5c06\u5176\u9009\u4e3a"
+                "\u5f53\u524d\u60a3\u8005\u3002",
             )
             return
 
-        patient_id = UUID(selected_item.data(Qt.ItemDataRole.UserRole))
-
-        self.selected_patient = self.patient_service.get_patient(patient_id)
+        self.selected_patient = patient
         self.accept()

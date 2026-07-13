@@ -270,11 +270,26 @@ class AdminMainWindow(QMainWindow):
         if hasattr(self, "patient_status_label"):
             self.patient_status_label.setText(self._patient_status_text())
 
+    def _reload_current_patient(self) -> None:
+        """Reload or clear the current patient."""
+        if self.patient_service is None or self.current_patient is None:
+            return
+
+        patient = self.patient_service.get_patient(self.current_patient.patient_id)
+
+        if patient.is_active:
+            self.current_patient = patient
+        else:
+            self.current_patient = None
+
     def _set_current_patient(
         self,
         patient: Patient,
     ) -> None:
         """Set and display the current patient."""
+        if not patient.is_active:
+            return
+
         self.current_patient = patient
         self._refresh_patient_summary()
 
@@ -302,6 +317,7 @@ class AdminMainWindow(QMainWindow):
         if result == QDialog.DialogCode.Accepted and dialog.selected_patient is not None:
             self._set_current_patient(dialog.selected_patient)
         else:
+            self._reload_current_patient()
             self._refresh_patient_summary()
 
     def _show_module_placeholder(
