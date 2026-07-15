@@ -1,7 +1,5 @@
 """Standalone PySide6 camera and eye-region workbench."""
 
-from pathlib import Path
-
 import cv2
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import (
@@ -11,7 +9,6 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
-    QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -24,6 +21,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from oculidoc.app_paths import (
+    UNASSIGNED_PATIENT_KEY,
+    eye_observation_dataset_directory,
+    normalize_patient_key,
+)
 from oculidoc.devices.diagnostics import (
     probe_cameras,
 )
@@ -43,13 +45,13 @@ from oculidoc.vision.eye_observation import (
 )
 from oculidoc.vision.eye_record import (
     build_eye_observation_record,
-    raw_path_for_overlay,
-    record_path_for_overlay,
     write_eye_observation_record,
 )
+from oculidoc.vision.frame_identity import FrameSaveGuard, build_camera_frame_key
 from oculidoc.vision.image_selection_widget import (
     ImageSelectionLabel,
 )
+from oculidoc.vision.sample_naming import next_eye_sample_paths
 
 _BACKENDS: dict[str, int | None] = {
     "DirectShow (DSHOW)": cv2.CAP_DSHOW,
@@ -61,13 +63,19 @@ _BACKENDS: dict[str, int | None] = {
 class CameraPreviewWindow(QMainWindow):
     """Camera preview with manual left/right eye selection."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        patient_key: str = UNASSIGNED_PATIENT_KEY,
+    ) -> None:
         super().__init__()
 
         self.setWindowTitle("OculiDoC Camera and Eye Workbench")
         self.resize(1180, 800)
 
         self._controller = CameraPreviewController()
+        self._patient_key = normalize_patient_key(patient_key)
+        self._frame_save_guard = FrameSaveGuard()
         self._timer = QTimer(self)
         self._timer.setInterval(33)
         self._timer.timeout.connect(self._read_frame)
@@ -490,50 +498,56 @@ class CameraPreviewWindow(QMainWindow):
             )
             return
 
-        default_path = str(Path.home() / "Desktop" / "OculiDoC_Eye_Overlay.png")
-        selected_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "保存眼睛观察样本",
-            default_path,
-            "PNG image (*.png);;JPEG image (*.jpg *.jpeg)",
+        camera_index = self._selected_camera_index()
+        backend_name = self._controller.backend_name
+        frame_key = build_camera_frame_key(
+            packet=packet,
+            camera_index=camera_index,
+            backend_name=backend_name,
         )
 
-        if not selected_path:
+        if self._frame_save_guard.was_saved(frame_key):
+            QMessageBox.information(
+                self,
+                "当前帧已经保存",
+                "该冻结帧已经生成过观察样本。请恢复实时预览并重新冻结一帧。",
+            )
             return
 
-        overlay_path = Path(selected_path)
-        raw_path = raw_path_for_overlay(overlay_path)
-        record_path = record_path_for_overlay(overlay_path)
+        dataset_directory = eye_observation_dataset_directory(self._patient_key)
 
         try:
+            sample_paths = next_eye_sample_paths(dataset_directory)
+
             self._controller.save_snapshot(
-                overlay_path,
+                sample_paths.overlay_path,
                 rendered=True,
             )
             self._controller.save_snapshot(
-                raw_path,
+                sample_paths.raw_path,
                 rendered=False,
             )
 
             crops = export_eye_crops(
                 packet.image,
                 observations,
-                output_directory=(overlay_path.parent),
-                sample_stem=overlay_path.stem,
+                output_directory=dataset_directory,
+                sample_stem=sample_paths.stem,
             )
 
             record = build_eye_observation_record(
                 packet=packet,
-                camera_index=(self._selected_camera_index()),
-                backend_name=(self._controller.backend_name),
-                raw_image_filename=raw_path.name,
-                overlay_image_filename=(overlay_path.name),
+                camera_index=camera_index,
+                backend_name=backend_name,
+                raw_image_filename=(sample_paths.raw_path.name),
+                overlay_image_filename=(sample_paths.overlay_path.name),
                 observations=observations,
                 crops=crops,
             )
+
             write_eye_observation_record(
                 record,
-                record_path,
+                sample_paths.record_path,
             )
         except Exception as error:
             QMessageBox.critical(
@@ -543,8 +557,14 @@ class CameraPreviewWindow(QMainWindow):
             )
             return
 
-        crop_names = ", ".join(crop.filename for crop in crops)
-        self.statusBar().showMessage(f"样本已保存；眼部裁剪：{crop_names}")
+        self._frame_save_guard.mark_saved(frame_key)
+
+        self.statusBar().showMessage(
+            f"已保存患者档案 "
+            f"{self._patient_key} 的样本 "
+            f"{sample_paths.index:04d}；"
+            f"目录：{dataset_directory}"
+        )
 
     def _stop_preview(self) -> None:
         self._timer.stop()
