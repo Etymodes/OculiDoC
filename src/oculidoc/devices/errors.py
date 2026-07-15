@@ -11,6 +11,14 @@ class InvalidDeviceStateError(DeviceError):
     """Raised when an operation is invalid for the current state."""
 
 
+class DeviceConnectionError(DeviceError):
+    """Raised when a device cannot be opened or configured."""
+
+
+class DeviceReadError(DeviceError):
+    """Raised when an acquisition device cannot produce data."""
+
+
 class DeviceStreamEndedError(DeviceError):
     """Raised when a finite simulated stream has ended."""
 
