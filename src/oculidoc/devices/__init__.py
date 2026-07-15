@@ -25,6 +25,12 @@ from oculidoc.devices.errors import (
     DeviceStreamEndedError,
     InvalidDeviceStateError,
 )
+from oculidoc.devices.matching import (
+    GazeFrameMatch,
+    GazeSampleBuffer,
+    MatchStatus,
+    TimestampBasis,
+)
 from oculidoc.devices.models import (
     CameraProbeResult,
     DeviceDiagnosticReport,
@@ -56,13 +62,17 @@ __all__ = [
     "DeviceTimestamp",
     "EyeTrackerDevice",
     "EyeTrackerSample",
+    "GazeFrameMatch",
+    "GazeSampleBuffer",
     "InvalidDeviceStateError",
+    "MatchStatus",
     "PairedAcquisitionPacket",
     "PairedAcquisitionRunner",
     "ProbeStatus",
     "SimulatedCameraDevice",
     "SimulatedEyeTrackerDevice",
     "SystemSnapshot",
+    "TimestampBasis",
     "build_diagnostic_report",
     "collect_system_snapshot",
     "probe_camera",
