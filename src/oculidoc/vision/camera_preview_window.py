@@ -75,6 +75,8 @@ class CameraPreviewWindow(QMainWindow):
 
         self._controller = CameraPreviewController()
         self._patient_key = normalize_patient_key(patient_key)
+
+        self.setWindowTitle(f"OculiDoC Camera and Eye Workbench — {self._patient_key}")
         self._frame_save_guard = FrameSaveGuard()
         self._timer = QTimer(self)
         self._timer.setInterval(33)
@@ -205,6 +207,10 @@ class CameraPreviewWindow(QMainWindow):
         self.snapshot_button.setEnabled(False)
         self.snapshot_button.clicked.connect(self._save_snapshot)
         snapshot_layout.addWidget(self.snapshot_button)
+
+        self.patient_status = QLabel(f"患者档案：{self._patient_key}")
+        self.patient_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        snapshot_layout.addWidget(self.patient_status)
 
         self.connection_status = QLabel("未连接")
         snapshot_layout.addWidget(self.connection_status)
@@ -536,6 +542,8 @@ class CameraPreviewWindow(QMainWindow):
             )
 
             record = build_eye_observation_record(
+                frame_key=frame_key,
+                patient_key=self._patient_key,
                 packet=packet,
                 camera_index=camera_index,
                 backend_name=backend_name,

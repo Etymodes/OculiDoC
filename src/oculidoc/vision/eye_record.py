@@ -1,11 +1,13 @@
 """Persistent records for manually labeled eye observations."""
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from oculidoc.app_paths import normalize_patient_key
 from oculidoc.devices.contracts import (
     CameraFramePacket,
 )
@@ -13,11 +15,16 @@ from oculidoc.vision.eye_crop import (
     EyeCropArtifact,
 )
 from oculidoc.vision.eye_observation import (
+    EyeBoundingBox,
     EyeObservation,
 )
 
+_FRAME_KEY_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
-def _box_to_dict(box) -> dict[str, int]:
+
+def _box_to_dict(
+    box: EyeBoundingBox,
+) -> dict[str, int]:
     return {
         "x_px": box.x_px,
         "y_px": box.y_px,
@@ -32,6 +39,8 @@ class EyeObservationRecord:
 
     schema_version: str
     recorded_at_utc: datetime
+    patient_key: str
+    frame_key: str
     camera_index: int
     backend_name: str | None
     frame_index: int
@@ -52,6 +61,24 @@ class EyeObservationRecord:
             self,
             "schema_version",
             normalized_schema,
+        )
+        object.__setattr__(
+            self,
+            "patient_key",
+            normalize_patient_key(self.patient_key),
+        )
+
+        normalized_frame_key = self.frame_key.strip().lower()
+
+        if not _FRAME_KEY_PATTERN.fullmatch(normalized_frame_key):
+            raise ValueError(
+                "frame_key must be a 64-character lowercase hexadecimal SHA-256 value."
+            )
+
+        object.__setattr__(
+            self,
+            "frame_key",
+            normalized_frame_key,
         )
 
         if self.recorded_at_utc.tzinfo is None:
@@ -149,11 +176,15 @@ class EyeObservationRecord:
         return {
             "schema_version": self.schema_version,
             "recorded_at_utc": (self.recorded_at_utc.isoformat()),
+            "patient": {
+                "key": self.patient_key,
+            },
             "camera": {
                 "index": self.camera_index,
                 "backend": self.backend_name,
             },
             "frame": {
+                "identity": self.frame_key,
                 "index": self.frame_index,
                 "width_px": self.image_width_px,
                 "height_px": self.image_height_px,
@@ -167,6 +198,8 @@ class EyeObservationRecord:
 def build_eye_observation_record(
     *,
     packet: CameraFramePacket,
+    patient_key: str,
+    frame_key: str,
     camera_index: int,
     backend_name: str | None,
     raw_image_filename: str,
@@ -176,8 +209,10 @@ def build_eye_observation_record(
 ) -> EyeObservationRecord:
     """Create a record from one captured camera packet."""
     return EyeObservationRecord(
-        schema_version="1.1",
+        schema_version="1.2",
         recorded_at_utc=(packet.timestamp.utc_timestamp),
+        patient_key=patient_key,
+        frame_key=frame_key,
         camera_index=camera_index,
         backend_name=backend_name,
         frame_index=packet.frame_index,
