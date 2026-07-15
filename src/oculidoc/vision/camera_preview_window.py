@@ -31,6 +31,9 @@ from oculidoc.vision.camera_preview import (
     CameraPreviewController,
     bgr_frame_to_qimage,
 )
+from oculidoc.vision.eye_crop import (
+    export_eye_crops,
+)
 from oculidoc.vision.eye_observation import (
     EYE_STATE_LABELS,
     EyeBoundingBox,
@@ -512,6 +515,13 @@ class CameraPreviewWindow(QMainWindow):
                 rendered=False,
             )
 
+            crops = export_eye_crops(
+                packet.image,
+                observations,
+                output_directory=(overlay_path.parent),
+                sample_stem=overlay_path.stem,
+            )
+
             record = build_eye_observation_record(
                 packet=packet,
                 camera_index=(self._selected_camera_index()),
@@ -519,6 +529,7 @@ class CameraPreviewWindow(QMainWindow):
                 raw_image_filename=raw_path.name,
                 overlay_image_filename=(overlay_path.name),
                 observations=observations,
+                crops=crops,
             )
             write_eye_observation_record(
                 record,
@@ -532,9 +543,8 @@ class CameraPreviewWindow(QMainWindow):
             )
             return
 
-        self.statusBar().showMessage(
-            f"样本已保存：{overlay_path.name}、{raw_path.name}、{record_path.name}"
-        )
+        crop_names = ", ".join(crop.filename for crop in crops)
+        self.statusBar().showMessage(f"样本已保存；眼部裁剪：{crop_names}")
 
     def _stop_preview(self) -> None:
         self._timer.stop()

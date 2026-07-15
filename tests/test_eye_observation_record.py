@@ -86,7 +86,7 @@ def test_build_record_contains_frame_and_eye_data() -> None:
 
     payload = record.to_dict()
 
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
     assert payload["camera"] == {
         "index": 0,
         "backend": "DSHOW",
@@ -158,3 +158,54 @@ def test_record_rejects_duplicate_eye_side() -> None:
                 observation,
             ),
         )
+
+
+def test_record_serializes_crop_metadata() -> None:
+    from oculidoc.vision import EyeCropArtifact
+
+    observations = create_observations()
+    crops = (
+        EyeCropArtifact(
+            side=EyeSide.LEFT,
+            opening_state=(EyeOpeningState.PARTIALLY_OPEN),
+            filename="sample_left_partially_open.png",
+            box=EyeBoundingBox(
+                x_px=165,
+                y_px=140,
+                width_px=100,
+                height_px=50,
+            ),
+        ),
+        EyeCropArtifact(
+            side=EyeSide.RIGHT,
+            opening_state=EyeOpeningState.CLOSED,
+            filename="sample_right_closed.png",
+            box=EyeBoundingBox(
+                x_px=365,
+                y_px=140,
+                width_px=100,
+                height_px=50,
+            ),
+        ),
+    )
+
+    record = build_eye_observation_record(
+        packet=create_packet(),
+        camera_index=0,
+        backend_name="DSHOW",
+        raw_image_filename="sample_raw.png",
+        overlay_image_filename="sample.png",
+        observations=observations,
+        crops=crops,
+    )
+    payload = record.to_dict()
+
+    assert payload["observations"][0]["crop"] == {
+        "filename": ("sample_left_partially_open.png"),
+        "box": {
+            "x_px": 165,
+            "y_px": 140,
+            "width_px": 100,
+            "height_px": 50,
+        },
+    }
