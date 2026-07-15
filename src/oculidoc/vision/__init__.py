@@ -13,6 +13,13 @@ from oculidoc.vision.eye_observation import (
     EyeSide,
     ObservationSource,
 )
+from oculidoc.vision.eye_record import (
+    EyeObservationRecord,
+    build_eye_observation_record,
+    raw_path_for_overlay,
+    record_path_for_overlay,
+    write_eye_observation_record,
+)
 from oculidoc.vision.image_selection_widget import (
     ImageSelectionLabel,
     fitted_image_rect,
@@ -30,6 +37,11 @@ __all__ = [
     "EyeObservation",
     "EyeOpeningState",
     "EyeSide",
+    "EyeObservationRecord",
+    "build_eye_observation_record",
+    "raw_path_for_overlay",
+    "record_path_for_overlay",
+    "write_eye_observation_record",
     "ImageSelectionLabel",
     "fitted_image_rect",
     "map_display_selection_to_image",

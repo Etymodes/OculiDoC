@@ -38,6 +38,12 @@ from oculidoc.vision.eye_observation import (
     EyeOpeningState,
     EyeSide,
 )
+from oculidoc.vision.eye_record import (
+    build_eye_observation_record,
+    raw_path_for_overlay,
+    record_path_for_overlay,
+    write_eye_observation_record,
+)
 from oculidoc.vision.image_selection_widget import (
     ImageSelectionLabel,
 )
@@ -461,10 +467,30 @@ class CameraPreviewWindow(QMainWindow):
             self._show_frame(self._controller.render_latest_frame())
 
     def _save_snapshot(self) -> None:
+        observations = self._build_observations()
+
+        if not observations:
+            QMessageBox.warning(
+                self,
+                "尚未框选眼睛",
+                "请先冻结画面并至少框选一只眼睛。",
+            )
+            return
+
+        packet = self._controller.latest_packet
+
+        if packet is None:
+            QMessageBox.warning(
+                self,
+                "没有可保存画面",
+                "摄像头尚未产生有效图像。",
+            )
+            return
+
         default_path = str(Path.home() / "Desktop" / "OculiDoC_Eye_Overlay.png")
         selected_path, _ = QFileDialog.getSaveFileName(
             self,
-            "保存带框快照",
+            "保存眼睛观察样本",
             default_path,
             "PNG image (*.png);;JPEG image (*.jpg *.jpeg)",
         )
@@ -472,10 +498,31 @@ class CameraPreviewWindow(QMainWindow):
         if not selected_path:
             return
 
+        overlay_path = Path(selected_path)
+        raw_path = raw_path_for_overlay(overlay_path)
+        record_path = record_path_for_overlay(overlay_path)
+
         try:
-            path = self._controller.save_snapshot(
-                selected_path,
+            self._controller.save_snapshot(
+                overlay_path,
                 rendered=True,
+            )
+            self._controller.save_snapshot(
+                raw_path,
+                rendered=False,
+            )
+
+            record = build_eye_observation_record(
+                packet=packet,
+                camera_index=(self._selected_camera_index()),
+                backend_name=(self._controller.backend_name),
+                raw_image_filename=raw_path.name,
+                overlay_image_filename=(overlay_path.name),
+                observations=observations,
+            )
+            write_eye_observation_record(
+                record,
+                record_path,
             )
         except Exception as error:
             QMessageBox.critical(
@@ -485,7 +532,9 @@ class CameraPreviewWindow(QMainWindow):
             )
             return
 
-        self.statusBar().showMessage(f"已保存：{path}")
+        self.statusBar().showMessage(
+            f"样本已保存：{overlay_path.name}、{raw_path.name}、{record_path.name}"
+        )
 
     def _stop_preview(self) -> None:
         self._timer.stop()
