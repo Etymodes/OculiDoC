@@ -79,6 +79,7 @@ class DeviceTimestamp:
     monotonic_timestamp_ns: int
     utc_timestamp: datetime
     source_timestamp_ns: int | None = None
+    source_clock_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.sequence < 0:
@@ -89,6 +90,18 @@ class DeviceTimestamp:
 
         if self.source_timestamp_ns is not None and self.source_timestamp_ns < 0:
             raise ValueError("source_timestamp_ns cannot be negative.")
+
+        if self.source_clock_id is not None:
+            normalized_clock_id = self.source_clock_id.strip()
+
+            if not normalized_clock_id:
+                raise ValueError("source_clock_id cannot be empty.")
+
+            object.__setattr__(
+                self,
+                "source_clock_id",
+                normalized_clock_id,
+            )
 
         if self.utc_timestamp.tzinfo is None:
             raise ValueError("utc_timestamp must be timezone-aware.")

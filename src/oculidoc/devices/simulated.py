@@ -187,6 +187,7 @@ class SimulatedCameraDevice(_SimulatedDeviceBase):
         timestamp = DeviceTimestamp(
             sequence=sequence,
             source_timestamp_ns=(sequence * self._interval_ns),
+            source_clock_id="simulated-shared-clock",
             monotonic_timestamp_ns=monotonic_ns(),
             utc_timestamp=datetime.now(UTC),
         )
@@ -304,6 +305,7 @@ class SimulatedEyeTrackerDevice(_SimulatedDeviceBase):
         timestamp = DeviceTimestamp(
             sequence=sequence,
             source_timestamp_ns=(sequence * self._interval_ns),
+            source_clock_id="simulated-shared-clock",
             monotonic_timestamp_ns=monotonic_ns(),
             utc_timestamp=datetime.now(UTC),
         )

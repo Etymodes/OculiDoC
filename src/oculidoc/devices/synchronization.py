@@ -46,14 +46,25 @@ class PairedAcquisitionPacket:
 
     @property
     def source_skew_ns(self) -> int | None:
-        """Return source-clock skew when both devices provide it."""
-        camera_timestamp = self.camera_frame.timestamp.source_timestamp_ns
-        gaze_timestamp = self.gaze_sample.timestamp.source_timestamp_ns
+        """Return source skew only for a shared clock domain."""
+        camera_timestamp = self.camera_frame.timestamp
+        gaze_timestamp = self.gaze_sample.timestamp
 
-        if camera_timestamp is None or gaze_timestamp is None:
+        camera_source_ns = camera_timestamp.source_timestamp_ns
+        gaze_source_ns = gaze_timestamp.source_timestamp_ns
+        camera_clock_id = camera_timestamp.source_clock_id
+        gaze_clock_id = gaze_timestamp.source_clock_id
+
+        if (
+            camera_source_ns is None
+            or gaze_source_ns is None
+            or camera_clock_id is None
+            or gaze_clock_id is None
+            or camera_clock_id != gaze_clock_id
+        ):
             return None
 
-        return abs(camera_timestamp - gaze_timestamp)
+        return abs(camera_source_ns - gaze_source_ns)
 
     def to_summary_dict(self) -> dict[str, object]:
         """Return metadata without serializing image pixels."""
