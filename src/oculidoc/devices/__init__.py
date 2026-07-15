@@ -20,8 +20,10 @@ from oculidoc.devices.diagnostics import (
     write_diagnostic_report,
 )
 from oculidoc.devices.errors import (
+    DeviceConnectionError,
     DeviceCoordinationError,
     DeviceError,
+    DeviceReadError,
     DeviceStreamEndedError,
     InvalidDeviceStateError,
 )
@@ -37,6 +39,9 @@ from oculidoc.devices.models import (
     ProbeStatus,
     SystemSnapshot,
 )
+from oculidoc.devices.opencv_camera import (
+    OpenCVCameraDevice,
+)
 from oculidoc.devices.simulated import (
     SimulatedCameraDevice,
     SimulatedEyeTrackerDevice,
@@ -51,12 +56,14 @@ __all__ = [
     "CameraDevice",
     "CameraFramePacket",
     "CameraProbeResult",
+    "DeviceConnectionError",
     "DeviceCoordinationError",
     "DeviceCoordinator",
     "DeviceDiagnosticReport",
     "DeviceError",
     "DeviceInfo",
     "DeviceKind",
+    "DeviceReadError",
     "DeviceState",
     "DeviceStreamEndedError",
     "DeviceTimestamp",
@@ -66,6 +73,7 @@ __all__ = [
     "GazeSampleBuffer",
     "InvalidDeviceStateError",
     "MatchStatus",
+    "OpenCVCameraDevice",
     "PairedAcquisitionPacket",
     "PairedAcquisitionRunner",
     "ProbeStatus",
