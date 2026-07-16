@@ -159,6 +159,7 @@ class EyeObservationRecord:
                     "side": observation.side.value,
                     "opening_state": (observation.opening_state.value),
                     "source": observation.source.value,
+                    "review_status": (observation.review_status.value),
                     "confidence": observation.confidence,
                     "note": observation.note,
                     "box": _box_to_dict(observation.box),
@@ -209,7 +210,7 @@ def build_eye_observation_record(
 ) -> EyeObservationRecord:
     """Create a record from one captured camera packet."""
     return EyeObservationRecord(
-        schema_version="1.2",
+        schema_version="1.3",
         recorded_at_utc=(packet.timestamp.utc_timestamp),
         patient_key=patient_key,
         frame_key=frame_key,

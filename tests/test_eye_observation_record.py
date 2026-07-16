@@ -143,7 +143,7 @@ def test_build_record_contains_patient_and_frame_data() -> None:
     record = build_record()
     payload = record.to_dict()
 
-    assert payload["schema_version"] == "1.2"
+    assert payload["schema_version"] == "1.3"
     assert payload["patient"] == {"key": PATIENT_KEY}
     assert payload["camera"] == {
         "index": 0,
@@ -267,3 +267,9 @@ def test_record_rejects_invalid_frame_key(
             overlay_image_filename="overlay.png",
             observations=create_observations(),
         )
+
+
+def test_record_serializes_review_status() -> None:
+    payload = build_record().to_dict()
+
+    assert payload["observations"][0]["review_status"] == "manual"

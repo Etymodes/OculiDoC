@@ -17,6 +17,7 @@ from oculidoc.vision.eye_observation import (
     EyeObservation,
     EyeOpeningState,
     EyeSide,
+    ObservationReviewStatus,
     ObservationSource,
 )
 from oculidoc.vision.eye_record import (
@@ -46,6 +47,7 @@ __all__ = [
     "EyeOpeningState",
     "EyeSide",
     "ImageSelectionLabel",
+    "ObservationReviewStatus",
     "ObservationSource",
     "bgr_frame_to_qimage",
     "build_eye_observation_record",

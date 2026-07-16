@@ -42,6 +42,7 @@ from oculidoc.vision.eye_observation import (
     EyeObservation,
     EyeOpeningState,
     EyeSide,
+    ObservationReviewStatus,
     ObservationSource,
 )
 from oculidoc.vision.eye_record import (
@@ -90,6 +91,10 @@ class CameraPreviewWindow(QMainWindow):
         self._eye_sources: dict[
             EyeSide,
             ObservationSource,
+        ] = {}
+        self._eye_review_statuses: dict[
+            EyeSide,
+            ObservationReviewStatus,
         ] = {}
         self._eye_boxes: dict[
             EyeSide,
@@ -191,6 +196,17 @@ class CameraPreviewWindow(QMainWindow):
         eye_form.addRow(
             "",
             self.face_proposal_button,
+        )
+
+        self.confirm_proposals_button = QPushButton("确认双眼建议框")
+
+        self.confirm_proposals_button.setEnabled(False)
+
+        self.confirm_proposals_button.clicked.connect(self._confirm_eye_proposals)
+
+        eye_form.addRow(
+            "",
+            self.confirm_proposals_button,
         )
 
         self.left_eye_button = QPushButton("框选左眼")
@@ -298,9 +314,17 @@ class CameraPreviewWindow(QMainWindow):
                 side,
                 ObservationSource.MANUAL,
             )
+            review_status = self._eye_review_statuses.get(
+                side,
+                (
+                    ObservationReviewStatus.MANUAL
+                    if source is ObservationSource.MANUAL
+                    else (ObservationReviewStatus.PROPOSED)
+                ),
+            )
             note = (
                 "Face-geometry proposal; operator review required."
-                if source is ObservationSource.ALGORITHM
+                if review_status is ObservationReviewStatus.PROPOSED
                 else None
             )
 
@@ -310,6 +334,7 @@ class CameraPreviewWindow(QMainWindow):
                     box=box,
                     opening_state=(self._selected_eye_state(side)),
                     source=source,
+                    review_status=review_status,
                     note=note,
                 )
             )
@@ -324,6 +349,8 @@ class CameraPreviewWindow(QMainWindow):
             self._show_frame(rendered)
 
         self.clear_boxes_button.setEnabled(bool(self._eye_boxes))
+
+        self._update_review_controls()
 
     def _show_frame(self, frame) -> None:
         qimage = bgr_frame_to_qimage(frame)
@@ -399,6 +426,7 @@ class CameraPreviewWindow(QMainWindow):
         self._frozen = False
         self._eye_boxes.clear()
         self._eye_sources.clear()
+        self._eye_review_statuses.clear()
         self._controller.clear_observations()
 
         width, height, fps = self._controller.reported_mode
@@ -461,6 +489,33 @@ class CameraPreviewWindow(QMainWindow):
         self.connection_status.setText("当前帧已冻结")
         self._set_eye_controls_enabled(True)
         self.statusBar().showMessage("可拖拽框选左右眼")
+
+    def _update_review_controls(
+        self,
+    ) -> None:
+        has_proposed = any(
+            status is ObservationReviewStatus.PROPOSED
+            for status in self._eye_review_statuses.values()
+        )
+
+        self.confirm_proposals_button.setEnabled(self._frozen and has_proposed)
+
+    def _confirm_eye_proposals(
+        self,
+    ) -> None:
+        changed = False
+
+        for side, status in tuple(self._eye_review_statuses.items()):
+            if status is ObservationReviewStatus.PROPOSED:
+                self._eye_review_statuses[side] = ObservationReviewStatus.CONFIRMED
+                changed = True
+
+        if not changed:
+            return
+
+        self._update_observations()
+        self._update_review_controls()
+        self.statusBar().showMessage("双眼建议框已经人工确认")
 
     def _begin_face_selection(
         self,
@@ -542,6 +597,9 @@ class CameraPreviewWindow(QMainWindow):
             self._eye_sources = {
                 observation.side: (ObservationSource.ALGORITHM) for observation in proposals
             }
+            self._eye_review_statuses = {
+                observation.side: (ObservationReviewStatus.PROPOSED) for observation in proposals
+            }
 
             for combo in (
                 self.left_state_combo,
@@ -553,7 +611,9 @@ class CameraPreviewWindow(QMainWindow):
                     combo.setCurrentIndex(unknown_index)
 
             self._update_observations()
-            self.statusBar().showMessage("已根据整脸区域生成双眼建议框；请检查并按需重新框选单眼")
+            self._update_review_controls()
+
+            self.statusBar().showMessage("已根据整脸区域生成双眼建议框；请确认建议框或重新框选单眼")
             return
 
         side = self._pending_side
@@ -562,9 +622,18 @@ class CameraPreviewWindow(QMainWindow):
         if side is None:
             return
 
+        previous_source = self._eye_sources.get(side)
+
         self._eye_boxes[side] = box
         self._eye_sources[side] = ObservationSource.MANUAL
+        self._eye_review_statuses[side] = (
+            ObservationReviewStatus.CORRECTED
+            if previous_source is ObservationSource.ALGORITHM
+            else ObservationReviewStatus.MANUAL
+        )
+
         self._update_observations()
+        self._update_review_controls()
 
         self.statusBar().showMessage(
             f"{side.value} eye box: {box.x_px},{box.y_px},{box.width_px}x{box.height_px}"
@@ -583,6 +652,7 @@ class CameraPreviewWindow(QMainWindow):
         self._pending_side = None
         self._eye_boxes.clear()
         self._eye_sources.clear()
+        self._eye_review_statuses.clear()
         self._controller.clear_observations()
         self.clear_boxes_button.setEnabled(False)
 
@@ -591,6 +661,17 @@ class CameraPreviewWindow(QMainWindow):
 
     def _save_snapshot(self) -> None:
         observations = self._build_observations()
+
+        if any(
+            observation.review_status is ObservationReviewStatus.PROPOSED
+            for observation in observations
+        ):
+            QMessageBox.warning(
+                self,
+                "建议眼框尚未确认",
+                "仍有尚未确认的建议眼框。请点击“确认双眼建议框”，或重新人工框选对应眼睛。",
+            )
+            return
 
         if not observations:
             QMessageBox.warning(
@@ -689,6 +770,7 @@ class CameraPreviewWindow(QMainWindow):
         self._pending_side = None
         self._eye_boxes.clear()
         self._eye_sources.clear()
+        self._eye_review_statuses.clear()
         self.preview_label.clear_frame()
         self.preview_label.setText("摄像头预览尚未启动")
 
