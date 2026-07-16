@@ -232,11 +232,28 @@ class CameraPreviewController:
 
         return packet, rendered
 
+    def render_latest_frame(
+        self,
+    ) -> NDArray[np.uint8]:
+        """Render the latest frame with current observations."""
+        if self._latest_packet is None:
+            raise InvalidDeviceStateError("No camera frame is available to render.")
+
+        if self._observations:
+            return draw_eye_observations(
+                self._latest_packet.image,
+                self._observations,
+            )
+
+        return self._latest_packet.image.copy()
+
     def save_snapshot(
         self,
         output_path: str | Path,
+        *,
+        rendered: bool = False,
     ) -> Path:
-        """Save the latest raw frame as an image."""
+        """Save the latest raw or rendered camera frame."""
         if self._latest_packet is None:
             raise InvalidDeviceStateError("No camera frame is available to save.")
 
@@ -246,9 +263,11 @@ class CameraPreviewController:
             exist_ok=True,
         )
 
+        image = self.render_latest_frame() if rendered else self._latest_packet.image
+
         write_ok = cv2.imwrite(
             str(path),
-            self._latest_packet.image,
+            image,
         )
 
         if not write_ok:

@@ -228,3 +228,44 @@ def test_bgr_frame_converts_to_owned_qimage() -> None:
     assert qimage.width() == 64
     assert qimage.height() == 48
     assert qimage.format() == (qimage.Format.Format_RGB888)
+
+
+def test_preview_saves_rendered_snapshot(
+    tmp_path: Path,
+) -> None:
+    controller, _, _ = build_controller()
+    controller.set_observations(
+        [
+            EyeObservation(
+                side=EyeSide.LEFT,
+                box=EyeBoundingBox(
+                    x_px=10,
+                    y_px=10,
+                    width_px=20,
+                    height_px=10,
+                ),
+                opening_state=(EyeOpeningState.CLOSED),
+            )
+        ]
+    )
+    controller.start(
+        index=0,
+        backend=None,
+    )
+    packet, _ = controller.read_next_frame()
+
+    output_path = tmp_path / "rendered.png"
+    controller.save_snapshot(
+        output_path,
+        rendered=True,
+    )
+
+    saved_image = cv2.imread(str(output_path))
+
+    assert saved_image is not None
+    assert not np.array_equal(
+        saved_image,
+        packet.image,
+    )
+
+    controller.stop()

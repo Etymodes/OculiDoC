@@ -9,6 +9,7 @@ from oculidoc.vision import (
     EyeObservation,
     EyeOpeningState,
     EyeSide,
+    ObservationReviewStatus,
     ObservationSource,
     draw_eye_observations,
 )
@@ -184,3 +185,34 @@ def test_overlay_rejects_non_bgr_image() -> None:
             grayscale,
             [],
         )
+
+
+def test_manual_observation_defaults_to_manual_review() -> None:
+    observation = EyeObservation(
+        side=EyeSide.LEFT,
+        box=EyeBoundingBox(
+            x_px=10,
+            y_px=10,
+            width_px=20,
+            height_px=10,
+        ),
+        opening_state=EyeOpeningState.OPEN,
+    )
+
+    assert observation.review_status is ObservationReviewStatus.MANUAL
+
+
+def test_algorithm_observation_defaults_to_proposed() -> None:
+    observation = EyeObservation(
+        side=EyeSide.LEFT,
+        box=EyeBoundingBox(
+            x_px=10,
+            y_px=10,
+            width_px=20,
+            height_px=10,
+        ),
+        opening_state=EyeOpeningState.UNKNOWN,
+        source=ObservationSource.ALGORITHM,
+    )
+
+    assert observation.review_status is ObservationReviewStatus.PROPOSED
