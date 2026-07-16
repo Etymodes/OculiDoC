@@ -43,6 +43,7 @@ def create_admin_window(
         window = AdminMainWindow(
             settings,
             database_runtime.patient_service,
+            database_runtime.experiment_session_service,
         )
     except Exception:
         database_runtime.dispose()

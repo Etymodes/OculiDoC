@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from time import monotonic_ns
 from uuid import UUID, uuid4
 
@@ -28,6 +29,10 @@ class ExperimentSessionNotFoundError(LookupError):
 
 class InactivePatientError(ValueError):
     """Raised when a session is requested for an inactive patient."""
+
+
+class SessionWorkspaceUnavailableError(RuntimeError):
+    """Raised when no filesystem workspace is configured."""
 
 
 class DuplicateSessionArtifactError(ValueError):
@@ -102,6 +107,18 @@ class ExperimentSessionService:
                 mime_type="application/json",
             )
         )
+
+    def resolve_session_directory(
+        self,
+        session_id: UUID,
+    ) -> Path:
+        """Return the filesystem directory for one session."""
+        session = self.get_session(session_id)
+
+        if self._workspace is None:
+            raise SessionWorkspaceUnavailableError("No session workspace is configured.")
+
+        return self._workspace.resolve_session_directory(session)
 
     def create_session(
         self,

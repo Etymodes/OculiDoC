@@ -1,7 +1,9 @@
 """Standalone PySide6 camera and eye-region workbench."""
 
+from pathlib import Path
+
 import cv2
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import (
     QCloseEvent,
     QPixmap,
@@ -66,10 +68,14 @@ _BACKENDS: dict[str, int | None] = {
 class CameraPreviewWindow(QMainWindow):
     """Camera preview with manual left/right eye selection."""
 
+    artifacts_saved = Signal(object)
+    workbench_closed = Signal()
+
     def __init__(
         self,
         *,
         patient_key: str = UNASSIGNED_PATIENT_KEY,
+        dataset_directory: str | Path | None = None,
     ) -> None:
         super().__init__()
 
@@ -78,6 +84,16 @@ class CameraPreviewWindow(QMainWindow):
 
         self._controller = CameraPreviewController()
         self._patient_key = normalize_patient_key(patient_key)
+        self._dataset_directory = (
+            eye_observation_dataset_directory(self._patient_key)
+            if dataset_directory is None
+            else Path(dataset_directory).expanduser().resolve()
+        )
+        self._dataset_directory.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        self._closed_emitted = False
 
         self.setWindowTitle(f"OculiDoC Camera and Eye Workbench — {self._patient_key}")
         self._frame_save_guard = FrameSaveGuard()
@@ -707,7 +723,8 @@ class CameraPreviewWindow(QMainWindow):
             )
             return
 
-        dataset_directory = eye_observation_dataset_directory(self._patient_key)
+        dataset_directory = self._dataset_directory
+        existing_files = {path.resolve() for path in dataset_directory.rglob("*") if path.is_file()}
 
         try:
             sample_paths = next_eye_sample_paths(dataset_directory)
@@ -751,6 +768,20 @@ class CameraPreviewWindow(QMainWindow):
                 str(error),
             )
             return
+
+        saved_artifacts = tuple(
+            sorted(
+                (
+                    path.resolve()
+                    for path in dataset_directory.rglob("*")
+                    if (path.is_file() and path.resolve() not in existing_files)
+                ),
+                key=lambda path: path.as_posix(),
+            )
+        )
+
+        if saved_artifacts:
+            self.artifacts_saved.emit(saved_artifacts)
 
         self._frame_save_guard.mark_saved(frame_key)
 
@@ -797,4 +828,9 @@ class CameraPreviewWindow(QMainWindow):
         """Release camera hardware before closing."""
         self._timer.stop()
         self._controller.stop()
+
+        if not self._closed_emitted:
+            self._closed_emitted = True
+            self.workbench_closed.emit()
+
         event.accept()

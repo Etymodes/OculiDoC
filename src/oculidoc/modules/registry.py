@@ -16,6 +16,12 @@ class ModuleDefinition:
 
 DEFAULT_MODULES: tuple[ModuleDefinition, ...] = (
     ModuleDefinition(
+        "eye_observation",
+        "眼动采集与复核",
+        "为当前患者创建实验会话，采集摄像头画面并人工复核双眼区域。",
+        "available",
+    ),
+    ModuleDefinition(
         "tracking_ball",
         "追踪球",
         "记录注视时长、注视比例和视线—目标轨迹匹配度。",

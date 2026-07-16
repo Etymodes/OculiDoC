@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
 from oculidoc.config import Settings
+from oculidoc.modules.registry import DEFAULT_MODULES
 from oculidoc.ui.main_window import AdminMainWindow
 from oculidoc.ui.patient_window import PatientDisplayWindow
 
@@ -13,7 +14,7 @@ def test_admin_window_builds(qtbot: QtBot, tmp_path: Path) -> None:
     qtbot.addWidget(window)
 
     assert window.windowTitle() == "OculiDoC 管理员端"
-    assert len(window.module_buttons) == 7
+    assert len(window.module_buttons) == len(DEFAULT_MODULES)
 
     tracking_button = window.findChild(
         QPushButton,

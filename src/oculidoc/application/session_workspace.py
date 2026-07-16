@@ -9,6 +9,13 @@ from oculidoc.domain.experiment_session import ExperimentSession
 class SessionWorkspace(Protocol):
     """Filesystem operations required by session services."""
 
+    def resolve_session_directory(
+        self,
+        session: ExperimentSession,
+    ) -> Path:
+        """Resolve the concrete directory for one session."""
+        ...
+
     def initialize(
         self,
         session: ExperimentSession,

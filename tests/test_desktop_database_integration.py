@@ -31,6 +31,7 @@ def test_create_admin_window_initializes_database(
 
     assert settings.database_path.exists()
     assert window.patient_service is (database_runtime.patient_service)
+    assert window.experiment_session_service is (database_runtime.experiment_session_service)
     assert window.patient_label.text() == (
         "\u60a3\u8005\u6570\u636e\u5e93"
         "\u5df2\u8fde\u63a5\uff0c"
