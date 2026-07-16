@@ -5,6 +5,7 @@ from functools import partial
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -17,16 +18,28 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from oculidoc.application import PatientService
 from oculidoc.config import Settings
+from oculidoc.domain import Patient
 from oculidoc.modules.registry import DEFAULT_MODULES, ModuleDefinition
+from oculidoc.ui.patient_management import (
+    PatientManagementDialog,
+    diagnosis_display_name,
+)
 from oculidoc.ui.patient_window import PatientDisplayWindow
 
 
 class AdminMainWindow(QMainWindow):
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        patient_service: PatientService | None = None,
+    ) -> None:
         super().__init__()
 
         self.settings = settings
+        self.patient_service = patient_service
+        self.current_patient: Patient | None = None
         self.module_buttons: dict[str, QPushButton] = {}
         self._patient_window = PatientDisplayWindow()
         self._patient_window.exit_requested.connect(self._restore_admin_window)
@@ -78,6 +91,43 @@ class AdminMainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
+    def _patient_counts(self) -> tuple[int, int]:
+        """Return total and active patient counts."""
+        if self.patient_service is None:
+            return 0, 0
+
+        patients = self.patient_service.list_patients()
+        active_count = sum(patient.is_active for patient in patients)
+
+        return len(patients), active_count
+
+    def _patient_panel_text(self) -> str:
+        """Return patient summary text."""
+        if self.patient_service is None:
+            return "患者数据库未连接。"
+
+        if self.current_patient is not None:
+            return (
+                f"当前患者：{self.current_patient.display_label}"
+                f" · 诊断：{diagnosis_display_name(self.current_patient.clinical_diagnosis)}"
+            )
+
+        total_count, active_count = self._patient_counts()
+
+        if total_count == 0:
+            return "患者数据库已连接，尚未登记患者。"
+
+        return f"已登记 {total_count} 名患者，其中 {active_count} 名启用；尚未选择当前患者。"
+
+    def _patient_status_text(self) -> str:
+        """Return compact database status text."""
+        if self.patient_service is None:
+            return "患者数据：未连接"
+
+        total_count, active_count = self._patient_counts()
+
+        return f"患者数据：已初始化 · 总计 {total_count} · 启用 {active_count}"
+
     def _build_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
         titles = QVBoxLayout()
@@ -110,7 +160,7 @@ class AdminMainWindow(QMainWindow):
         text = QVBoxLayout()
         title = QLabel("当前患者")
         title.setObjectName("sectionTitle")
-        self.patient_label = QLabel("尚未选择患者。患者档案将在下一里程碑实现。")
+        self.patient_label = QLabel(self._patient_panel_text())
         self.patient_label.setObjectName("subtitle")
         text.addWidget(title)
         text.addWidget(self.patient_label)
@@ -186,12 +236,15 @@ class AdminMainWindow(QMainWindow):
         layout = QHBoxLayout(panel)
         layout.setContentsMargins(18, 13, 18, 13)
 
-        for text in (
-            "眼动源：模拟数据源",
-            f"本地后台：未启动 · {self.settings.admin_base_url}",
-            "患者数据：未初始化",
+        gaze_label = QLabel("眼动源：模拟数据源")
+        backend_label = QLabel(f"本地后台：未启动 · {self.settings.admin_base_url}")
+        self.patient_status_label = QLabel(self._patient_status_text())
+
+        for label in (
+            gaze_label,
+            backend_label,
+            self.patient_status_label,
         ):
-            label = QLabel(text)
             label.setObjectName("subtitle")
             layout.addWidget(label)
             layout.addStretch(1)
@@ -210,9 +263,62 @@ class AdminMainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
-    def _show_patient_placeholder(self, checked: bool = False) -> None:
+    def _refresh_patient_summary(self) -> None:
+        """Refresh patient labels after database changes."""
+        self.patient_label.setText(self._patient_panel_text())
+
+        if hasattr(self, "patient_status_label"):
+            self.patient_status_label.setText(self._patient_status_text())
+
+    def _reload_current_patient(self) -> None:
+        """Reload or clear the current patient."""
+        if self.patient_service is None or self.current_patient is None:
+            return
+
+        patient = self.patient_service.get_patient(self.current_patient.patient_id)
+
+        if patient.is_active:
+            self.current_patient = patient
+        else:
+            self.current_patient = None
+
+    def _set_current_patient(
+        self,
+        patient: Patient,
+    ) -> None:
+        """Set and display the current patient."""
+        if not patient.is_active:
+            return
+
+        self.current_patient = patient
+        self._refresh_patient_summary()
+
+    def _show_patient_placeholder(
+        self,
+        checked: bool = False,
+    ) -> None:
+        """Open the patient management dialog."""
         del checked
-        QMessageBox.information(self, "患者管理", "患者档案将在下一里程碑实现。")
+
+        if self.patient_service is None:
+            QMessageBox.warning(
+                self,
+                "患者数据库未连接",
+                "无法打开患者管理界面。",
+            )
+            return
+
+        dialog = PatientManagementDialog(
+            self.patient_service,
+            self,
+        )
+        result = dialog.exec()
+
+        if result == QDialog.DialogCode.Accepted and dialog.selected_patient is not None:
+            self._set_current_patient(dialog.selected_patient)
+        else:
+            self._reload_current_patient()
+            self._refresh_patient_summary()
 
     def _show_module_placeholder(
         self,
