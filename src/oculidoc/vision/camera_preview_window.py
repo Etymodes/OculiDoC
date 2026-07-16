@@ -42,11 +42,13 @@ from oculidoc.vision.eye_observation import (
     EyeObservation,
     EyeOpeningState,
     EyeSide,
+    ObservationSource,
 )
 from oculidoc.vision.eye_record import (
     build_eye_observation_record,
     write_eye_observation_record,
 )
+from oculidoc.vision.eye_region_proposal import FaceDetection, propose_eye_regions_from_face
 from oculidoc.vision.frame_identity import FrameSaveGuard, build_camera_frame_key
 from oculidoc.vision.image_selection_widget import (
     ImageSelectionLabel,
@@ -84,6 +86,11 @@ class CameraPreviewWindow(QMainWindow):
 
         self._frozen = False
         self._pending_side: EyeSide | None = None
+        self._pending_face_selection = False
+        self._eye_sources: dict[
+            EyeSide,
+            ObservationSource,
+        ] = {}
         self._eye_boxes: dict[
             EyeSide,
             EyeBoundingBox,
@@ -173,6 +180,17 @@ class CameraPreviewWindow(QMainWindow):
         eye_form.addRow(
             "右眼状态：",
             self.right_state_combo,
+        )
+
+        self.face_proposal_button = QPushButton("框选整脸并建议双眼")
+
+        self.face_proposal_button.setEnabled(False)
+
+        self.face_proposal_button.clicked.connect(self._begin_face_selection)
+
+        eye_form.addRow(
+            "",
+            self.face_proposal_button,
         )
 
         self.left_eye_button = QPushButton("框选左眼")
@@ -273,14 +291,30 @@ class CameraPreviewWindow(QMainWindow):
     def _build_observations(
         self,
     ) -> tuple[EyeObservation, ...]:
-        return tuple(
-            EyeObservation(
-                side=side,
-                box=box,
-                opening_state=(self._selected_eye_state(side)),
+        observations = []
+
+        for side, box in self._eye_boxes.items():
+            source = self._eye_sources.get(
+                side,
+                ObservationSource.MANUAL,
             )
-            for side, box in self._eye_boxes.items()
-        )
+            note = (
+                "Face-geometry proposal; operator review required."
+                if source is ObservationSource.ALGORITHM
+                else None
+            )
+
+            observations.append(
+                EyeObservation(
+                    side=side,
+                    box=box,
+                    opening_state=(self._selected_eye_state(side)),
+                    source=source,
+                    note=note,
+                )
+            )
+
+        return tuple(observations)
 
     def _update_observations(self) -> None:
         self._controller.set_observations(self._build_observations())
@@ -305,6 +339,7 @@ class CameraPreviewWindow(QMainWindow):
         self,
         enabled: bool,
     ) -> None:
+        self.face_proposal_button.setEnabled(enabled)
         self.left_eye_button.setEnabled(enabled)
         self.right_eye_button.setEnabled(enabled)
         self.left_state_combo.setEnabled(enabled)
@@ -363,6 +398,7 @@ class CameraPreviewWindow(QMainWindow):
 
         self._frozen = False
         self._eye_boxes.clear()
+        self._eye_sources.clear()
         self._controller.clear_observations()
 
         width, height, fps = self._controller.reported_mode
@@ -426,6 +462,28 @@ class CameraPreviewWindow(QMainWindow):
         self._set_eye_controls_enabled(True)
         self.statusBar().showMessage("可拖拽框选左右眼")
 
+    def _begin_face_selection(
+        self,
+    ) -> None:
+        if not self._frozen:
+            return
+
+        self._pending_side = None
+        self._pending_face_selection = True
+
+        try:
+            self.preview_label.begin_selection()
+        except Exception as error:
+            self._pending_face_selection = False
+            QMessageBox.warning(
+                self,
+                "无法开始整脸框选",
+                str(error),
+            )
+            return
+
+        self.statusBar().showMessage("请拖拽框住患者完整面部；系统随后生成双眼建议框")
+
     def _begin_eye_selection(
         self,
         side: EyeSide,
@@ -433,6 +491,7 @@ class CameraPreviewWindow(QMainWindow):
         if not self._frozen:
             return
 
+        self._pending_face_selection = False
         self._pending_side = side
 
         try:
@@ -453,6 +512,50 @@ class CameraPreviewWindow(QMainWindow):
         self,
         box: EyeBoundingBox,
     ) -> None:
+        if self._pending_face_selection:
+            self._pending_face_selection = False
+            self._pending_side = None
+
+            packet = self._controller.latest_packet
+
+            if packet is None:
+                QMessageBox.warning(
+                    self,
+                    "没有可用画面",
+                    "当前冻结帧不存在。",
+                )
+                return
+
+            face = FaceDetection(
+                x_px=box.x_px,
+                y_px=box.y_px,
+                width_px=box.width_px,
+                height_px=box.height_px,
+            )
+            proposals = propose_eye_regions_from_face(
+                face,
+                image_width_px=packet.width_px,
+                image_height_px=packet.height_px,
+            )
+
+            self._eye_boxes = {observation.side: observation.box for observation in proposals}
+            self._eye_sources = {
+                observation.side: (ObservationSource.ALGORITHM) for observation in proposals
+            }
+
+            for combo in (
+                self.left_state_combo,
+                self.right_state_combo,
+            ):
+                unknown_index = combo.findData(EyeOpeningState.UNKNOWN.value)
+
+                if unknown_index >= 0:
+                    combo.setCurrentIndex(unknown_index)
+
+            self._update_observations()
+            self.statusBar().showMessage("已根据整脸区域生成双眼建议框；请检查并按需重新框选单眼")
+            return
+
         side = self._pending_side
         self._pending_side = None
 
@@ -460,6 +563,7 @@ class CameraPreviewWindow(QMainWindow):
             return
 
         self._eye_boxes[side] = box
+        self._eye_sources[side] = ObservationSource.MANUAL
         self._update_observations()
 
         self.statusBar().showMessage(
@@ -468,6 +572,7 @@ class CameraPreviewWindow(QMainWindow):
 
     def _cancel_eye_selection(self) -> None:
         self._pending_side = None
+        self._pending_face_selection = False
 
     def _state_changed(self) -> None:
         if self._eye_boxes:
@@ -477,6 +582,7 @@ class CameraPreviewWindow(QMainWindow):
         self.preview_label.cancel_selection()
         self._pending_side = None
         self._eye_boxes.clear()
+        self._eye_sources.clear()
         self._controller.clear_observations()
         self.clear_boxes_button.setEnabled(False)
 
@@ -582,7 +688,7 @@ class CameraPreviewWindow(QMainWindow):
         self._frozen = False
         self._pending_side = None
         self._eye_boxes.clear()
-
+        self._eye_sources.clear()
         self.preview_label.clear_frame()
         self.preview_label.setText("摄像头预览尚未启动")
 
