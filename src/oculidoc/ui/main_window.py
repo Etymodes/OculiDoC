@@ -1,10 +1,15 @@
 """Administrator desktop dashboard."""
 
+import mimetypes
+from contextlib import suppress
 from functools import partial
+from pathlib import Path
+from uuid import UUID
 
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -17,17 +22,48 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from oculidoc.application import PatientService
+from oculidoc.application.experiment_session_service import (
+    CreateExperimentSessionRequest,
+    DuplicateSessionArtifactError,
+    ExperimentSessionService,
+    RegisterSessionArtifactRequest,
+)
 from oculidoc.config import Settings
+from oculidoc.domain import Patient
+from oculidoc.domain.experiment_session import (
+    ExperimentSessionStatus,
+    SessionArtifactKind,
+)
 from oculidoc.modules.registry import DEFAULT_MODULES, ModuleDefinition
+from oculidoc.ui.patient_management import (
+    PatientManagementDialog,
+    diagnosis_display_name,
+)
 from oculidoc.ui.patient_window import PatientDisplayWindow
+from oculidoc.vision.camera_preview_window import (
+    CameraPreviewWindow,
+)
 
 
 class AdminMainWindow(QMainWindow):
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        patient_service: PatientService | None = None,
+        experiment_session_service: (ExperimentSessionService | None) = None,
+    ) -> None:
         super().__init__()
 
         self.settings = settings
+        self.patient_service = patient_service
+        self.experiment_session_service = experiment_session_service
+        self.current_patient: Patient | None = None
         self.module_buttons: dict[str, QPushButton] = {}
+        self._eye_windows: dict[
+            UUID,
+            CameraPreviewWindow,
+        ] = {}
         self._patient_window = PatientDisplayWindow()
         self._patient_window.exit_requested.connect(self._restore_admin_window)
 
@@ -78,6 +114,43 @@ class AdminMainWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
+    def _patient_counts(self) -> tuple[int, int]:
+        """Return total and active patient counts."""
+        if self.patient_service is None:
+            return 0, 0
+
+        patients = self.patient_service.list_patients()
+        active_count = sum(patient.is_active for patient in patients)
+
+        return len(patients), active_count
+
+    def _patient_panel_text(self) -> str:
+        """Return patient summary text."""
+        if self.patient_service is None:
+            return "患者数据库未连接。"
+
+        if self.current_patient is not None:
+            return (
+                f"当前患者：{self.current_patient.display_label}"
+                f" · 诊断：{diagnosis_display_name(self.current_patient.clinical_diagnosis)}"
+            )
+
+        total_count, active_count = self._patient_counts()
+
+        if total_count == 0:
+            return "患者数据库已连接，尚未登记患者。"
+
+        return f"已登记 {total_count} 名患者，其中 {active_count} 名启用；尚未选择当前患者。"
+
+    def _patient_status_text(self) -> str:
+        """Return compact database status text."""
+        if self.patient_service is None:
+            return "患者数据：未连接"
+
+        total_count, active_count = self._patient_counts()
+
+        return f"患者数据：已初始化 · 总计 {total_count} · 启用 {active_count}"
+
     def _build_header(self) -> QHBoxLayout:
         header = QHBoxLayout()
         titles = QVBoxLayout()
@@ -110,7 +183,7 @@ class AdminMainWindow(QMainWindow):
         text = QVBoxLayout()
         title = QLabel("当前患者")
         title.setObjectName("sectionTitle")
-        self.patient_label = QLabel("尚未选择患者。患者档案将在下一里程碑实现。")
+        self.patient_label = QLabel(self._patient_panel_text())
         self.patient_label.setObjectName("subtitle")
         text.addWidget(title)
         text.addWidget(self.patient_label)
@@ -172,7 +245,12 @@ class AdminMainWindow(QMainWindow):
         button = QPushButton("打开项目")
         button.setObjectName(f"moduleButton_{module.module_id}")
         button.setProperty("moduleId", module.module_id)
-        button.clicked.connect(partial(self._show_module_placeholder, module))
+        button.clicked.connect(
+            partial(
+                self._open_module,
+                module,
+            )
+        )
         self.module_buttons[module.module_id] = button
 
         layout.addWidget(title)
@@ -186,12 +264,15 @@ class AdminMainWindow(QMainWindow):
         layout = QHBoxLayout(panel)
         layout.setContentsMargins(18, 13, 18, 13)
 
-        for text in (
-            "眼动源：模拟数据源",
-            f"本地后台：未启动 · {self.settings.admin_base_url}",
-            "患者数据：未初始化",
+        gaze_label = QLabel("眼动源：模拟数据源")
+        backend_label = QLabel(f"本地后台：未启动 · {self.settings.admin_base_url}")
+        self.patient_status_label = QLabel(self._patient_status_text())
+
+        for label in (
+            gaze_label,
+            backend_label,
+            self.patient_status_label,
         ):
-            label = QLabel(text)
             label.setObjectName("subtitle")
             layout.addWidget(label)
             layout.addStretch(1)
@@ -210,9 +291,244 @@ class AdminMainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
-    def _show_patient_placeholder(self, checked: bool = False) -> None:
+    def _refresh_patient_summary(self) -> None:
+        """Refresh patient labels after database changes."""
+        self.patient_label.setText(self._patient_panel_text())
+
+        if hasattr(self, "patient_status_label"):
+            self.patient_status_label.setText(self._patient_status_text())
+
+    def _reload_current_patient(self) -> None:
+        """Reload or clear the current patient."""
+        if self.patient_service is None or self.current_patient is None:
+            return
+
+        patient = self.patient_service.get_patient(self.current_patient.patient_id)
+
+        if patient.is_active:
+            self.current_patient = patient
+        else:
+            self.current_patient = None
+
+    def _set_current_patient(
+        self,
+        patient: Patient,
+    ) -> None:
+        """Set and display the current patient."""
+        if not patient.is_active:
+            return
+
+        self.current_patient = patient
+        self._refresh_patient_summary()
+
+    def _show_patient_placeholder(
+        self,
+        checked: bool = False,
+    ) -> None:
+        """Open the patient management dialog."""
         del checked
-        QMessageBox.information(self, "患者管理", "患者档案将在下一里程碑实现。")
+
+        if self.patient_service is None:
+            QMessageBox.warning(
+                self,
+                "患者数据库未连接",
+                "无法打开患者管理界面。",
+            )
+            return
+
+        dialog = PatientManagementDialog(
+            self.patient_service,
+            self,
+        )
+        result = dialog.exec()
+
+        if result == QDialog.DialogCode.Accepted and dialog.selected_patient is not None:
+            self._set_current_patient(dialog.selected_patient)
+        else:
+            self._reload_current_patient()
+            self._refresh_patient_summary()
+
+    def _open_module(
+        self,
+        module: ModuleDefinition,
+        checked: bool = False,
+    ) -> None:
+        """Open an implemented module or its placeholder."""
+        del checked
+
+        if module.module_id == "eye_observation":
+            self._open_eye_observation_module(module)
+            return
+
+        self._show_module_placeholder(module)
+
+    def _open_eye_observation_module(
+        self,
+        module: ModuleDefinition,
+    ) -> None:
+        """Create a session and open the eye workbench."""
+        if self.current_patient is None:
+            QMessageBox.warning(
+                self,
+                "尚未选择患者",
+                "请先在患者管理中选择一名启用患者。",
+            )
+            return
+
+        if self.experiment_session_service is None:
+            QMessageBox.warning(
+                self,
+                "实验会话服务未连接",
+                "无法创建眼动采集会话。",
+            )
+            return
+
+        session_id: UUID | None = None
+
+        try:
+            session = self.experiment_session_service.create_session(
+                CreateExperimentSessionRequest(
+                    patient_id=(self.current_patient.patient_id),
+                    module_id=module.module_id,
+                )
+            )
+            session_id = session.session_id
+
+            self.experiment_session_service.start_session(session_id)
+            session_directory = self.experiment_session_service.resolve_session_directory(
+                session_id
+            )
+            dataset_directory = session_directory / "eye_observations"
+
+            workbench = CameraPreviewWindow(
+                patient_key=str(self.current_patient.patient_id),
+                dataset_directory=dataset_directory,
+            )
+        except Exception as error:
+            if session_id is not None:
+                with suppress(Exception):
+                    self.experiment_session_service.abort_session(
+                        session_id,
+                        str(error),
+                    )
+
+            QMessageBox.critical(
+                self,
+                "无法启动眼动工作台",
+                str(error),
+            )
+            return
+
+        workbench.artifacts_saved.connect(
+            partial(
+                self._register_eye_artifacts,
+                session_id,
+                session_directory,
+            )
+        )
+        workbench.workbench_closed.connect(
+            partial(
+                self._finish_eye_session,
+                session_id,
+            )
+        )
+
+        self._eye_windows[session_id] = workbench
+
+        workbench.show()
+        workbench.raise_()
+        workbench.activateWindow()
+
+    def _register_eye_artifacts(
+        self,
+        session_id: UUID,
+        session_directory: Path,
+        paths: tuple[Path, ...],
+    ) -> None:
+        """Register files saved by the eye workbench."""
+        if self.experiment_session_service is None:
+            return
+
+        image_suffixes = {
+            ".bmp",
+            ".jpeg",
+            ".jpg",
+            ".png",
+            ".tif",
+            ".tiff",
+            ".webp",
+        }
+        resolved_session_directory = session_directory.resolve()
+
+        for raw_path in paths:
+            path = Path(raw_path).resolve()
+
+            try:
+                relative_path = path.relative_to(resolved_session_directory).as_posix()
+            except ValueError:
+                QMessageBox.warning(
+                    self,
+                    "跳过会话目录外文件",
+                    str(path),
+                )
+                continue
+
+            kind = (
+                SessionArtifactKind.CAMERA_FRAMES
+                if path.suffix.lower() in image_suffixes
+                else SessionArtifactKind.OTHER
+            )
+            mime_type = mimetypes.guess_type(path.name)[0]
+
+            try:
+                self.experiment_session_service.register_artifact(
+                    RegisterSessionArtifactRequest(
+                        session_id=session_id,
+                        kind=kind,
+                        relative_path=relative_path,
+                        source="eye_workbench",
+                        mime_type=mime_type,
+                        size_bytes=path.stat().st_size,
+                    )
+                )
+            except DuplicateSessionArtifactError:
+                continue
+            except Exception as error:
+                QMessageBox.warning(
+                    self,
+                    "会话文件登记失败",
+                    f"{relative_path}\n{error}",
+                )
+
+    def _finish_eye_session(
+        self,
+        session_id: UUID,
+    ) -> None:
+        """Complete the session when its workbench closes."""
+        self._eye_windows.pop(
+            session_id,
+            None,
+        )
+
+        if self.experiment_session_service is None:
+            return
+
+        try:
+            session = self.experiment_session_service.get_session(session_id)
+
+            if session.status is ExperimentSessionStatus.RUNNING:
+                self.experiment_session_service.complete_session(session_id)
+            elif session.status is ExperimentSessionStatus.CREATED:
+                self.experiment_session_service.abort_session(
+                    session_id,
+                    "Workbench closed before acquisition started.",
+                )
+        except Exception as error:
+            QMessageBox.warning(
+                self,
+                "实验会话结束失败",
+                str(error),
+            )
 
     def _show_module_placeholder(
         self,
@@ -239,5 +555,8 @@ class AdminMainWindow(QMainWindow):
             QApplication.quit()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        for workbench in tuple(self._eye_windows.values()):
+            workbench.close()
+
         self._patient_window.close()
         super().closeEvent(event)

@@ -57,3 +57,6 @@ user_log/
 # Legacy binaries are not committed
 MCeyegazethesisNET461.exe
 *.dll
+
+# Runtime eye-observation images and labels
+data/eye_observations/

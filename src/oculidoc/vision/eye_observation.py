@@ -29,6 +29,15 @@ class ObservationSource(StrEnum):
     ALGORITHM = "algorithm"
 
 
+class ObservationReviewStatus(StrEnum):
+    """Human-review state of an eye-region observation."""
+
+    PROPOSED = "proposed"
+    CONFIRMED = "confirmed"
+    CORRECTED = "corrected"
+    MANUAL = "manual"
+
+
 EYE_STATE_LABELS: dict[
     EyeOpeningState,
     str,
@@ -63,6 +72,7 @@ class EyeBoundingBox:
     height_px: int
 
     def __post_init__(self) -> None:
+
         if self.x_px < 0 or self.y_px < 0:
             raise ValueError("Bounding-box coordinates cannot be negative.")
 
@@ -125,10 +135,27 @@ class EyeObservation:
     box: EyeBoundingBox
     opening_state: EyeOpeningState
     source: ObservationSource = ObservationSource.MANUAL
+
+    review_status: ObservationReviewStatus | None = None
     confidence: float | None = None
     note: str | None = None
 
     def __post_init__(self) -> None:
+        derived_review_status = self.review_status
+
+        if derived_review_status is None:
+            derived_review_status = (
+                ObservationReviewStatus.MANUAL
+                if self.source is ObservationSource.MANUAL
+                else ObservationReviewStatus.PROPOSED
+            )
+
+        object.__setattr__(
+            self,
+            "review_status",
+            derived_review_status,
+        )
+
         if self.confidence is not None:
             if not isfinite(self.confidence) or not 0.0 <= self.confidence <= 1.0:
                 raise ValueError("confidence must be between 0 and 1.")
