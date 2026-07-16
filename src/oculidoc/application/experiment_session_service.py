@@ -134,7 +134,7 @@ class ExperimentSessionService:
             raise InactivePatientError("Cannot create a session for an inactive patient.")
 
         session_id = uuid4()
-        data_directory = request.data_directory or (f"sessions/{patient.patient_code}/{session_id}")
+        data_directory = request.data_directory or (f"sessions/{patient.patient_id}/{session_id}")
 
         session = ExperimentSession(
             session_id=session_id,

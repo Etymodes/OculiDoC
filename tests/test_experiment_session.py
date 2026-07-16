@@ -53,7 +53,7 @@ def test_session_uses_safe_default_data_directory() -> None:
 
     assert session.patient_id == patient.patient_id
     assert session.status is ExperimentSessionStatus.CREATED
-    assert session.data_directory.startswith("sessions/DOC-SESSION-001/")
+    assert session.data_directory == (f"sessions/{patient.patient_id}/{session.session_id}")
 
     runtime.dispose()
 

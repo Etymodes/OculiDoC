@@ -169,3 +169,40 @@ def test_session_rejects_unsafe_data_directory(
         )
 
     runtime.dispose()
+
+
+def test_default_session_directory_uses_stable_patient_id(
+    tmp_path: Path,
+) -> None:
+    data_root = tmp_path / "data"
+    runtime = initialize_database(
+        tmp_path / "oculidoc.sqlite3",
+        data_root=data_root,
+    )
+
+    patient = runtime.patient_service.register_patient(
+        RegisterPatientRequest(
+            patient_code="MUTABLE-CODE",
+            family_name="Stable",
+        )
+    )
+    session = runtime.experiment_session_service.create_session(
+        CreateExperimentSessionRequest(
+            patient_id=patient.patient_id,
+            module_id="eye_observation",
+        )
+    )
+
+    expected_relative_directory = f"sessions/{patient.patient_id}/{session.session_id}"
+    expected_absolute_directory = (
+        data_root / "sessions" / str(patient.patient_id) / str(session.session_id)
+    ).resolve()
+
+    assert session.data_directory == (expected_relative_directory)
+    assert (
+        runtime.experiment_session_service.resolve_session_directory(session.session_id)
+        == expected_absolute_directory
+    )
+    assert expected_absolute_directory.is_dir()
+
+    runtime.dispose()
