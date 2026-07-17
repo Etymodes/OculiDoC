@@ -7,6 +7,7 @@ import random
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic_ns
 
 from PySide6.QtCore import (
     QPoint,
@@ -256,6 +257,12 @@ class BinaryQuestionTask(QWidget):
         self._dwell_ms = 0.0
         self._last_timestamp_ns: int | None = None
         self._result: tuple[str, str] | None = None
+        self._recording_events: list[dict[str, object]] = []
+        self._task_started_monotonic_ns: int | None = None
+        self._answer_committed_monotonic_ns: int | None = None
+        self._confirmation_dwell_ms: float | None = None
+        self._selection_method: str | None = None
+        self._final_event_recorded = False
 
         self.setMinimumSize(800, 520)
         self.setStyleSheet(
@@ -424,8 +431,186 @@ class BinaryQuestionTask(QWidget):
     ) -> str:
         return self._answer_for_option(self._option_by_side[side])
 
+    @property
+    def selected_option_id(
+        self,
+    ) -> str | None:
+        """Return the selected logical option identifier."""
+
+        if self._result is None:
+            return None
+
+        return self._option_by_side[self._result[0]]
+
+    def _event_payload_for_side(
+        self,
+        side: str,
+    ) -> dict[str, object]:
+        option_id = self._option_by_side[side]
+        correct: bool | None = None
+
+        if self.config.is_scored:
+            correct = option_id == self.config.correct_option_id
+
+        return {
+            "question_id": ("binary-question-1"),
+            "side": side,
+            "logical_option_id": (option_id),
+            "selected_option_id": (option_id),
+            "answer": (self._answer_for_option(option_id)),
+            "selected_answer": (self._answer_for_option(option_id)),
+            "is_scored": (self.config.is_scored),
+            "correct_option_id": (self.config.correct_option_id),
+            "correct": correct,
+        }
+
+    def _queue_recording_event(
+        self,
+        event_type: str,
+        *,
+        monotonic_timestamp_ns: (int | None) = None,
+        payload: (dict[str, object] | None) = None,
+    ) -> None:
+        timestamp_ns = (
+            monotonic_ns() if monotonic_timestamp_ns is None else int(monotonic_timestamp_ns)
+        )
+
+        if timestamp_ns < 0:
+            raise ValueError("monotonic_timestamp_ns cannot be negative.")
+
+        self._recording_events.append(
+            {
+                "event_type": event_type,
+                "monotonic_timestamp_ns": (timestamp_ns),
+                "payload": dict(payload or {}),
+            }
+        )
+
+    def _ensure_question_presented(
+        self,
+        monotonic_timestamp_ns: (int | None) = None,
+    ) -> int:
+        if self._task_started_monotonic_ns is not None:
+            return self._task_started_monotonic_ns
+
+        timestamp_ns = (
+            monotonic_ns() if monotonic_timestamp_ns is None else int(monotonic_timestamp_ns)
+        )
+
+        if timestamp_ns < 0:
+            raise ValueError("monotonic_timestamp_ns cannot be negative.")
+
+        self._task_started_monotonic_ns = timestamp_ns
+        self._queue_recording_event(
+            "question_presented",
+            monotonic_timestamp_ns=(timestamp_ns),
+            payload={
+                "question_id": ("binary-question-1"),
+                "question": (self.config.question),
+                "question_type": (self.config.question_type.value),
+                "is_scored": (self.config.is_scored),
+                "option_1": (self.config.option_1),
+                "option_2": (self.config.option_2),
+                "correct_option_id": (self.config.correct_option_id),
+                "left_option_id": (self._option_by_side["left"]),
+                "right_option_id": (self._option_by_side["right"]),
+                "left_answer": (self._answer_for_side("left")),
+                "right_answer": (self._answer_for_side("right")),
+                "displayed_correct_side": (self.displayed_correct_side),
+                "randomization_seed": (self.randomization_seed),
+                "configured_dwell_ms": (self.config.dwell_time_ms),
+            },
+        )
+        return timestamp_ns
+
+    def drain_recording_events(
+        self,
+    ) -> tuple[
+        dict[str, object],
+        ...,
+    ]:
+        """Return and clear pending semantic task events."""
+
+        events = tuple(self._recording_events)
+        self._recording_events.clear()
+        return events
+
+    def recording_result(
+        self,
+        reason: str,
+    ) -> dict[str, object]:
+        """Return the clinical result written to task_result.json."""
+
+        reason_text = reason.strip() if reason.strip() else "completed"
+        self._ensure_question_presented()
+
+        selected_side: str | None = None
+        selected_answer: str | None = None
+
+        if self._result is not None:
+            (
+                selected_side,
+                selected_answer,
+            ) = self._result
+
+        selected_option_id = self.selected_option_id
+        correct: bool | None = None
+
+        if self.config.is_scored and selected_option_id is not None:
+            correct = selected_option_id == self.config.correct_option_id
+
+        reaction_time_ms: float | None = None
+
+        if (
+            self._answer_committed_monotonic_ns is not None
+            and self._task_started_monotonic_ns is not None
+        ):
+            reaction_time_ms = max(
+                0.0,
+                (self._answer_committed_monotonic_ns - self._task_started_monotonic_ns)
+                / 1_000_000.0,
+            )
+
+        completion_status = "answered" if self._result is not None else "unanswered"
+        result = {
+            "question_id": ("binary-question-1"),
+            "question": (self.config.question),
+            "question_type": (self.config.question_type.value),
+            "selected_option_id": (selected_option_id),
+            "selected_side": (selected_side),
+            "selected_answer": (selected_answer),
+            "is_scored": (self.config.is_scored),
+            "correct_option_id": (self.config.correct_option_id),
+            "correct": correct,
+            "displayed_correct_side": (self.displayed_correct_side),
+            "reaction_time_ms": (reaction_time_ms),
+            "confirmation_dwell_ms": (self._confirmation_dwell_ms),
+            "configured_dwell_ms": (self.config.dwell_time_ms),
+            "selection_method": (self._selection_method),
+            "completion_status": (completion_status),
+            "completion_reason": (reason_text),
+            "randomization_seed": (self.randomization_seed),
+            "left_option_id": (self._option_by_side["left"]),
+            "right_option_id": (self._option_by_side["right"]),
+            "left_answer": (self._answer_for_side("left")),
+            "right_answer": (self._answer_for_side("right")),
+        }
+
+        if not self._final_event_recorded:
+            event_type = "task_completed" if self._result is not None else "task_unanswered"
+            event_timestamp_ns = self._answer_committed_monotonic_ns or monotonic_ns()
+            self._queue_recording_event(
+                event_type,
+                monotonic_timestamp_ns=(event_timestamp_ns),
+                payload=result,
+            )
+            self._final_event_recorded = True
+
+        return result
+
     def start(self) -> None:
         self.reset()
+        self._ensure_question_presented()
 
     def stop(self) -> None:
         return None
@@ -435,6 +620,12 @@ class BinaryQuestionTask(QWidget):
         self._dwell_ms = 0.0
         self._last_timestamp_ns = None
         self._result = None
+        self._recording_events.clear()
+        self._task_started_monotonic_ns = None
+        self._answer_committed_monotonic_ns = None
+        self._confirmation_dwell_ms = None
+        self._selection_method = None
+        self._final_event_recorded = False
 
         self.left_button.setEnabled(True)
         self.right_button.setEnabled(True)
@@ -620,7 +811,12 @@ class BinaryQuestionTask(QWidget):
         self._last_timestamp_ns = timestamp_ns
 
         if not sample.gaze_valid:
-            self.advance_dwell(None, elapsed_ms)
+            self.advance_dwell(
+                None,
+                elapsed_ms,
+                monotonic_timestamp_ns=(timestamp_ns),
+                interruption_reason=("invalid_gaze"),
+            )
             return
 
         gaze_x = max(
@@ -630,16 +826,21 @@ class BinaryQuestionTask(QWidget):
                 float(sample.gaze_x_normalized),
             ),
         )
-
+        side = self._side_for_gaze(gaze_x)
         self.advance_dwell(
-            self._side_for_gaze(gaze_x),
+            side,
             elapsed_ms,
+            monotonic_timestamp_ns=(timestamp_ns),
+            interruption_reason=("neutral_zone" if side is None else "side_changed"),
         )
 
     def advance_dwell(
         self,
         side: str | None,
         elapsed_ms: float,
+        *,
+        monotonic_timestamp_ns: (int | None) = None,
+        interruption_reason: str = ("neutral_or_invalid"),
     ) -> None:
         """Advance dwell state for testing and gaze input."""
 
@@ -656,7 +857,26 @@ class BinaryQuestionTask(QWidget):
         if elapsed_ms < 0:
             raise ValueError("elapsed_ms cannot be negative.")
 
+        event_timestamp_ns = (
+            monotonic_ns() if monotonic_timestamp_ns is None else int(monotonic_timestamp_ns)
+        )
+        self._ensure_question_presented(event_timestamp_ns)
+
         if side is None:
+            if self._active_side is not None:
+                payload = self._event_payload_for_side(self._active_side)
+                payload.update(
+                    {
+                        "accumulated_dwell_ms": (self._dwell_ms),
+                        "reason": (interruption_reason),
+                    }
+                )
+                self._queue_recording_event(
+                    "dwell_cancelled",
+                    monotonic_timestamp_ns=(event_timestamp_ns),
+                    payload=payload,
+                )
+
             self._active_side = None
             self._dwell_ms = 0.0
             self._refresh_progress()
@@ -664,15 +884,43 @@ class BinaryQuestionTask(QWidget):
             return
 
         if side != self._active_side:
+            if self._active_side is not None:
+                previous_payload = self._event_payload_for_side(self._active_side)
+                previous_payload.update(
+                    {
+                        "accumulated_dwell_ms": (self._dwell_ms),
+                        "reason": ("side_changed"),
+                    }
+                )
+                self._queue_recording_event(
+                    "dwell_cancelled",
+                    monotonic_timestamp_ns=(event_timestamp_ns),
+                    payload=(previous_payload),
+                )
+
             self._active_side = side
             self._dwell_ms = 0.0
+            payload = self._event_payload_for_side(side)
+            self._queue_recording_event(
+                "gaze_entered_option",
+                monotonic_timestamp_ns=(event_timestamp_ns),
+                payload=payload,
+            )
+            self._queue_recording_event(
+                "dwell_started",
+                monotonic_timestamp_ns=(event_timestamp_ns),
+                payload=payload,
+            )
 
         self._dwell_ms += elapsed_ms
         self._refresh_progress()
         self._refresh_active_side()
 
         if self._dwell_ms >= self.config.dwell_time_ms:
-            self._commit(side)
+            self._commit(
+                side,
+                monotonic_timestamp_ns=(event_timestamp_ns),
+            )
 
     def _refresh_progress(self) -> None:
         left_value = int(self._dwell_ms) if self._active_side == "left" else 0
@@ -712,20 +960,53 @@ class BinaryQuestionTask(QWidget):
     def _commit(
         self,
         side: str,
+        *,
+        monotonic_timestamp_ns: (int | None) = None,
     ) -> None:
         if self._result is not None:
             return
 
+        event_timestamp_ns = (
+            monotonic_ns() if monotonic_timestamp_ns is None else int(monotonic_timestamp_ns)
+        )
+        self._ensure_question_presented(event_timestamp_ns)
         answer = self._answer_for_side(side)
         self._result = (
             side,
             answer,
         )
+        self._answer_committed_monotonic_ns = event_timestamp_ns
+        self._confirmation_dwell_ms = float(self._dwell_ms)
+        self._selection_method = (
+            "gaze_dwell" if self._dwell_ms >= self.config.dwell_time_ms else "manual_fallback"
+        )
+        payload = self._event_payload_for_side(side)
+        payload.update(
+            {
+                "reaction_time_ms": max(
+                    0.0,
+                    (event_timestamp_ns - (self._task_started_monotonic_ns or event_timestamp_ns))
+                    / 1_000_000.0,
+                ),
+                "confirmation_dwell_ms": (self._confirmation_dwell_ms),
+                "configured_dwell_ms": (self.config.dwell_time_ms),
+                "selection_method": (self._selection_method),
+                "randomization_seed": (self.randomization_seed),
+            }
+        )
+        self._queue_recording_event(
+            "answer_committed",
+            monotonic_timestamp_ns=(event_timestamp_ns),
+            payload=payload,
+        )
 
         self.left_button.setEnabled(False)
         self.right_button.setEnabled(False)
         self.question_label.setText(f"已选择：{answer}")
-        self.answered.emit(side, answer)
+        self.answered.emit(
+            side,
+            answer,
+        )
 
 
 class BinaryQuestionSetupDialog(QDialog):

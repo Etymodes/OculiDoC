@@ -415,6 +415,107 @@ class RecordedTaskRuntime(QObject):
             "reference_aoi": (reference_aoi),
         }
 
+    def _drain_task_events(
+        self,
+        recorder: TaskRunRecorder,
+    ) -> None:
+        provider = getattr(
+            self.task,
+            "drain_recording_events",
+            None,
+        )
+
+        if not callable(provider):
+            return
+
+        raw_events = provider()
+
+        if raw_events is None:
+            return
+
+        if isinstance(
+            raw_events,
+            (str, bytes),
+        ) or not isinstance(
+            raw_events,
+            (list, tuple),
+        ):
+            raise TypeError("Task recording events must be a list or tuple.")
+
+        for raw_event in raw_events:
+            if not isinstance(
+                raw_event,
+                Mapping,
+            ):
+                raise TypeError("Each task recording event must be a mapping.")
+
+            event_type_value = raw_event.get("event_type")
+            event_type = str(event_type_value).strip()
+
+            if not event_type:
+                raise ValueError("Task event_type cannot be empty.")
+
+            timestamp_value = raw_event.get("monotonic_timestamp_ns")
+            timestamp_ns = int(timestamp_value) if timestamp_value is not None else None
+            payload_value = raw_event.get(
+                "payload",
+                {},
+            )
+
+            if not isinstance(
+                payload_value,
+                Mapping,
+            ):
+                raise TypeError("Task event payload must be a mapping.")
+
+            safe_payload = self._json_safe(dict(payload_value))
+
+            if not isinstance(
+                safe_payload,
+                Mapping,
+            ):
+                raise TypeError("Task event payload could not be normalized.")
+
+            recorder.record_event(
+                event_type,
+                monotonic_timestamp_ns=(timestamp_ns),
+                payload=dict(safe_payload),
+            )
+
+    def _task_result_payload(
+        self,
+        reason: str,
+    ) -> dict[str, object]:
+        provider = getattr(
+            self.task,
+            "recording_result",
+            None,
+        )
+
+        if not callable(provider):
+            return {}
+
+        raw_result = provider(reason)
+
+        if raw_result is None:
+            return {}
+
+        if not isinstance(
+            raw_result,
+            Mapping,
+        ):
+            raise TypeError("Task recording result must be a mapping.")
+
+        safe_result = self._json_safe(dict(raw_result))
+
+        if not isinstance(
+            safe_result,
+            Mapping,
+        ):
+            raise TypeError("Task recording result could not be normalized.")
+
+        return dict(safe_result)
+
     def handle_sample(
         self,
         sample: EyeTrackerSample,
@@ -424,9 +525,12 @@ class RecordedTaskRuntime(QObject):
         if self._finished:
             return
 
+        recorder: TaskRunRecorder | None = None
+
         if not self._recording_failed:
             try:
                 recorder = self._ensure_recorder()
+                self._drain_task_events(recorder)
                 context = self._recording_context(
                     sample,
                     recorder,
@@ -435,11 +539,21 @@ class RecordedTaskRuntime(QObject):
                     sample,
                     **context,
                 )
-            except Exception as error:  # noqa: BLE001
+            except Exception as error:
                 self._recording_failed = True
                 self.recording_error.emit(str(error))
 
         self.sample_sink(sample)
+
+        if not self._recording_failed:
+            try:
+                if recorder is None:
+                    recorder = self._ensure_recorder()
+
+                self._drain_task_events(recorder)
+            except Exception as error:
+                self._recording_failed = True
+                self.recording_error.emit(str(error))
 
     def eventFilter(
         self,
@@ -470,20 +584,31 @@ class RecordedTaskRuntime(QObject):
             return
 
         self._finished = True
-
         reason_text = (
             reason.strip() if (isinstance(reason, str) and reason.strip()) else "completed"
         )
 
         try:
             recorder = self._ensure_recorder()
+            task_result: dict[
+                str,
+                object,
+            ] = {}
+
+            try:
+                task_result = self._task_result_payload(reason_text)
+                self._drain_task_events(recorder)
+            except Exception as error:
+                self._recording_failed = True
+                self.recording_error.emit(str(error))
+                task_result = {"task_result_error": (str(error))}
+
+            task_result["recording_failed"] = self._recording_failed
             recorder.finish(
                 reason=reason_text,
-                result={
-                    "recording_failed": (self._recording_failed),
-                },
+                result=task_result,
             )
-        except Exception as error:  # noqa: BLE001
+        except Exception as error:
             self.recording_error.emit(str(error))
             return
 

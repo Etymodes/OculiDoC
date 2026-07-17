@@ -107,6 +107,7 @@ def main() -> int:
         )
     )
 
+    window.finished.connect(recorded_runtime.finish)
     window.finished.connect(lambda reason: app.quit())
     app.aboutToQuit.connect(worker.stop)
 
