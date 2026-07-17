@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 
 from oculidoc.app import create_qt_application
 from oculidoc.config import get_settings
+from oculidoc.experiments.task_runtime import RecordedTaskRuntime
 from oculidoc.tasks.binary_question import (
     BinaryQuestionSetupDialog,
     BinaryQuestionTask,
@@ -89,7 +90,13 @@ def main() -> int:
         settings,
         window,
     )
-    worker.sample_received.connect(task.consume_sample)
+    recorded_runtime = RecordedTaskRuntime(
+        task=task,
+        sample_sink=task.consume_sample,
+        announce=True,
+        parent=task,
+    )
+    worker.sample_received.connect(recorded_runtime.handle_sample)
     worker.stream_error.connect(
         lambda message: QMessageBox.warning(
             window,

@@ -7,11 +7,13 @@ from oculidoc.experiments.recording import (
     ScreenContext,
     TaskRunRecorder,
 )
+from oculidoc.experiments.task_runtime import RecordedTaskRuntime
 
 __all__ = [
     "AoiRole",
     "NormalizedAoi",
     "RecorderState",
+    "RecordedTaskRuntime",
     "ScreenContext",
     "TaskRunRecorder",
 ]
