@@ -9,6 +9,7 @@ from PySide6.QtCore import (
     QElapsedTimer,
     QPointF,
     QRectF,
+    Qt,
     QTimer,
 )
 from PySide6.QtGui import (
@@ -38,6 +39,11 @@ from PySide6.QtWidgets import (
 
 from oculidoc.devices.contracts import (
     EyeTrackerSample,
+)
+from oculidoc.tasks.tracking_dwell import (
+    DwellPhase,
+    DwellSnapshot,
+    TrackingDwellController,
 )
 
 
@@ -72,6 +78,10 @@ class TrackingBallConfig:
     image_path: str | None = None
     period_seconds: float = 6.0
     duration_seconds: int = 60
+    dwell_time_ms: int = 900
+    dwell_feedback_color: str = "#35d07f"
+    dwell_outline_color: str = "#ffffff"
+    dwell_hit_radius_scale: float = 1.15
     background_color: str = "#071521"
     show_gaze_cursor: bool = True
 
@@ -101,6 +111,18 @@ class TrackingBallConfig:
         if not 5 <= self.duration_seconds <= 3_600:
             raise ValueError("duration_seconds must be between 5 and 3600.")
 
+        if not 100 <= self.dwell_time_ms <= 10_000:
+            raise ValueError("dwell_time_ms must be between 100 and 10000.")
+
+        if not QColor(self.dwell_feedback_color).isValid():
+            raise ValueError("dwell_feedback_color must be valid.")
+
+        if not QColor(self.dwell_outline_color).isValid():
+            raise ValueError("dwell_outline_color must be valid.")
+
+        if not 0.5 <= self.dwell_hit_radius_scale <= 2.5:
+            raise ValueError("dwell_hit_radius_scale must be between 0.5 and 2.5.")
+
         if not QColor(self.color).isValid():
             raise ValueError("color must be a valid Qt color.")
 
@@ -122,10 +144,16 @@ class TrackingBallTask(QWidget):
     def __init__(
         self,
         config: TrackingBallConfig,
+        *,
+        allow_mouse_fallback: bool = True,
     ) -> None:
         super().__init__()
         self.config = config
-        self.setMouseTracking(True)
+        self.allow_mouse_fallback = allow_mouse_fallback
+        self.setMouseTracking(allow_mouse_fallback)
+
+        if not allow_mouse_fallback:
+            self.setCursor(Qt.CursorShape.BlankCursor)
         self.setMinimumSize(640, 480)
 
         self._timer = QTimer(self)
@@ -136,6 +164,9 @@ class TrackingBallTask(QWidget):
         self._last_gaze_normalized: tuple[float, float] | None = None
         self._valid_sample_count = 0
         self._invalid_sample_count = 0
+        self._dwell = TrackingDwellController(
+            dwell_time_ms=config.dwell_time_ms,
+        )
 
         self._image = QPixmap()
 
@@ -152,6 +183,7 @@ class TrackingBallTask(QWidget):
         return self._last_gaze_normalized
 
     def start(self) -> None:
+        self._dwell.reset()
         self._elapsed.start()
         self._timer.start()
         self.update()
@@ -166,6 +198,10 @@ class TrackingBallTask(QWidget):
         if not sample.gaze_valid:
             self._invalid_sample_count += 1
             self._last_gaze_normalized = None
+            self._dwell.observe(
+                False,
+                sample.timestamp.monotonic_timestamp_ns,
+            )
             self.update()
             return
 
@@ -189,7 +225,104 @@ class TrackingBallTask(QWidget):
             gaze_x,
             gaze_y,
         )
+        self._update_dwell(
+            gaze_x,
+            gaze_y,
+            sample.timestamp.monotonic_timestamp_ns,
+        )
         self.update()
+
+    @property
+    def dwell_snapshot(self) -> DwellSnapshot:
+        """Return current moving-target dwell state."""
+        return self._dwell.snapshot
+
+    def _update_dwell(
+        self,
+        gaze_x: float,
+        gaze_y: float,
+        timestamp_ns: int,
+    ) -> None:
+        if self.width() <= 0 or self.height() <= 0:
+            self._dwell.observe(
+                False,
+                timestamp_ns,
+            )
+            return
+
+        phase = self._phase()
+        target_x, target_y = self.target_center_normalized(phase)
+        delta_x_px = (gaze_x - target_x) * self.width()
+        delta_y_px = (gaze_y - target_y) * self.height()
+        radius_px = self.config.diameter_px / 2.0 * self.config.dwell_hit_radius_scale
+        inside_target = delta_x_px * delta_x_px + delta_y_px * delta_y_px <= radius_px * radius_px
+
+        self._dwell.observe(
+            inside_target,
+            timestamp_ns,
+        )
+
+    def _paint_dwell_feedback(
+        self,
+        painter: QPainter,
+        *,
+        center: QPointF,
+        diameter: float,
+    ) -> None:
+        snapshot = self._dwell.snapshot
+
+        if snapshot.phase is DwellPhase.OUTSIDE:
+            return
+
+        margin = 14.0
+        target_rect = QRectF(
+            center.x() - diameter / 2.0,
+            center.y() - diameter / 2.0,
+            diameter,
+            diameter,
+        )
+        progress_rect = QRectF(
+            center.x() - diameter / 2.0 - margin,
+            center.y() - diameter / 2.0 - margin,
+            diameter + 2.0 * margin,
+            diameter + 2.0 * margin,
+        )
+
+        painter.save()
+
+        if snapshot.phase is DwellPhase.ACQUIRING:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(
+                QPen(
+                    QColor("#ffd54f"),
+                    7,
+                )
+            )
+            painter.drawEllipse(target_rect)
+            painter.setPen(
+                QPen(
+                    QColor("#fff3a3"),
+                    9,
+                )
+            )
+            painter.drawArc(
+                progress_rect,
+                90 * 16,
+                int(-360 * 16 * snapshot.progress),
+            )
+        else:
+            feedback = QColor(self.config.dwell_feedback_color)
+            feedback.setAlpha(210)
+            painter.setBrush(feedback)
+            painter.setPen(
+                QPen(
+                    QColor(self.config.dwell_outline_color),
+                    11,
+                )
+            )
+            painter.drawEllipse(target_rect)
+
+        painter.restore()
 
     def _phase(self) -> float:
         if not self._elapsed.isValid():
@@ -351,6 +484,12 @@ class TrackingBallTask(QWidget):
 
         painter.restore()
 
+        self._paint_dwell_feedback(
+            painter,
+            center=center,
+            diameter=diameter,
+        )
+
         if self.config.show_gaze_cursor and self._last_gaze_normalized is not None:
             gaze_x, gaze_y = self._last_gaze_normalized
             gaze_point = QPointF(
@@ -401,6 +540,10 @@ class TrackingBallTask(QWidget):
         self,
         event: QMouseEvent,
     ) -> None:
+        if not self.allow_mouse_fallback:
+            event.ignore()
+            return
+
         if self.width() <= 0 or self.height() <= 0:
             return
 
@@ -534,6 +677,19 @@ class TrackingBallSetupDialog(QDialog):
             self.duration_spin,
         )
 
+        self.dwell_time_spin = QSpinBox()
+        self.dwell_time_spin.setRange(
+            100,
+            10_000,
+        )
+        self.dwell_time_spin.setValue(900)
+        self.dwell_time_spin.setSingleStep(100)
+        self.dwell_time_spin.setSuffix(" ms")
+        form.addRow(
+            "注视维持阈值：",
+            self.dwell_time_spin,
+        )
+
         color_row = QHBoxLayout()
         self.color_edit = QLineEdit("#ffcc00")
         color_button = QPushButton("选择颜色")
@@ -598,4 +754,5 @@ class TrackingBallSetupDialog(QDialog):
             image_path=(self.image_edit.text().strip() or None),
             period_seconds=(self.period_spin.value()),
             duration_seconds=self.duration_spin.value(),
+            dwell_time_ms=(self.dwell_time_spin.value()),
         )

@@ -87,9 +87,12 @@ class BinaryQuestionTask(QWidget):
     def __init__(
         self,
         config: BinaryQuestionConfig,
+        *,
+        allow_mouse_fallback: bool = True,
     ) -> None:
         super().__init__()
         self.config = config
+        self.allow_mouse_fallback = allow_mouse_fallback
         self._active_side: str | None = None
         self._dwell_ms = 0.0
         self._last_timestamp_ns: int | None = None
@@ -194,6 +197,19 @@ class BinaryQuestionTask(QWidget):
             1,
         )
         right_layout.addWidget(self.right_progress)
+
+        if not self.allow_mouse_fallback:
+            self.setCursor(Qt.CursorShape.BlankCursor)
+
+            for button in (
+                self.left_button,
+                self.right_button,
+            ):
+                button.setAttribute(
+                    Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+                    True,
+                )
+                button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
         answers = QHBoxLayout()
         answers.setSpacing(6)

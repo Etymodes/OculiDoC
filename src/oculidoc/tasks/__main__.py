@@ -39,6 +39,7 @@ def main() -> int:
 
     app = create_qt_application()
     settings = get_settings()
+    allow_mouse_fallback = settings.gaze_source == "mock"
 
     if args.task == "tracking":
         setup = TrackingBallSetupDialog()
@@ -47,7 +48,10 @@ def main() -> int:
             return 0
 
         config = setup.build_config()
-        task = TrackingBallTask(config)
+        task = TrackingBallTask(
+            config,
+            allow_mouse_fallback=(allow_mouse_fallback),
+        )
         title = "追踪球"
         duration_seconds = config.duration_seconds
     else:
@@ -57,7 +61,10 @@ def main() -> int:
             return 0
 
         config = setup.build_config()
-        task = BinaryQuestionTask(config)
+        task = BinaryQuestionTask(
+            config,
+            allow_mouse_fallback=(allow_mouse_fallback),
+        )
         title = "左右二分问答"
         duration_seconds = config.duration_seconds
 
