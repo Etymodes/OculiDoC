@@ -15,6 +15,9 @@ from oculidoc.devices.errors import (
 from oculidoc.devices.simulated import (
     SimulatedEyeTrackerDevice,
 )
+from oculidoc.devices.tobii_hospital_bridge import (
+    TobiiHospitalBridgeDevice,
+)
 from oculidoc.devices.tobii_legacy_bridge import (
     TobiiLegacyBridgeDevice,
 )
@@ -28,6 +31,15 @@ def create_eye_tracker(
         return SimulatedEyeTrackerDevice(
             sample_rate_hz=60.0,
             realtime=True,
+        )
+
+    if settings.tobii_bridge_mode == "hospital_server":
+        return TobiiHospitalBridgeDevice(
+            host=(settings.tobii_bridge_bind_host),
+            port=settings.tobii_bridge_port,
+            screen_width_px=(settings.tobii_screen_width_px),
+            screen_height_px=(settings.tobii_screen_height_px),
+            helper_executable=(settings.tobii_helper_executable),
         )
 
     return TobiiLegacyBridgeDevice(

@@ -35,12 +35,28 @@ class Settings(BaseSettings):
         "mock",
         "tobii_legacy_bridge",
     ] = "mock"
+    tobii_bridge_mode: Literal[
+        "hospital_server",
+        "client",
+    ] = "hospital_server"
+    tobii_bridge_bind_host: str = "0.0.0.0"
     tobii_bridge_host: str = "127.0.0.1"
     tobii_bridge_port: int = Field(
         default=9999,
         ge=1,
         le=65535,
     )
+    tobii_screen_width_px: int = Field(
+        default=1920,
+        ge=320,
+        le=16_384,
+    )
+    tobii_screen_height_px: int = Field(
+        default=1080,
+        ge=240,
+        le=16_384,
+    )
+    tobii_helper_executable: Path | None = None
 
     @property
     def database_path(self) -> Path:

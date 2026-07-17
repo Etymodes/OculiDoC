@@ -50,6 +50,9 @@ from oculidoc.devices.synchronization import (
     PairedAcquisitionPacket,
     PairedAcquisitionRunner,
 )
+from oculidoc.devices.tobii_hospital_bridge import (
+    TobiiHospitalBridgeDevice,
+)
 from oculidoc.devices.tobii_legacy_bridge import (
     TOBII_BRIDGE_PROTOCOL,
     TobiiLegacyBridgeDevice,
@@ -87,6 +90,7 @@ __all__ = [
     "SystemSnapshot",
     "TOBII_BRIDGE_PROTOCOL",
     "TimestampBasis",
+    "TobiiHospitalBridgeDevice",
     "TobiiLegacyBridgeDevice",
     "build_diagnostic_report",
     "collect_system_snapshot",

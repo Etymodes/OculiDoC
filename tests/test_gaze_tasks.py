@@ -13,6 +13,9 @@ from oculidoc.devices.contracts import (
 from oculidoc.devices.simulated import (
     SimulatedEyeTrackerDevice,
 )
+from oculidoc.devices.tobii_hospital_bridge import (
+    TobiiHospitalBridgeDevice,
+)
 from oculidoc.devices.tobii_legacy_bridge import (
     TobiiLegacyBridgeDevice,
 )
@@ -62,6 +65,7 @@ def test_create_tobii_bridge_eye_tracker() -> None:
     device = create_eye_tracker(
         Settings(
             gaze_source="tobii_legacy_bridge",
+            tobii_bridge_mode="client",
             tobii_bridge_host="127.0.0.1",
             tobii_bridge_port=4567,
         )
@@ -230,3 +234,23 @@ def test_binary_question_uses_question_font(
     assert "48pt" in task.question_label.styleSheet()
     assert task.left_button.minimumHeight() >= 620
     assert task.right_button.minimumHeight() >= 620
+
+
+def test_create_hospital_tobii_bridge() -> None:
+    device = create_eye_tracker(
+        Settings(
+            gaze_source=("tobii_legacy_bridge"),
+            tobii_bridge_mode=("hospital_server"),
+            tobii_bridge_bind_host=("127.0.0.1"),
+            tobii_bridge_port=9999,
+            tobii_screen_width_px=1920,
+            tobii_screen_height_px=1080,
+        )
+    )
+
+    assert isinstance(
+        device,
+        TobiiHospitalBridgeDevice,
+    )
+    assert device.screen_width_px == 1920
+    assert device.screen_height_px == 1080
