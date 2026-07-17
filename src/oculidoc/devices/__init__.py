@@ -50,6 +50,11 @@ from oculidoc.devices.synchronization import (
     PairedAcquisitionPacket,
     PairedAcquisitionRunner,
 )
+from oculidoc.devices.tobii_legacy_bridge import (
+    TOBII_BRIDGE_PROTOCOL,
+    TobiiLegacyBridgeDevice,
+    parse_tobii_bridge_payload,
+)
 
 __all__ = [
     "AcquisitionDevice",
@@ -80,10 +85,13 @@ __all__ = [
     "SimulatedCameraDevice",
     "SimulatedEyeTrackerDevice",
     "SystemSnapshot",
+    "TOBII_BRIDGE_PROTOCOL",
     "TimestampBasis",
+    "TobiiLegacyBridgeDevice",
     "build_diagnostic_report",
     "collect_system_snapshot",
     "probe_camera",
+    "parse_tobii_bridge_payload",
     "probe_cameras",
     "write_diagnostic_report",
 ]

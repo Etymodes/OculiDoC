@@ -1,0 +1,33 @@
+"""Interactive gaze-driven task widgets."""
+
+from oculidoc.tasks.binary_question import (
+    BinaryQuestionConfig,
+    BinaryQuestionSetupDialog,
+    BinaryQuestionTask,
+)
+from oculidoc.tasks.gaze_stream import (
+    GazeStreamWorker,
+    create_eye_tracker,
+)
+from oculidoc.tasks.tracking_ball import (
+    TargetEffect,
+    TargetPath,
+    TargetShape,
+    TrackingBallConfig,
+    TrackingBallSetupDialog,
+    TrackingBallTask,
+)
+
+__all__ = [
+    "BinaryQuestionConfig",
+    "BinaryQuestionSetupDialog",
+    "BinaryQuestionTask",
+    "GazeStreamWorker",
+    "TargetEffect",
+    "TargetPath",
+    "TargetShape",
+    "TrackingBallConfig",
+    "TrackingBallSetupDialog",
+    "TrackingBallTask",
+    "create_eye_tracker",
+]

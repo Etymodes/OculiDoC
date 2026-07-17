@@ -25,6 +25,7 @@ DEFAULT_MODULES: tuple[ModuleDefinition, ...] = (
         "tracking_ball",
         "追踪球",
         "记录注视时长、注视比例和视线—目标轨迹匹配度。",
+        "available",
     ),
     ModuleDefinition(
         "screen_keyboard",
@@ -35,6 +36,7 @@ DEFAULT_MODULES: tuple[ModuleDefinition, ...] = (
         "binary_horizontal",
         "左右二分问答",
         "左右排列两个答案，支持停留确认和评分。",
+        "available",
     ),
     ModuleDefinition(
         "binary_vertical",
