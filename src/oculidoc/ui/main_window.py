@@ -48,6 +48,7 @@ from oculidoc.ui.patient_management import (
     diagnosis_display_name,
 )
 from oculidoc.ui.patient_window import PatientDisplayWindow
+from oculidoc.ui.session_history import PatientSessionHistoryDialog
 from oculidoc.vision.camera_preview_window import (
     CameraPreviewWindow,
 )
@@ -190,11 +191,18 @@ class AdminMainWindow(QMainWindow):
         header.addWidget(emergency_button)
         return header
 
-    def _build_patient_panel(self) -> QFrame:
+    def _build_patient_panel(
+        self,
+    ) -> QFrame:
         panel = QFrame()
         panel.setObjectName("panel")
         layout = QHBoxLayout(panel)
-        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setContentsMargins(
+            20,
+            16,
+            20,
+            16,
+        )
 
         text = QVBoxLayout()
         title = QLabel("当前患者")
@@ -208,14 +216,50 @@ class AdminMainWindow(QMainWindow):
         manage_button.setObjectName("secondaryButton")
         manage_button.clicked.connect(self._show_patient_placeholder)
 
+        self.history_button = QPushButton("实验记录")
+        self.history_button.setObjectName("patientSessionHistoryButton")
+        self.history_button.clicked.connect(self._open_session_history)
+
         display_button = QPushButton("打开患者显示端")
         display_button.setObjectName("primaryButton")
         display_button.clicked.connect(self._open_patient_display)
 
         layout.addLayout(text, 1)
         layout.addWidget(manage_button)
+        layout.addWidget(self.history_button)
         layout.addWidget(display_button)
         return panel
+
+    def _open_session_history(
+        self,
+        checked: bool = False,
+    ) -> None:
+        """Open history for the selected patient."""
+
+        del checked
+
+        if self.current_patient is None:
+            QMessageBox.information(
+                self,
+                "尚未选择患者",
+                "请先选择当前患者，再查看实验记录。",
+            )
+            return
+
+        if self.experiment_session_service is None:
+            QMessageBox.warning(
+                self,
+                "实验会话服务未连接",
+                "无法读取患者实验记录。",
+            )
+            return
+
+        dialog = PatientSessionHistoryDialog(
+            self.experiment_session_service,
+            self.current_patient,
+            self,
+        )
+        dialog.exec()
 
     def _build_module_area(self) -> QScrollArea:
         scroll = QScrollArea()
