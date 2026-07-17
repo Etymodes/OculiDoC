@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from math import cos, pi, sin
 from pathlib import Path
+from time import monotonic_ns
 
 from PySide6.QtCore import (
     QElapsedTimer,
@@ -169,6 +170,7 @@ class TrackingBallTask(QWidget):
             dwell_time_ms=config.dwell_time_ms,
         )
 
+        self._reset_recording_state()
         self._image = QPixmap()
 
         if config.image_path:
@@ -183,8 +185,468 @@ class TrackingBallTask(QWidget):
     ) -> tuple[float, float] | None:
         return self._last_gaze_normalized
 
+    def _reset_recording_state(self) -> None:
+        self._recording_events: list[dict[str, object]] = []
+        self._tracking_started_monotonic_ns: int | None = None
+        self._last_tracking_timestamp_ns: int | None = None
+        self._tracking_sample_count = 0
+        self._tracking_valid_sample_count = 0
+        self._tracking_invalid_sample_count = 0
+        self._tracking_inside_sample_count = 0
+        self._tracking_valid_duration_ms = 0.0
+        self._tracking_inside_duration_ms = 0.0
+        self._tracking_current_run_ms = 0.0
+        self._tracking_longest_run_ms = 0.0
+        self._tracking_first_entry_ms: float | None = None
+        self._tracking_first_acquired_ms: float | None = None
+        self._tracking_loss_count = 0
+        self._tracking_reacquisition_count = 0
+        self._tracking_acquired = False
+        self._tracking_had_acquisition = False
+        self._tracking_previous_valid = False
+        self._tracking_previous_inside = False
+        self._tracking_previous_payload: dict[str, object] | None = None
+        self._tracking_errors_normalized: list[float] = []
+        self._tracking_errors_px: list[float] = []
+        self._tracking_final_event_recorded = False
+
+    def _queue_recording_event(
+        self,
+        event_type: str,
+        *,
+        monotonic_timestamp_ns: int | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> None:
+        timestamp_ns = (
+            monotonic_ns() if monotonic_timestamp_ns is None else int(monotonic_timestamp_ns)
+        )
+
+        if timestamp_ns < 0:
+            raise ValueError("monotonic_timestamp_ns cannot be negative.")
+
+        self._recording_events.append(
+            {
+                "event_type": event_type,
+                "monotonic_timestamp_ns": timestamp_ns,
+                "payload": dict(payload or {}),
+            }
+        )
+
+    def _tracking_configuration_payload(
+        self,
+    ) -> dict[str, object]:
+        return {
+            "task_kind": "tracking_ball",
+            "path": self.config.path.value,
+            "shape": self.config.shape.value,
+            "effect": self.config.effect.value,
+            "diameter_px": self.config.diameter_px,
+            "period_seconds": self.config.period_seconds,
+            "configured_dwell_ms": (self.config.dwell_time_ms),
+            "dwell_hit_radius_scale": (self.config.dwell_hit_radius_scale),
+        }
+
+    def _ensure_tracking_started(
+        self,
+        monotonic_timestamp_ns: int | None = None,
+    ) -> int:
+        timestamp_ns = (
+            monotonic_ns() if monotonic_timestamp_ns is None else int(monotonic_timestamp_ns)
+        )
+
+        if timestamp_ns < 0:
+            raise ValueError("monotonic_timestamp_ns cannot be negative.")
+
+        if self._tracking_started_monotonic_ns is None:
+            self._tracking_started_monotonic_ns = timestamp_ns
+            self._queue_recording_event(
+                "tracking_started",
+                monotonic_timestamp_ns=timestamp_ns,
+                payload=(self._tracking_configuration_payload()),
+            )
+        elif (
+            self._tracking_sample_count == 0 and timestamp_ns < self._tracking_started_monotonic_ns
+        ):
+            self._tracking_started_monotonic_ns = timestamp_ns
+
+            for event in reversed(self._recording_events):
+                if event.get("event_type") == "tracking_started":
+                    event["monotonic_timestamp_ns"] = timestamp_ns
+                    break
+
+        return self._tracking_started_monotonic_ns
+
+    def drain_recording_events(
+        self,
+    ) -> tuple[
+        dict[str, object],
+        ...,
+    ]:
+        """Return and clear pending tracking events."""
+
+        events = tuple(self._recording_events)
+        self._recording_events.clear()
+        return events
+
+    @staticmethod
+    def _percentile(
+        values: list[float],
+        percentile: float,
+    ) -> float | None:
+        if not values:
+            return None
+
+        ordered = sorted(values)
+        rank = (len(ordered) - 1) * percentile / 100.0
+        lower_index = int(rank)
+        upper_index = min(
+            len(ordered) - 1,
+            lower_index + 1,
+        )
+        fraction = rank - lower_index
+
+        return ordered[lower_index] + (ordered[upper_index] - ordered[lower_index]) * fraction
+
+    def _tracking_measurement(
+        self,
+        gaze_x: float,
+        gaze_y: float,
+    ) -> tuple[
+        bool,
+        float,
+        float,
+        dict[str, object],
+    ]:
+        width = max(
+            1.0,
+            float(self.width()),
+        )
+        height = max(
+            1.0,
+            float(self.height()),
+        )
+        phase = self._phase()
+        target_x, target_y = self.target_center_normalized(phase)
+        delta_x = gaze_x - target_x
+        delta_y = gaze_y - target_y
+        error_normalized = (delta_x * delta_x + delta_y * delta_y) ** 0.5
+        delta_x_px = delta_x * width
+        delta_y_px = delta_y * height
+        error_px = (delta_x_px * delta_x_px + delta_y_px * delta_y_px) ** 0.5
+        radius_px = self.config.diameter_px / 2.0 * self.config.dwell_hit_radius_scale
+        inside_target = error_px <= radius_px
+        payload = {
+            "gaze_x_normalized": gaze_x,
+            "gaze_y_normalized": gaze_y,
+            "target_center_x_normalized": (target_x),
+            "target_center_y_normalized": (target_y),
+            "tracking_error_normalized": (error_normalized),
+            "tracking_error_px": error_px,
+            "inside_target": inside_target,
+            "hit_radius_px": radius_px,
+            "motion_phase_radians": phase,
+            "path": self.config.path.value,
+        }
+
+        return (
+            inside_target,
+            error_normalized,
+            error_px,
+            payload,
+        )
+
+    def _acquire_tracking(
+        self,
+        *,
+        timestamp_ns: int,
+        payload: dict[str, object],
+    ) -> None:
+        if self._tracking_acquired:
+            return
+
+        event_payload = dict(payload)
+        event_payload.update(
+            {
+                "continuous_inside_ms": (self._tracking_current_run_ms),
+                "configured_dwell_ms": (self.config.dwell_time_ms),
+            }
+        )
+
+        if self._tracking_had_acquisition:
+            event_type = "tracking_resumed"
+            self._tracking_reacquisition_count += 1
+        else:
+            event_type = "target_acquired"
+            started_ns = self._tracking_started_monotonic_ns or timestamp_ns
+            self._tracking_first_acquired_ms = max(
+                0.0,
+                (timestamp_ns - started_ns) / 1_000_000.0,
+            )
+
+        self._tracking_acquired = True
+        self._tracking_had_acquisition = True
+        self._queue_recording_event(
+            event_type,
+            monotonic_timestamp_ns=timestamp_ns,
+            payload=event_payload,
+        )
+
+    def _advance_previous_interval(
+        self,
+        *,
+        timestamp_ns: int,
+        delta_ms: float,
+    ) -> None:
+        if self._tracking_previous_valid:
+            self._tracking_valid_duration_ms += delta_ms
+
+        if not self._tracking_previous_inside:
+            return
+
+        self._tracking_inside_duration_ms += delta_ms
+        self._tracking_current_run_ms += delta_ms
+        self._tracking_longest_run_ms = max(
+            self._tracking_longest_run_ms,
+            self._tracking_current_run_ms,
+        )
+
+        if (
+            not self._tracking_acquired
+            and self._tracking_current_run_ms >= self.config.dwell_time_ms
+        ):
+            self._acquire_tracking(
+                timestamp_ns=timestamp_ns,
+                payload=dict(self._tracking_previous_payload or {}),
+            )
+
+    def _leave_target(
+        self,
+        *,
+        timestamp_ns: int,
+        reason: str,
+        payload: dict[str, object],
+    ) -> None:
+        if self._tracking_acquired:
+            event_payload = dict(payload)
+            event_payload.update(
+                {
+                    "reason": reason,
+                    "continuous_inside_ms": (self._tracking_current_run_ms),
+                }
+            )
+            self._queue_recording_event(
+                "target_lost",
+                monotonic_timestamp_ns=(timestamp_ns),
+                payload=event_payload,
+            )
+            self._tracking_loss_count += 1
+
+        self._tracking_longest_run_ms = max(
+            self._tracking_longest_run_ms,
+            self._tracking_current_run_ms,
+        )
+        self._tracking_current_run_ms = 0.0
+        self._tracking_acquired = False
+
+    def _observe_tracking_sample(
+        self,
+        sample: EyeTrackerSample,
+    ) -> bool | None:
+        timestamp_ns = sample.timestamp.monotonic_timestamp_ns
+        self._ensure_tracking_started(timestamp_ns)
+
+        if (
+            self._last_tracking_timestamp_ns is None
+            or timestamp_ns <= self._last_tracking_timestamp_ns
+        ):
+            delta_ms = 0.0
+        else:
+            delta_ms = min(
+                250.0,
+                (timestamp_ns - self._last_tracking_timestamp_ns) / 1_000_000.0,
+            )
+
+        self._advance_previous_interval(
+            timestamp_ns=timestamp_ns,
+            delta_ms=delta_ms,
+        )
+        self._tracking_sample_count += 1
+        gaze_x_value = sample.gaze_x_normalized
+        gaze_y_value = sample.gaze_y_normalized
+        valid = bool(sample.gaze_valid and gaze_x_value is not None and gaze_y_value is not None)
+
+        if not valid:
+            self._tracking_invalid_sample_count += 1
+
+            if self._tracking_previous_inside:
+                self._leave_target(
+                    timestamp_ns=timestamp_ns,
+                    reason="invalid_gaze",
+                    payload=dict(self._tracking_previous_payload or {}),
+                )
+
+            self._tracking_previous_valid = False
+            self._tracking_previous_inside = False
+            self._tracking_previous_payload = None
+            self._last_tracking_timestamp_ns = timestamp_ns
+            return None
+
+        gaze_x = max(
+            0.0,
+            min(
+                1.0,
+                float(gaze_x_value),
+            ),
+        )
+        gaze_y = max(
+            0.0,
+            min(
+                1.0,
+                float(gaze_y_value),
+            ),
+        )
+        (
+            inside_target,
+            error_normalized,
+            error_px,
+            payload,
+        ) = self._tracking_measurement(
+            gaze_x,
+            gaze_y,
+        )
+        self._tracking_valid_sample_count += 1
+        self._tracking_errors_normalized.append(error_normalized)
+        self._tracking_errors_px.append(error_px)
+
+        if inside_target:
+            self._tracking_inside_sample_count += 1
+
+            if not self._tracking_previous_inside:
+                started_ns = self._tracking_started_monotonic_ns or timestamp_ns
+
+                if self._tracking_first_entry_ms is None:
+                    self._tracking_first_entry_ms = max(
+                        0.0,
+                        (timestamp_ns - started_ns) / 1_000_000.0,
+                    )
+
+                self._tracking_current_run_ms = 0.0
+                self._queue_recording_event(
+                    "target_entered",
+                    monotonic_timestamp_ns=(timestamp_ns),
+                    payload=payload,
+                )
+        elif self._tracking_previous_inside:
+            self._leave_target(
+                timestamp_ns=timestamp_ns,
+                reason="outside_target",
+                payload=payload,
+            )
+
+        self._tracking_previous_valid = True
+        self._tracking_previous_inside = inside_target
+        self._tracking_previous_payload = payload
+        self._last_tracking_timestamp_ns = timestamp_ns
+        return inside_target
+
+    def recording_result(
+        self,
+        reason: str,
+    ) -> dict[str, object]:
+        """Return tracking outcome metrics."""
+
+        reason_text = reason.strip() if reason.strip() else "completed"
+        final_timestamp_ns = self._last_tracking_timestamp_ns or monotonic_ns()
+        started_ns = self._ensure_tracking_started(final_timestamp_ns)
+        self._tracking_longest_run_ms = max(
+            self._tracking_longest_run_ms,
+            self._tracking_current_run_ms,
+        )
+        completed_reasons = {
+            "completed",
+            "test_complete",
+            "timeout",
+            "tracking_completed",
+        }
+        completion_status = "completed" if reason_text in completed_reasons else "interrupted"
+        sample_count = self._tracking_sample_count
+        valid_count = self._tracking_valid_sample_count
+        inside_count = self._tracking_inside_sample_count
+        error_count = len(self._tracking_errors_normalized)
+        mean_error_normalized = (
+            sum(self._tracking_errors_normalized) / error_count if error_count else None
+        )
+        mean_error_px = sum(self._tracking_errors_px) / error_count if error_count else None
+        result = {
+            **self._tracking_configuration_payload(),
+            "completion_status": completion_status,
+            "completion_reason": reason_text,
+            "sample_count": sample_count,
+            "valid_sample_count": valid_count,
+            "invalid_sample_count": (self._tracking_invalid_sample_count),
+            "valid_sample_ratio": (valid_count / sample_count if sample_count else 0.0),
+            "target_inside_sample_count": (inside_count),
+            "target_hit_ratio": (inside_count / valid_count if valid_count else 0.0),
+            "valid_tracking_duration_ms": (self._tracking_valid_duration_ms),
+            "target_inside_duration_ms": (self._tracking_inside_duration_ms),
+            "target_hit_duration_ratio": (
+                self._tracking_inside_duration_ms / self._tracking_valid_duration_ms
+                if self._tracking_valid_duration_ms > 0
+                else 0.0
+            ),
+            "recording_duration_ms": max(
+                0.0,
+                (final_timestamp_ns - started_ns) / 1_000_000.0,
+            ),
+            "first_target_entry_ms": (self._tracking_first_entry_ms),
+            "first_target_acquired_ms": (self._tracking_first_acquired_ms),
+            "longest_continuous_tracking_ms": (self._tracking_longest_run_ms),
+            "target_loss_count": (self._tracking_loss_count),
+            "target_reacquisition_count": (self._tracking_reacquisition_count),
+            "target_acquired_at_finish": (self._tracking_acquired),
+            "tracking_error_normalized": {
+                "sample_count": error_count,
+                "mean": mean_error_normalized,
+                "median": self._percentile(
+                    self._tracking_errors_normalized,
+                    50.0,
+                ),
+                "p95": self._percentile(
+                    self._tracking_errors_normalized,
+                    95.0,
+                ),
+            },
+            "tracking_error_px": {
+                "sample_count": error_count,
+                "mean": mean_error_px,
+                "median": self._percentile(
+                    self._tracking_errors_px,
+                    50.0,
+                ),
+                "p95": self._percentile(
+                    self._tracking_errors_px,
+                    95.0,
+                ),
+            },
+        }
+
+        if not self._tracking_final_event_recorded:
+            event_type = (
+                "tracking_completed" if completion_status == "completed" else "tracking_interrupted"
+            )
+            self._queue_recording_event(
+                event_type,
+                monotonic_timestamp_ns=(final_timestamp_ns),
+                payload=result,
+            )
+            self._tracking_final_event_recorded = True
+
+        return result
+
     def start(self) -> None:
         self._dwell.reset()
+        self._reset_recording_state()
+        self._ensure_tracking_started(monotonic_ns())
         self._elapsed.start()
         self._timer.start()
         self.update()
@@ -196,7 +658,9 @@ class TrackingBallTask(QWidget):
         self,
         sample: EyeTrackerSample,
     ) -> None:
-        if not sample.gaze_valid:
+        inside_target = self._observe_tracking_sample(sample)
+
+        if inside_target is None:
             self._invalid_sample_count += 1
             self._last_gaze_normalized = None
             self._dwell.observe(
@@ -226,9 +690,8 @@ class TrackingBallTask(QWidget):
             gaze_x,
             gaze_y,
         )
-        self._update_dwell(
-            gaze_x,
-            gaze_y,
+        self._dwell.observe(
+            inside_target,
             sample.timestamp.monotonic_timestamp_ns,
         )
         self.update()
