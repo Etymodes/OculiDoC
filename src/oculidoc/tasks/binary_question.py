@@ -28,7 +28,8 @@ class BinaryQuestionConfig:
     left_answer: str
     right_answer: str
     dwell_time_ms: int = 1_200
-    neutral_zone_width: float = 0.12
+    duration_seconds: int = 30
+    neutral_zone_width: float = 0.08
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -52,6 +53,9 @@ class BinaryQuestionConfig:
 
         if not 250 <= self.dwell_time_ms <= 10_000:
             raise ValueError("dwell_time_ms must be between 250 and 10000.")
+
+        if not 5 <= self.duration_seconds <= 600:
+            raise ValueError("duration_seconds must be between 5 and 600.")
 
         if not 0.0 <= self.neutral_zone_width <= 0.6:
             raise ValueError("neutral_zone_width must be between 0 and 0.6.")
@@ -87,12 +91,12 @@ class BinaryQuestionTask(QWidget):
                 padding: 24px;
             }
             QPushButton#answerButton {
-                min-height: 260px;
-                border: 5px solid #d9e7f2;
+                min-height: 460px;
+                border: 8px solid #d9e7f2;
                 border-radius: 24px;
                 background: #173957;
                 color: white;
-                font-size: 48px;
+                font-size: 72px;
                 font-weight: 800;
                 padding: 20px;
             }
@@ -118,6 +122,7 @@ class BinaryQuestionTask(QWidget):
         self.question_label.setObjectName("questionLabel")
         self.question_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.question_label.setWordWrap(True)
+        self.question_label.setMaximumHeight(170)
 
         self.left_button = QPushButton(config.left_answer)
         self.right_button = QPushButton(config.right_answer)
@@ -128,6 +133,7 @@ class BinaryQuestionTask(QWidget):
         ):
             button.setObjectName("answerButton")
             button.setProperty("active", False)
+            button.setMinimumHeight(460)
 
         self.left_button.clicked.connect(lambda: self._commit("left"))
         self.right_button.clicked.connect(lambda: self._commit("right"))
@@ -160,13 +166,13 @@ class BinaryQuestionTask(QWidget):
         right_layout.addWidget(self.right_progress)
 
         answers = QHBoxLayout()
-        answers.setSpacing(34)
+        answers.setSpacing(14)
         answers.addLayout(left_layout, 1)
         answers.addLayout(right_layout, 1)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(42, 38, 42, 42)
-        root.setSpacing(30)
+        root.setContentsMargins(14, 10, 14, 14)
+        root.setSpacing(12)
         root.addWidget(self.question_label)
         root.addLayout(answers, 1)
 
@@ -381,6 +387,18 @@ class BinaryQuestionSetupDialog(QDialog):
             self.dwell_spin,
         )
 
+        self.duration_spin = QSpinBox()
+        self.duration_spin.setRange(
+            5,
+            600,
+        )
+        self.duration_spin.setValue(30)
+        self.duration_spin.setSuffix(" 秒")
+        form.addRow(
+            "任务时长：",
+            self.duration_spin,
+        )
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -398,4 +416,5 @@ class BinaryQuestionSetupDialog(QDialog):
             left_answer=self.left_edit.text(),
             right_answer=self.right_edit.text(),
             dwell_time_ms=self.dwell_spin.value(),
+            duration_seconds=self.duration_spin.value(),
         )

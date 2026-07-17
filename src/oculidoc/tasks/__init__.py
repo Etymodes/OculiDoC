@@ -9,6 +9,9 @@ from oculidoc.tasks.gaze_stream import (
     GazeStreamWorker,
     create_eye_tracker,
 )
+from oculidoc.tasks.task_window import (
+    TimedTaskWindow,
+)
 from oculidoc.tasks.tracking_ball import (
     TargetEffect,
     TargetPath,
@@ -24,6 +27,7 @@ __all__ = [
     "BinaryQuestionTask",
     "GazeStreamWorker",
     "TargetEffect",
+    "TimedTaskWindow",
     "TargetPath",
     "TargetShape",
     "TrackingBallConfig",

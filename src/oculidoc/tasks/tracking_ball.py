@@ -70,6 +70,7 @@ class TrackingBallConfig:
     color: str = "#ffcc00"
     image_path: str | None = None
     period_seconds: float = 6.0
+    duration_seconds: int = 60
     background_color: str = "#071521"
     show_gaze_cursor: bool = True
 
@@ -95,6 +96,9 @@ class TrackingBallConfig:
 
         if not 1.0 <= self.period_seconds <= 120.0:
             raise ValueError("period_seconds must be between 1 and 120.")
+
+        if not 5 <= self.duration_seconds <= 3_600:
+            raise ValueError("duration_seconds must be between 5 and 3600.")
 
         if not QColor(self.color).isValid():
             raise ValueError("color must be a valid Qt color.")
@@ -507,6 +511,18 @@ class TrackingBallSetupDialog(QDialog):
             self.period_spin,
         )
 
+        self.duration_spin = QSpinBox()
+        self.duration_spin.setRange(
+            5,
+            3_600,
+        )
+        self.duration_spin.setValue(60)
+        self.duration_spin.setSuffix(" 秒")
+        form.addRow(
+            "任务时长：",
+            self.duration_spin,
+        )
+
         color_row = QHBoxLayout()
         self.color_edit = QLineEdit("#ffcc00")
         color_button = QPushButton("选择颜色")
@@ -570,4 +586,5 @@ class TrackingBallSetupDialog(QDialog):
             color=self.color_edit.text(),
             image_path=(self.image_edit.text().strip() or None),
             period_seconds=(self.period_spin.value()),
+            duration_seconds=self.duration_spin.value(),
         )

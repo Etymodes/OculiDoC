@@ -17,6 +17,9 @@ from oculidoc.tasks.binary_question import (
 from oculidoc.tasks.gaze_stream import (
     GazeStreamWorker,
 )
+from oculidoc.tasks.task_window import (
+    TimedTaskWindow,
+)
 from oculidoc.tasks.tracking_ball import (
     TrackingBallSetupDialog,
     TrackingBallTask,
@@ -43,34 +46,56 @@ def main() -> int:
         if setup.exec() != QDialog.DialogCode.Accepted:
             return 0
 
-        task = TrackingBallTask(setup.build_config())
+        config = setup.build_config()
+        task = TrackingBallTask(config)
+        title = "追踪球"
+        duration_seconds = config.duration_seconds
     else:
         setup = BinaryQuestionSetupDialog()
 
         if setup.exec() != QDialog.DialogCode.Accepted:
             return 0
 
-        task = BinaryQuestionTask(setup.build_config())
+        config = setup.build_config()
+        task = BinaryQuestionTask(config)
+        title = "左右二分问答"
+        duration_seconds = config.duration_seconds
+
+    window = TimedTaskWindow(
+        task,
+        duration_seconds=duration_seconds,
+        title=title,
+    )
+
+    if isinstance(
+        task,
+        BinaryQuestionTask,
+    ):
         task.answered.connect(
             lambda side, answer: QTimer.singleShot(
-                1_200,
-                app.quit,
+                700,
+                lambda: window.finish("answered"),
             )
         )
 
-    worker = GazeStreamWorker(settings)
+    worker = GazeStreamWorker(
+        settings,
+        window,
+    )
     worker.sample_received.connect(task.consume_sample)
     worker.stream_error.connect(
         lambda message: QMessageBox.warning(
-            task,
+            window,
             "眼动源连接失败",
-            message + "\n\n当前仍可使用鼠标进行界面测试。",
+            message + "\n\n当前仍可使用鼠标测试。",
         )
     )
+
+    window.finished.connect(lambda reason: app.quit())
     app.aboutToQuit.connect(worker.stop)
 
-    task.showFullScreen()
-    task.start()
+    window.showFullScreen()
+    window.start()
     worker.start()
 
     return app.exec()
