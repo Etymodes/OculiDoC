@@ -67,6 +67,9 @@ class RecordedTaskRuntime(QObject):
         self.announce = announce
 
         if session_directory is None:
+            session_directory = os.getenv("OCULIDOC_SESSION_DIRECTORY")
+
+        if session_directory is None:
             base_directory = Path(
                 session_root
                 or os.getenv("OCULIDOC_EXPERIMENT_ROOT")
