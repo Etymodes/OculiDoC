@@ -21,6 +21,9 @@ from oculidoc.devices.tobii_hospital_bridge import (
 from oculidoc.devices.tobii_legacy_bridge import (
     TobiiLegacyBridgeDevice,
 )
+from oculidoc.devices.tobii_stream_engine import (
+    TobiiStreamEngineDevice,
+)
 
 
 def create_eye_tracker(
@@ -32,6 +35,9 @@ def create_eye_tracker(
             sample_rate_hz=60.0,
             realtime=True,
         )
+
+    if settings.gaze_source == "tobii_stream_engine":
+        return TobiiStreamEngineDevice(library_path=(settings.tobii_stream_engine_dll))
 
     if settings.tobii_bridge_mode == "hospital_server":
         return TobiiHospitalBridgeDevice(

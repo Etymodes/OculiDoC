@@ -58,6 +58,10 @@ from oculidoc.devices.tobii_legacy_bridge import (
     TobiiLegacyBridgeDevice,
     parse_tobii_bridge_payload,
 )
+from oculidoc.devices.tobii_stream_engine import (
+    TobiiStreamEngineDevice,
+    discover_tobii_stream_engine_dll,
+)
 
 __all__ = [
     "AcquisitionDevice",
@@ -91,11 +95,13 @@ __all__ = [
     "TOBII_BRIDGE_PROTOCOL",
     "TimestampBasis",
     "TobiiHospitalBridgeDevice",
+    "TobiiStreamEngineDevice",
     "TobiiLegacyBridgeDevice",
     "build_diagnostic_report",
     "collect_system_snapshot",
     "probe_camera",
     "parse_tobii_bridge_payload",
     "probe_cameras",
+    "discover_tobii_stream_engine_dll",
     "write_diagnostic_report",
 ]

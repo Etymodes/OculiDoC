@@ -33,8 +33,10 @@ class Settings(BaseSettings):
 
     gaze_source: Literal[
         "mock",
+        "tobii_stream_engine",
         "tobii_legacy_bridge",
     ] = "mock"
+    tobii_stream_engine_dll: Path | None = None
     tobii_bridge_mode: Literal[
         "hospital_server",
         "client",
