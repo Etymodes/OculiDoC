@@ -184,3 +184,49 @@ def test_binary_question_resets_in_neutral_zone(
 
     assert task.result is None
     assert task.right_progress.value() == 500
+
+
+def test_random_tracking_path_is_smooth(
+    qtbot: QtBot,
+) -> None:
+    task = TrackingBallTask(TrackingBallConfig(path=TargetPath.RANDOM))
+    qtbot.addWidget(task)
+
+    previous = None
+
+    for index in range(120):
+        phase = index * 0.04
+        x, y = task.target_center_normalized(phase)
+
+        assert 0.0 <= x <= 1.0
+        assert 0.0 <= y <= 1.0
+
+        if previous is not None:
+            previous_x, previous_y = previous
+
+            assert abs(x - previous_x) < 0.08
+            assert abs(y - previous_y) < 0.08
+
+        previous = (x, y)
+
+
+def test_binary_question_uses_question_font(
+    qtbot: QtBot,
+) -> None:
+    task = BinaryQuestionTask(
+        BinaryQuestionConfig(
+            question="请看左边还是右边？",
+            left_answer="左边",
+            right_answer="右边",
+            question_font_family="Arial",
+            question_font_size_pt=48,
+        )
+    )
+    qtbot.addWidget(task)
+
+    assert task.config.question_font_family == "Arial"
+    assert task.config.question_font_size_pt == 48
+    assert "Arial" in task.question_label.styleSheet()
+    assert "48pt" in task.question_label.styleSheet()
+    assert task.left_button.minimumHeight() >= 620
+    assert task.right_button.minimumHeight() >= 620

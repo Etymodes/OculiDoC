@@ -59,6 +59,7 @@ class TargetPath(StrEnum):
     VERTICAL = "vertical"
     CIRCLE = "circle"
     FIGURE_EIGHT = "figure_eight"
+    RANDOM = "random"
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,6 +219,12 @@ class TrackingBallTask(QWidget):
             return (
                 0.5 + 0.32 * cos(phase),
                 0.5 + 0.32 * sin(phase),
+            )
+
+        if self.config.path is TargetPath.RANDOM:
+            return (
+                0.5 + 0.33 * sin(phase * 1.37 + 0.86 * sin(phase * 0.41)),
+                0.5 + 0.31 * cos(phase * 1.73 + 0.79 * cos(phase * 0.53)),
             )
 
         return (
@@ -468,6 +475,10 @@ class TrackingBallSetupDialog(QDialog):
         self.path_combo.addItem(
             "8 字轨迹",
             TargetPath.FIGURE_EIGHT,
+        )
+        self.path_combo.addItem(
+            "平滑随机运动",
+            TargetPath.RANDOM,
         )
         form.addRow(
             "运动轨迹：",

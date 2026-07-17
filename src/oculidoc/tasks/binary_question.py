@@ -3,9 +3,11 @@
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QFontComboBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -29,6 +31,8 @@ class BinaryQuestionConfig:
     right_answer: str
     dwell_time_ms: int = 1_200
     duration_seconds: int = 30
+    question_font_family: str = "Microsoft YaHei UI"
+    question_font_size_pt: int = 32
     neutral_zone_width: float = 0.08
 
     def __post_init__(self) -> None:
@@ -56,6 +60,20 @@ class BinaryQuestionConfig:
 
         if not 5 <= self.duration_seconds <= 600:
             raise ValueError("duration_seconds must be between 5 and 600.")
+
+        normalized_font_family = self.question_font_family.strip()
+
+        if not normalized_font_family:
+            raise ValueError("question_font_family cannot be empty.")
+
+        object.__setattr__(
+            self,
+            "question_font_family",
+            normalized_font_family,
+        )
+
+        if not 12 <= self.question_font_size_pt <= 96:
+            raise ValueError("question_font_size_pt must be between 12 and 96.")
 
         if not 0.0 <= self.neutral_zone_width <= 0.6:
             raise ValueError("neutral_zone_width must be between 0 and 0.6.")
@@ -91,7 +109,7 @@ class BinaryQuestionTask(QWidget):
                 padding: 24px;
             }
             QPushButton#answerButton {
-                min-height: 460px;
+                min-height: 620px;
                 border: 8px solid #d9e7f2;
                 border-radius: 24px;
                 background: #173957;
@@ -122,7 +140,19 @@ class BinaryQuestionTask(QWidget):
         self.question_label.setObjectName("questionLabel")
         self.question_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.question_label.setWordWrap(True)
-        self.question_label.setMaximumHeight(170)
+        self.question_label.setMaximumHeight(150)
+
+        question_font = QFont(config.question_font_family)
+        question_font.setPointSize(config.question_font_size_pt)
+        question_font.setBold(True)
+        self.question_label.setFont(question_font)
+        self.question_label.setStyleSheet(
+            "font-family: "
+            f'"{config.question_font_family}"; '
+            "font-size: "
+            f"{config.question_font_size_pt}pt; "
+            "font-weight: 700;"
+        )
 
         self.left_button = QPushButton(config.left_answer)
         self.right_button = QPushButton(config.right_answer)
@@ -133,7 +163,7 @@ class BinaryQuestionTask(QWidget):
         ):
             button.setObjectName("answerButton")
             button.setProperty("active", False)
-            button.setMinimumHeight(460)
+            button.setMinimumHeight(620)
 
         self.left_button.clicked.connect(lambda: self._commit("left"))
         self.right_button.clicked.connect(lambda: self._commit("right"))
@@ -166,13 +196,13 @@ class BinaryQuestionTask(QWidget):
         right_layout.addWidget(self.right_progress)
 
         answers = QHBoxLayout()
-        answers.setSpacing(14)
+        answers.setSpacing(6)
         answers.addLayout(left_layout, 1)
         answers.addLayout(right_layout, 1)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(14, 10, 14, 14)
-        root.setSpacing(12)
+        root.setContentsMargins(6, 4, 6, 6)
+        root.setSpacing(6)
         root.addWidget(self.question_label)
         root.addLayout(answers, 1)
 
@@ -366,6 +396,17 @@ class BinaryQuestionSetupDialog(QDialog):
             250,
             10_000,
         )
+
+        self.question_font_combo = QFontComboBox()
+        self.question_font_combo.setCurrentFont(QFont("Microsoft YaHei UI"))
+
+        self.question_font_size_spin = QSpinBox()
+        self.question_font_size_spin.setRange(
+            12,
+            96,
+        )
+        self.question_font_size_spin.setValue(32)
+        self.question_font_size_spin.setSuffix(" pt")
         self.dwell_spin.setValue(1_200)
         self.dwell_spin.setSingleStep(100)
         self.dwell_spin.setSuffix(" ms")
@@ -373,6 +414,14 @@ class BinaryQuestionSetupDialog(QDialog):
         form.addRow(
             "问题：",
             self.question_edit,
+        )
+        form.addRow(
+            "问题字体：",
+            self.question_font_combo,
+        )
+        form.addRow(
+            "问题字号：",
+            self.question_font_size_spin,
         )
         form.addRow(
             "左侧答案：",
@@ -417,4 +466,6 @@ class BinaryQuestionSetupDialog(QDialog):
             right_answer=self.right_edit.text(),
             dwell_time_ms=self.dwell_spin.value(),
             duration_seconds=self.duration_spin.value(),
+            question_font_family=(self.question_font_combo.currentFont().family()),
+            question_font_size_pt=(self.question_font_size_spin.value()),
         )
