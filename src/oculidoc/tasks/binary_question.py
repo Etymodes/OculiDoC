@@ -1,6 +1,12 @@
-"""Horizontal binary gaze-question task."""
+"""Horizontal two-option gaze-question task."""
 
+from __future__ import annotations
+
+import json
+import random
+import secrets
 from dataclasses import dataclass
+from pathlib import Path
 
 from PySide6.QtCore import (
     QPoint,
@@ -17,6 +23,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QSpinBox,
@@ -27,73 +34,198 @@ from PySide6.QtWidgets import (
 from oculidoc.devices.contracts import (
     EyeTrackerSample,
 )
+from oculidoc.tasks.question_bank import (
+    BinaryQuestionType,
+    CommonQuestionStore,
+    CommonQuestionTemplate,
+)
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(
+    frozen=True,
+    slots=True,
+    init=False,
+)
 class BinaryQuestionConfig:
+    """Logical options independent of their displayed sides."""
+
     question: str
-    left_answer: str
-    right_answer: str
-    correct_side: str | None = None
-    dwell_time_ms: int = 1_200
-    duration_seconds: int = 30
-    question_font_family: str = "Microsoft YaHei UI"
-    question_font_size_pt: int = 32
-    neutral_zone_width: float = 0.08
+    option_1: str
+    option_2: str
+    question_type: BinaryQuestionType
+    correct_option_id: str | None
+    dwell_time_ms: int
+    duration_seconds: int
+    question_font_family: str
+    question_font_size_pt: int
+    option_font_size_pt: int
+    neutral_zone_width: float
+    randomize_sides: bool
+    randomization_seed: int | None
 
-    def __post_init__(self) -> None:
-        for field_name in (
-            "question",
-            "left_answer",
-            "right_answer",
+    def __init__(
+        self,
+        question: str,
+        option_1: str | None = None,
+        option_2: str | None = None,
+        *,
+        question_type: BinaryQuestionType | str = BinaryQuestionType.INQUIRY,
+        correct_option_id: str | None = None,
+        dwell_time_ms: int = 1_200,
+        duration_seconds: int = 30,
+        question_font_family: str = "Microsoft YaHei UI",
+        question_font_size_pt: int = 48,
+        option_font_size_pt: int = 44,
+        neutral_zone_width: float = 0.08,
+        randomize_sides: bool = True,
+        randomization_seed: int | None = None,
+        left_answer: str | None = None,
+        right_answer: str | None = None,
+        correct_side: str | None = None,
+    ) -> None:
+        legacy_arguments = any(
+            value is not None
+            for value in (
+                left_answer,
+                right_answer,
+                correct_side,
+            )
+        )
+
+        if option_1 is None:
+            option_1 = left_answer
+
+        if option_2 is None:
+            option_2 = right_answer
+
+        option_1 = option_1 or "是"
+        option_2 = option_2 or "否"
+        normalized_type = BinaryQuestionType(question_type)
+
+        if legacy_arguments:
+            randomize_sides = False
+
+            if correct_side is None:
+                normalized_type = BinaryQuestionType.INQUIRY
+                correct_option_id = None
+            elif correct_side == "left":
+                normalized_type = BinaryQuestionType.YES_NO
+                correct_option_id = "option_1"
+            elif correct_side == "right":
+                normalized_type = BinaryQuestionType.YES_NO
+                correct_option_id = "option_2"
+            else:
+                raise ValueError("correct_side must be left, right, or None.")
+
+        normalized_question = question.strip()
+        normalized_option_1 = option_1.strip()
+        normalized_option_2 = option_2.strip()
+        normalized_family = question_font_family.strip()
+
+        for field_name, value in (
+            ("question", normalized_question),
+            ("option_1", normalized_option_1),
+            ("option_2", normalized_option_2),
+            ("question_font_family", normalized_family),
         ):
-            normalized = getattr(
-                self,
-                field_name,
-            ).strip()
-
-            if not normalized:
+            if not value:
                 raise ValueError(f"{field_name} cannot be empty.")
 
-            object.__setattr__(
-                self,
-                field_name,
-                normalized,
-            )
+        if normalized_type.is_scored:
+            correct_option_id = correct_option_id or "option_1"
 
-        if not 250 <= self.dwell_time_ms <= 10_000:
+            if correct_option_id not in {"option_1", "option_2"}:
+                raise ValueError("correct_option_id must be option_1 or option_2.")
+        else:
+            correct_option_id = None
+
+        if not 250 <= dwell_time_ms <= 10_000:
             raise ValueError("dwell_time_ms must be between 250 and 10000.")
 
-        if not 5 <= self.duration_seconds <= 600:
+        if not 5 <= duration_seconds <= 600:
             raise ValueError("duration_seconds must be between 5 and 600.")
 
-        normalized_font_family = self.question_font_family.strip()
+        if not 12 <= question_font_size_pt <= 120:
+            raise ValueError("question_font_size_pt must be between 12 and 120.")
 
-        if not normalized_font_family:
-            raise ValueError("question_font_family cannot be empty.")
+        if not 12 <= option_font_size_pt <= 120:
+            raise ValueError("option_font_size_pt must be between 12 and 120.")
 
+        if not 0.0 <= neutral_zone_width <= 0.6:
+            raise ValueError("neutral_zone_width must be between 0 and 0.6.")
+
+        if randomization_seed is not None and randomization_seed < 0:
+            raise ValueError("randomization_seed cannot be negative.")
+
+        object.__setattr__(self, "question", normalized_question)
+        object.__setattr__(self, "option_1", normalized_option_1)
+        object.__setattr__(self, "option_2", normalized_option_2)
+        object.__setattr__(self, "question_type", normalized_type)
+        object.__setattr__(self, "correct_option_id", correct_option_id)
+        object.__setattr__(self, "dwell_time_ms", int(dwell_time_ms))
+        object.__setattr__(self, "duration_seconds", int(duration_seconds))
         object.__setattr__(
             self,
             "question_font_family",
-            normalized_font_family,
+            normalized_family,
+        )
+        object.__setattr__(
+            self,
+            "question_font_size_pt",
+            int(question_font_size_pt),
+        )
+        object.__setattr__(
+            self,
+            "option_font_size_pt",
+            int(option_font_size_pt),
+        )
+        object.__setattr__(
+            self,
+            "neutral_zone_width",
+            float(neutral_zone_width),
+        )
+        object.__setattr__(
+            self,
+            "randomize_sides",
+            bool(randomize_sides),
+        )
+        object.__setattr__(
+            self,
+            "randomization_seed",
+            randomization_seed,
         )
 
-        if not 12 <= self.question_font_size_pt <= 96:
-            raise ValueError("question_font_size_pt must be between 12 and 96.")
+    @property
+    def is_scored(self) -> bool:
+        return self.question_type.is_scored
 
-        if not 0.0 <= self.neutral_zone_width <= 0.6:
-            raise ValueError("neutral_zone_width must be between 0 and 0.6.")
+    @property
+    def left_answer(self) -> str:
+        """Legacy logical-option alias."""
 
-        if self.correct_side not in {
-            None,
-            "left",
-            "right",
-        }:
-            raise ValueError("correct_side must be left, right, or None.")
+        return self.option_1
+
+    @property
+    def right_answer(self) -> str:
+        """Legacy logical-option alias."""
+
+        return self.option_2
+
+    @property
+    def correct_side(self) -> str | None:
+        """Legacy logical-side alias."""
+
+        if self.correct_option_id == "option_1":
+            return "left"
+
+        if self.correct_option_id == "option_2":
+            return "right"
+
+        return None
 
 
 class BinaryQuestionTask(QWidget):
-    """Select left or right by gaze dwell or click."""
+    """Select one of two randomized options by gaze dwell."""
 
     answered = Signal(str, str)
 
@@ -106,6 +238,20 @@ class BinaryQuestionTask(QWidget):
         super().__init__()
         self.config = config
         self.allow_mouse_fallback = allow_mouse_fallback
+        self.randomization_seed = (
+            config.randomization_seed
+            if config.randomization_seed is not None
+            else secrets.randbits(63)
+        )
+        option_order = ["option_1", "option_2"]
+
+        if config.randomize_sides:
+            random.Random(self.randomization_seed).shuffle(option_order)
+
+        self._option_by_side = {
+            "left": option_order[0],
+            "right": option_order[1],
+        }
         self._active_side: str | None = None
         self._dwell_ms = 0.0
         self._last_timestamp_ns: int | None = None
@@ -120,7 +266,6 @@ class BinaryQuestionTask(QWidget):
                 font-family: "Microsoft YaHei UI";
             }
             QLabel#questionLabel {
-                font-size: 38px;
                 font-weight: 700;
                 padding: 24px;
             }
@@ -130,7 +275,6 @@ class BinaryQuestionTask(QWidget):
                 border-radius: 24px;
                 background: #173957;
                 color: white;
-                font-size: 72px;
                 font-weight: 800;
                 padding: 20px;
             }
@@ -156,7 +300,7 @@ class BinaryQuestionTask(QWidget):
         self.question_label.setObjectName("questionLabel")
         self.question_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.question_label.setWordWrap(True)
-        self.question_label.setMaximumHeight(150)
+        self.question_label.setMaximumHeight(190)
 
         question_font = QFont(config.question_font_family)
         question_font.setPointSize(config.question_font_size_pt)
@@ -170,8 +314,12 @@ class BinaryQuestionTask(QWidget):
             "font-weight: 700;"
         )
 
-        self.left_button = QPushButton(config.left_answer)
-        self.right_button = QPushButton(config.right_answer)
+        self.left_button = QPushButton(self._answer_for_side("left"))
+        self.right_button = QPushButton(self._answer_for_side("right"))
+
+        option_font = QFont(config.question_font_family)
+        option_font.setPointSize(config.option_font_size_pt)
+        option_font.setBold(True)
 
         for button in (
             self.left_button,
@@ -180,6 +328,8 @@ class BinaryQuestionTask(QWidget):
             button.setObjectName("answerButton")
             button.setProperty("active", False)
             button.setMinimumHeight(620)
+            button.setFont(option_font)
+            button.setStyleSheet(f"font-size: {config.option_font_size_pt}pt;")
 
         self.left_button.clicked.connect(lambda: self._commit("left"))
         self.right_button.clicked.connect(lambda: self._commit("right"))
@@ -191,24 +341,15 @@ class BinaryQuestionTask(QWidget):
             self.left_progress,
             self.right_progress,
         ):
-            progress.setRange(
-                0,
-                config.dwell_time_ms,
-            )
+            progress.setRange(0, config.dwell_time_ms)
             progress.setValue(0)
 
         left_layout = QVBoxLayout()
-        left_layout.addWidget(
-            self.left_button,
-            1,
-        )
+        left_layout.addWidget(self.left_button, 1)
         left_layout.addWidget(self.left_progress)
 
         right_layout = QVBoxLayout()
-        right_layout.addWidget(
-            self.right_button,
-            1,
-        )
+        right_layout.addWidget(self.right_button, 1)
         right_layout.addWidget(self.right_progress)
 
         if not self.allow_mouse_fallback:
@@ -241,6 +382,48 @@ class BinaryQuestionTask(QWidget):
     ) -> tuple[str, str] | None:
         return self._result
 
+    @property
+    def displayed_options(
+        self,
+    ) -> dict[str, str]:
+        return {side: self._answer_for_side(side) for side in ("left", "right")}
+
+    @property
+    def displayed_correct_side(
+        self,
+    ) -> str | None:
+        correct_option = self.config.correct_option_id
+
+        if correct_option is None:
+            return None
+
+        return next(
+            (
+                side
+                for side, option_id in self._option_by_side.items()
+                if option_id == correct_option
+            ),
+            None,
+        )
+
+    def _answer_for_option(
+        self,
+        option_id: str,
+    ) -> str:
+        if option_id == "option_1":
+            return self.config.option_1
+
+        if option_id == "option_2":
+            return self.config.option_2
+
+        raise ValueError(f"Unknown option identifier: {option_id}")
+
+    def _answer_for_side(
+        self,
+        side: str,
+    ) -> str:
+        return self._answer_for_option(self._option_by_side[side])
+
     def start(self) -> None:
         self.reset()
 
@@ -257,6 +440,7 @@ class BinaryQuestionTask(QWidget):
         self.right_button.setEnabled(True)
         self.left_progress.setValue(0)
         self.right_progress.setValue(0)
+        self.question_label.setText(self.config.question)
         self._refresh_active_side()
 
     def _side_for_gaze(
@@ -284,32 +468,11 @@ class BinaryQuestionTask(QWidget):
         float,
         float,
     ]:
-        width = max(
-            1.0,
-            float(self.width()),
-        )
-        height = max(
-            1.0,
-            float(self.height()),
-        )
-        top_left = button.mapTo(
-            self,
-            QPoint(0, 0),
-        )
-        left = max(
-            0.0,
-            min(
-                1.0,
-                top_left.x() / width,
-            ),
-        )
-        top = max(
-            0.0,
-            min(
-                1.0,
-                top_left.y() / height,
-            ),
-        )
+        width = max(1.0, float(self.width()))
+        height = max(1.0, float(self.height()))
+        top_left = button.mapTo(self, QPoint(0, 0))
+        left = max(0.0, min(1.0, top_left.x() / width))
+        top = max(0.0, min(1.0, top_left.y() / height))
         right = max(
             0.0,
             min(
@@ -354,56 +517,50 @@ class BinaryQuestionTask(QWidget):
         self,
         sample: EyeTrackerSample,
     ) -> dict[str, object]:
-        """Return answer AOIs and semantic roles."""
+        """Return randomized AOIs and logical roles."""
 
-        correct_side = self.config.correct_side
+        correct_option = self.config.correct_option_id
 
-        def role_for_side(
-            side: str,
+        def role_for_option(
+            option_id: str,
         ) -> str:
-            if correct_side is None:
+            if not self.config.is_scored:
                 return "other"
 
-            if side == correct_side:
+            if option_id == correct_option:
                 return "correct_option"
 
             return "incorrect_option"
 
-        left_bounds = self._button_bounds_normalized(
-            self.left_button,
-            side="left",
-        )
-        right_bounds = self._button_bounds_normalized(
-            self.right_button,
-            side="right",
-        )
+        aois: list[dict[str, object]] = []
 
-        left_aoi = {
-            "aoi_id": "left_answer",
-            "role": role_for_side("left"),
-            "left": left_bounds[0],
-            "top": left_bounds[1],
-            "right": left_bounds[2],
-            "bottom": left_bounds[3],
-            "label": self.config.left_answer,
-            "metadata": {
-                "side": "left",
-                "answer": (self.config.left_answer),
-            },
-        }
-        right_aoi = {
-            "aoi_id": "right_answer",
-            "role": role_for_side("right"),
-            "left": right_bounds[0],
-            "top": right_bounds[1],
-            "right": right_bounds[2],
-            "bottom": right_bounds[3],
-            "label": self.config.right_answer,
-            "metadata": {
-                "side": "right",
-                "answer": (self.config.right_answer),
-            },
-        }
+        for side, button in (
+            ("left", self.left_button),
+            ("right", self.right_button),
+        ):
+            option_id = self._option_by_side[side]
+            answer = self._answer_for_option(option_id)
+            bounds = self._button_bounds_normalized(
+                button,
+                side=side,
+            )
+            aois.append(
+                {
+                    "aoi_id": f"{side}_answer",
+                    "role": role_for_option(option_id),
+                    "left": bounds[0],
+                    "top": bounds[1],
+                    "right": bounds[2],
+                    "bottom": bounds[3],
+                    "label": answer,
+                    "metadata": {
+                        "side": side,
+                        "answer": answer,
+                        "logical_option_id": option_id,
+                        "is_scored": self.config.is_scored,
+                    },
+                }
+            )
 
         sample_side: str | None = None
 
@@ -426,16 +583,22 @@ class BinaryQuestionTask(QWidget):
         return {
             "question_id": "binary-question-1",
             "phase": phase,
-            "aois": [
-                left_aoi,
-                right_aoi,
-            ],
+            "aois": aois,
             "register_layout": True,
             "question_metadata": {
-                "question": (self.config.question),
-                "left_answer": (self.config.left_answer),
-                "right_answer": (self.config.right_answer),
-                "correct_side": correct_side,
+                "question": self.config.question,
+                "question_type": self.config.question_type.value,
+                "option_1": self.config.option_1,
+                "option_2": self.config.option_2,
+                "is_scored": self.config.is_scored,
+                "correct_option_id": correct_option,
+                "left_option_id": self._option_by_side["left"],
+                "right_option_id": self._option_by_side["right"],
+                "left_answer": self._answer_for_side("left"),
+                "right_answer": self._answer_for_side("right"),
+                "correct_side": self.displayed_correct_side,
+                "randomize_sides": self.config.randomize_sides,
+                "randomization_seed": self.randomization_seed,
                 "layout": "horizontal",
             },
         }
@@ -457,10 +620,7 @@ class BinaryQuestionTask(QWidget):
         self._last_timestamp_ns = timestamp_ns
 
         if not sample.gaze_valid:
-            self.advance_dwell(
-                None,
-                elapsed_ms,
-            )
+            self.advance_dwell(None, elapsed_ms)
             return
 
         gaze_x = max(
@@ -482,6 +642,7 @@ class BinaryQuestionTask(QWidget):
         elapsed_ms: float,
     ) -> None:
         """Advance dwell state for testing and gaze input."""
+
         if self._result is not None:
             return
 
@@ -555,7 +716,7 @@ class BinaryQuestionTask(QWidget):
         if self._result is not None:
             return
 
-        answer = self.config.left_answer if side == "left" else self.config.right_answer
+        answer = self._answer_for_side(side)
         self._result = (
             side,
             answer,
@@ -564,103 +725,93 @@ class BinaryQuestionTask(QWidget):
         self.left_button.setEnabled(False)
         self.right_button.setEnabled(False)
         self.question_label.setText(f"已选择：{answer}")
-        self.answered.emit(
-            side,
-            answer,
-        )
+        self.answered.emit(side, answer)
 
 
 class BinaryQuestionSetupDialog(QDialog):
-    """Configure a horizontal binary question."""
+    """Configure a reusable two-option question."""
 
     def __init__(
         self,
         parent: QWidget | None = None,
+        *,
+        question_bank_path: str | Path | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("左右二分问答设置")
-        self.resize(520, 280)
+        self.resize(680, 560)
 
+        if question_bank_path is None:
+            question_bank_path = Path.home() / ".oculidoc" / "data" / "common_questions.json"
+
+        self.question_store = CommonQuestionStore(question_bank_path)
+        self._templates: dict[str, CommonQuestionTemplate] = {}
         form = QFormLayout()
 
+        self.common_question_combo = QComboBox()
+        self.common_question_combo.setObjectName("commonQuestionCombo")
+        self.add_common_button = QPushButton("添加新常用问题")
+        self.add_common_button.setObjectName("addCommonQuestionButton")
+        self.add_common_button.clicked.connect(self._add_common_question)
+        common_row = QHBoxLayout()
+        common_row.addWidget(self.common_question_combo, 1)
+        common_row.addWidget(self.add_common_button)
+        form.addRow("常用问题：", common_row)
+
+        self.question_type_combo = QComboBox()
+        self.question_type_combo.setObjectName("binaryQuestionTypeCombo")
+
+        for question_type in BinaryQuestionType:
+            self.question_type_combo.addItem(
+                question_type.display_label,
+                question_type,
+            )
+
+        inquiry_index = self.question_type_combo.findData(BinaryQuestionType.INQUIRY)
+        self.question_type_combo.setCurrentIndex(inquiry_index)
+        form.addRow("问题类型：", self.question_type_combo)
+
         self.question_edit = QLineEdit("你现在感到舒服吗？")
-        self.left_edit = QLineEdit("是")
-        self.right_edit = QLineEdit("否")
+        self.question_edit.setObjectName("binaryQuestionEdit")
+        form.addRow("问题：", self.question_edit)
 
-        self.correct_side_combo = QComboBox()
-        self.correct_side_combo.addItem(
-            "未指定",
-            None,
-        )
-        self.correct_side_combo.addItem(
-            "左侧答案正确",
-            "left",
-        )
-        self.correct_side_combo.addItem(
-            "右侧答案正确",
-            "right",
-        )
-
-        self.dwell_spin = QSpinBox()
-        self.dwell_spin.setRange(
-            250,
-            10_000,
-        )
+        self.option_1_edit = QLineEdit("是")
+        self.option_2_edit = QLineEdit("否")
+        self.option_1_edit.setObjectName("binaryOption1Edit")
+        self.option_2_edit.setObjectName("binaryOption2Edit")
+        self.option_1_label = QLabel("选项1：")
+        self.option_2_label = QLabel("选项2：")
+        form.addRow(self.option_1_label, self.option_1_edit)
+        form.addRow(self.option_2_label, self.option_2_edit)
 
         self.question_font_combo = QFontComboBox()
         self.question_font_combo.setCurrentFont(QFont("Microsoft YaHei UI"))
+        form.addRow("文字字体：", self.question_font_combo)
 
         self.question_font_size_spin = QSpinBox()
-        self.question_font_size_spin.setRange(
-            12,
-            96,
-        )
-        self.question_font_size_spin.setValue(32)
+        self.question_font_size_spin.setRange(12, 120)
+        self.question_font_size_spin.setValue(48)
         self.question_font_size_spin.setSuffix(" pt")
+        form.addRow("问题字号：", self.question_font_size_spin)
+
+        self.option_font_size_spin = QSpinBox()
+        self.option_font_size_spin.setRange(12, 120)
+        self.option_font_size_spin.setValue(44)
+        self.option_font_size_spin.setSuffix(" pt")
+        form.addRow("选项字号：", self.option_font_size_spin)
+
+        self.dwell_spin = QSpinBox()
+        self.dwell_spin.setRange(250, 10_000)
         self.dwell_spin.setValue(1_200)
         self.dwell_spin.setSingleStep(100)
         self.dwell_spin.setSuffix(" ms")
-
-        form.addRow(
-            "问题：",
-            self.question_edit,
-        )
-        form.addRow(
-            "问题字体：",
-            self.question_font_combo,
-        )
-        form.addRow(
-            "问题字号：",
-            self.question_font_size_spin,
-        )
-        form.addRow(
-            "左侧答案：",
-            self.left_edit,
-        )
-        form.addRow(
-            "右侧答案：",
-            self.right_edit,
-        )
-        form.addRow(
-            "正确答案：",
-            self.correct_side_combo,
-        )
-        form.addRow(
-            "停留确认：",
-            self.dwell_spin,
-        )
+        form.addRow("停留确认：", self.dwell_spin)
 
         self.duration_spin = QSpinBox()
-        self.duration_spin.setRange(
-            5,
-            600,
-        )
+        self.duration_spin.setRange(5, 600)
         self.duration_spin.setValue(30)
         self.duration_spin.setSuffix(" 秒")
-        form.addRow(
-            "任务时长：",
-            self.duration_spin,
-        )
+        form.addRow("任务时长：", self.duration_spin)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -673,14 +824,133 @@ class BinaryQuestionSetupDialog(QDialog):
         root.addStretch(1)
         root.addWidget(buttons)
 
+        self.question_type_combo.currentIndexChanged.connect(self._refresh_option_labels)
+        self.common_question_combo.currentIndexChanged.connect(self._load_selected_template)
+        self._reload_common_questions()
+        self._refresh_option_labels()
+
+    def _current_question_type(
+        self,
+    ) -> BinaryQuestionType:
+        return BinaryQuestionType(self.question_type_combo.currentData())
+
+    def _refresh_option_labels(
+        self,
+        *_args: object,
+    ) -> None:
+        if self._current_question_type().is_scored:
+            self.option_1_label.setText("正确选项：")
+            self.option_2_label.setText("错误选项：")
+        else:
+            self.option_1_label.setText("选项1：")
+            self.option_2_label.setText("选项2：")
+
+    def _reload_common_questions(
+        self,
+        selected_id: str | None = None,
+    ) -> None:
+        self.common_question_combo.blockSignals(True)
+        self.common_question_combo.clear()
+        self.common_question_combo.addItem("选择常用问题…", None)
+
+        try:
+            templates = self.question_store.load()
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            json.JSONDecodeError,
+        ):
+            templates = ()
+
+        self._templates = {template.template_id: template for template in templates}
+        selected_index = 0
+
+        for template in templates:
+            prefix = "内置" if template.built_in else "自定义"
+            self.common_question_combo.addItem(
+                (f"[{prefix}·{template.question_type.display_label}] {template.question}"),
+                template.template_id,
+            )
+
+            if template.template_id == selected_id:
+                selected_index = self.common_question_combo.count() - 1
+
+        self.common_question_combo.setCurrentIndex(selected_index)
+        self.common_question_combo.blockSignals(False)
+
+    def _load_selected_template(
+        self,
+        *_args: object,
+    ) -> None:
+        template_id = self.common_question_combo.currentData()
+
+        if template_id is None:
+            return
+
+        template = self._templates.get(str(template_id))
+
+        if template is None:
+            return
+
+        type_index = self.question_type_combo.findData(template.question_type)
+        self.question_type_combo.setCurrentIndex(type_index)
+        self.question_edit.setText(template.question)
+        self.option_1_edit.setText(template.option_1)
+        self.option_2_edit.setText(template.option_2)
+        self._refresh_option_labels()
+
+    def _template_from_fields(
+        self,
+    ) -> CommonQuestionTemplate:
+        question_type = self._current_question_type()
+
+        return CommonQuestionTemplate.create(
+            question_type=question_type,
+            question=self.question_edit.text(),
+            option_1=self.option_1_edit.text(),
+            option_2=self.option_2_edit.text(),
+            correct_option_id=("option_1" if question_type.is_scored else None),
+        )
+
+    def _add_common_question(
+        self,
+        checked: bool = False,
+    ) -> None:
+        del checked
+
+        try:
+            template = self._template_from_fields()
+            self.question_store.add(template)
+        except Exception as error:  # noqa: BLE001
+            QMessageBox.warning(
+                self,
+                "无法保存常用问题",
+                str(error),
+            )
+            return
+
+        self._reload_common_questions(template.template_id)
+        QMessageBox.information(
+            self,
+            "常用问题已保存",
+            template.question,
+        )
+
     def build_config(self) -> BinaryQuestionConfig:
+        question_type = self._current_question_type()
+
         return BinaryQuestionConfig(
             question=self.question_edit.text(),
-            left_answer=self.left_edit.text(),
-            right_answer=self.right_edit.text(),
+            option_1=self.option_1_edit.text(),
+            option_2=self.option_2_edit.text(),
+            question_type=question_type,
+            correct_option_id=("option_1" if question_type.is_scored else None),
             dwell_time_ms=self.dwell_spin.value(),
             duration_seconds=self.duration_spin.value(),
             question_font_family=(self.question_font_combo.currentFont().family()),
             question_font_size_pt=(self.question_font_size_spin.value()),
-            correct_side=self.correct_side_combo.currentData(),
+            option_font_size_pt=self.option_font_size_spin.value(),
+            randomize_sides=True,
         )

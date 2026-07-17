@@ -56,7 +56,9 @@ def main() -> int:
         title = "追踪球"
         duration_seconds = config.duration_seconds
     else:
-        setup = BinaryQuestionSetupDialog()
+        setup = BinaryQuestionSetupDialog(
+            question_bank_path=(settings.data_dir / "common_questions.json")
+        )
 
         if setup.exec() != QDialog.DialogCode.Accepted:
             return 0

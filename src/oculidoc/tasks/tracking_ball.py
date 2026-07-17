@@ -64,6 +64,7 @@ class TargetPath(StrEnum):
     HORIZONTAL = "horizontal"
     VERTICAL = "vertical"
     CIRCLE = "circle"
+    Z = "z"
     FIGURE_EIGHT = "figure_eight"
     RANDOM = "random"
 
@@ -73,10 +74,10 @@ class TrackingBallConfig:
     shape: TargetShape = TargetShape.CIRCLE
     effect: TargetEffect = TargetEffect.PULSE
     path: TargetPath = TargetPath.HORIZONTAL
-    diameter_px: int = 100
+    diameter_px: int = 300
     color: str = "#ffcc00"
     image_path: str | None = None
-    period_seconds: float = 6.0
+    period_seconds: float = 12.0
     duration_seconds: int = 60
     dwell_time_ms: int = 900
     dwell_feedback_color: str = "#35d07f"
@@ -411,6 +412,48 @@ class TrackingBallTask(QWidget):
                 0.5 + 0.32 * sin(phase),
             )
 
+        if self.config.path is TargetPath.Z:
+            cycle = (phase % (2.0 * pi)) / (2.0 * pi)
+            path_progress = cycle * 2.0 if cycle <= 0.5 else (1.0 - cycle) * 2.0
+            left = 0.15
+            right = 0.85
+            top = 0.20
+            bottom = 0.80
+            horizontal_length = right - left
+            diagonal_length = ((right - left) ** 2 + (bottom - top) ** 2) ** 0.5
+            segment_lengths = (
+                horizontal_length,
+                diagonal_length,
+                horizontal_length,
+            )
+            distance = path_progress * sum(segment_lengths)
+
+            if distance <= segment_lengths[0]:
+                ratio = distance / segment_lengths[0]
+                return (
+                    left + (right - left) * ratio,
+                    top,
+                )
+
+            distance -= segment_lengths[0]
+
+            if distance <= segment_lengths[1]:
+                ratio = distance / segment_lengths[1]
+                return (
+                    right + (left - right) * ratio,
+                    top + (bottom - top) * ratio,
+                )
+
+            distance -= segment_lengths[1]
+            ratio = min(
+                1.0,
+                distance / segment_lengths[2],
+            )
+            return (
+                left + (right - left) * ratio,
+                bottom,
+            )
+
         if self.config.path is TargetPath.RANDOM:
             return (
                 0.5 + 0.33 * sin(phase * 1.37 + 0.86 * sin(phase * 0.41)),
@@ -673,6 +716,10 @@ class TrackingBallSetupDialog(QDialog):
             TargetPath.CIRCLE,
         )
         self.path_combo.addItem(
+            "Z 型轨迹",
+            TargetPath.Z,
+        )
+        self.path_combo.addItem(
             "8 字轨迹",
             TargetPath.FIGURE_EIGHT,
         )
@@ -705,7 +752,7 @@ class TrackingBallSetupDialog(QDialog):
 
         self.diameter_spin = QSpinBox()
         self.diameter_spin.setRange(16, 600)
-        self.diameter_spin.setValue(100)
+        self.diameter_spin.setValue(300)
         self.diameter_spin.setSuffix(" px")
         form.addRow(
             "目标直径：",
@@ -714,7 +761,7 @@ class TrackingBallSetupDialog(QDialog):
 
         self.period_spin = QDoubleSpinBox()
         self.period_spin.setRange(1.0, 120.0)
-        self.period_spin.setValue(6.0)
+        self.period_spin.setValue(12.0)
         self.period_spin.setSingleStep(0.5)
         self.period_spin.setSuffix(" 秒/周期")
         form.addRow(
