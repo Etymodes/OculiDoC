@@ -182,6 +182,13 @@ GAZE_EVENT_SCHEMA = pa.schema(
         ("right_pupil_diameter_mm", pa.float64()),
         ("aoi_id", pa.string()),
         ("aoi_role", pa.string()),
+        ("reference_aoi_id", pa.string()),
+        ("reference_aoi_role", pa.string()),
+        ("reference_aoi_left", pa.float64()),
+        ("reference_aoi_top", pa.float64()),
+        ("reference_aoi_right", pa.float64()),
+        ("reference_aoi_bottom", pa.float64()),
+        ("reference_aoi_label", pa.string()),
         ("duration_ms", pa.float64()),
     ]
 )
@@ -551,6 +558,7 @@ class TaskRunRecorder:
         question_id: str | None = None,
         phase: str | None = None,
         aois: Sequence[NormalizedAoi] | None = None,
+        reference_aoi: NormalizedAoi | None = None,
     ) -> None:
         self._require_recording()
 
@@ -597,6 +605,14 @@ class TaskRunRecorder:
                 resolved_aois,
             )
 
+        reference_aoi_id = reference_aoi.aoi_id if reference_aoi is not None else None
+        reference_aoi_role = reference_aoi.role.value if reference_aoi is not None else None
+        reference_aoi_left = reference_aoi.left if reference_aoi is not None else None
+        reference_aoi_top = reference_aoi.top if reference_aoi is not None else None
+        reference_aoi_right = reference_aoi.right if reference_aoi is not None else None
+        reference_aoi_bottom = reference_aoi.bottom if reference_aoi is not None else None
+        reference_aoi_label = reference_aoi.label if reference_aoi is not None else None
+
         self._records.append(
             {
                 "patient_id": self.patient_id,
@@ -621,6 +637,13 @@ class TaskRunRecorder:
                 "right_pupil_diameter_mm": (sample.right_pupil_diameter_mm),
                 "aoi_id": aoi_id,
                 "aoi_role": (aoi_role.value if aoi_role is not None else None),
+                "reference_aoi_id": (reference_aoi_id),
+                "reference_aoi_role": (reference_aoi_role),
+                "reference_aoi_left": (reference_aoi_left),
+                "reference_aoi_top": (reference_aoi_top),
+                "reference_aoi_right": (reference_aoi_right),
+                "reference_aoi_bottom": (reference_aoi_bottom),
+                "reference_aoi_label": (reference_aoi_label),
                 "duration_ms": 0.0,
             }
         )

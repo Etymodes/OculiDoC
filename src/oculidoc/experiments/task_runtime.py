@@ -25,6 +25,8 @@ from oculidoc.devices.contracts import (
     EyeTrackerSample,
 )
 from oculidoc.experiments.recording import (
+    AoiRole,
+    NormalizedAoi,
     ScreenContext,
     TaskRunRecorder,
 )
@@ -77,6 +79,7 @@ class RecordedTaskRuntime(QObject):
         self._recorder: TaskRunRecorder | None = None
         self._finished = False
         self._recording_failed = False
+        self._registered_question_ids: set[str] = set()
         self._watched_window = task.window()
 
         self._watched_window.installEventFilter(self)
@@ -269,6 +272,146 @@ class RecordedTaskRuntime(QObject):
 
         return self._recorder
 
+    @staticmethod
+    def _coerce_aoi(
+        value: object,
+    ) -> NormalizedAoi:
+        if isinstance(
+            value,
+            NormalizedAoi,
+        ):
+            return value
+
+        if not isinstance(
+            value,
+            Mapping,
+        ):
+            raise TypeError("Task AOI must be a NormalizedAoi or mapping.")
+
+        role_value = value.get(
+            "role",
+            AoiRole.OTHER.value,
+        )
+        role = (
+            role_value
+            if isinstance(
+                role_value,
+                AoiRole,
+            )
+            else AoiRole(str(role_value))
+        )
+        metadata_value = value.get(
+            "metadata",
+            {},
+        )
+
+        return NormalizedAoi(
+            aoi_id=str(value["aoi_id"]),
+            role=role,
+            left=float(value["left"]),
+            top=float(value["top"]),
+            right=float(value["right"]),
+            bottom=float(value["bottom"]),
+            label=(str(value["label"]) if value.get("label") is not None else None),
+            metadata=(
+                dict(metadata_value)
+                if isinstance(
+                    metadata_value,
+                    Mapping,
+                )
+                else {}
+            ),
+        )
+
+    def _recording_context(
+        self,
+        sample: EyeTrackerSample,
+        recorder: TaskRunRecorder,
+    ) -> dict[str, object]:
+        provider = getattr(
+            self.task,
+            "recording_context_for_sample",
+            None,
+        )
+
+        if not callable(provider):
+            return {}
+
+        raw_context = provider(sample)
+
+        if raw_context is None:
+            return {}
+
+        if not isinstance(
+            raw_context,
+            Mapping,
+        ):
+            raise TypeError("Task recording context must be a mapping.")
+
+        question_id_value = raw_context.get("question_id")
+        question_id = str(question_id_value) if question_id_value is not None else None
+
+        phase_value = raw_context.get("phase")
+        phase = str(phase_value) if phase_value is not None else None
+
+        raw_aois = raw_context.get(
+            "aois",
+            (),
+        )
+
+        if raw_aois is None:
+            raw_aois = ()
+
+        if isinstance(
+            raw_aois,
+            (str, bytes),
+        ) or not isinstance(
+            raw_aois,
+            (list, tuple),
+        ):
+            raise TypeError("Task AOIs must be a list or tuple.")
+
+        aois = tuple(self._coerce_aoi(value) for value in raw_aois)
+
+        reference_value = raw_context.get("reference_aoi")
+        reference_aoi = self._coerce_aoi(reference_value) if reference_value is not None else None
+
+        register_layout = bool(
+            raw_context.get(
+                "register_layout",
+                bool(question_id and aois),
+            )
+        )
+        metadata_value = raw_context.get(
+            "question_metadata",
+            {},
+        )
+
+        if not isinstance(
+            metadata_value,
+            Mapping,
+        ):
+            raise TypeError("question_metadata must be a mapping.")
+
+        if (
+            register_layout
+            and question_id is not None
+            and question_id not in self._registered_question_ids
+        ):
+            recorder.register_question(
+                question_id,
+                aois=aois,
+                metadata=dict(metadata_value),
+            )
+            self._registered_question_ids.add(question_id)
+
+        return {
+            "question_id": question_id,
+            "phase": phase,
+            "aois": aois,
+            "reference_aoi": (reference_aoi),
+        }
+
     def handle_sample(
         self,
         sample: EyeTrackerSample,
@@ -280,7 +423,15 @@ class RecordedTaskRuntime(QObject):
 
         if not self._recording_failed:
             try:
-                self._ensure_recorder().record_sample(sample)
+                recorder = self._ensure_recorder()
+                context = self._recording_context(
+                    sample,
+                    recorder,
+                )
+                recorder.record_sample(
+                    sample,
+                    **context,
+                )
             except Exception as error:  # noqa: BLE001
                 self._recording_failed = True
                 self.recording_error.emit(str(error))

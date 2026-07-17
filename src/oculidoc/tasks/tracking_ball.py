@@ -237,6 +237,63 @@ class TrackingBallTask(QWidget):
         """Return current moving-target dwell state."""
         return self._dwell.snapshot
 
+    def recording_context_for_sample(
+        self,
+        _sample: EyeTrackerSample,
+    ) -> dict[str, object]:
+        """Return the moving target AOI for recording."""
+
+        width = max(
+            1.0,
+            float(self.width()),
+        )
+        height = max(
+            1.0,
+            float(self.height()),
+        )
+        phase = self._phase()
+        center_x, center_y = self.target_center_normalized(phase)
+        hit_radius_px = self.config.diameter_px / 2.0 * self.config.dwell_hit_radius_scale
+        radius_x = hit_radius_px / width
+        radius_y = hit_radius_px / height
+
+        target_aoi = {
+            "aoi_id": "moving_target",
+            "role": "target",
+            "left": max(
+                0.0,
+                center_x - radius_x,
+            ),
+            "top": max(
+                0.0,
+                center_y - radius_y,
+            ),
+            "right": min(
+                1.0,
+                center_x + radius_x,
+            ),
+            "bottom": min(
+                1.0,
+                center_y + radius_y,
+            ),
+            "label": "tracking_target",
+            "metadata": {
+                "center_x_normalized": center_x,
+                "center_y_normalized": center_y,
+                "hit_radius_px": hit_radius_px,
+                "path": self.config.path.value,
+                "motion_phase_radians": phase,
+            },
+        }
+
+        return {
+            "question_id": "tracking-target",
+            "phase": (self._dwell.snapshot.phase.value),
+            "aois": [target_aoi],
+            "reference_aoi": target_aoi,
+            "register_layout": False,
+        }
+
     def _update_dwell(
         self,
         gaze_x: float,

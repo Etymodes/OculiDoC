@@ -2,9 +2,14 @@
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import (
+    QPoint,
+    Qt,
+    Signal,
+)
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFontComboBox,
@@ -29,6 +34,7 @@ class BinaryQuestionConfig:
     question: str
     left_answer: str
     right_answer: str
+    correct_side: str | None = None
     dwell_time_ms: int = 1_200
     duration_seconds: int = 30
     question_font_family: str = "Microsoft YaHei UI"
@@ -77,6 +83,13 @@ class BinaryQuestionConfig:
 
         if not 0.0 <= self.neutral_zone_width <= 0.6:
             raise ValueError("neutral_zone_width must be between 0 and 0.6.")
+
+        if self.correct_side not in {
+            None,
+            "left",
+            "right",
+        }:
+            raise ValueError("correct_side must be left, right, or None.")
 
 
 class BinaryQuestionTask(QWidget):
@@ -260,6 +273,173 @@ class BinaryQuestionTask(QWidget):
 
         return None
 
+    def _button_bounds_normalized(
+        self,
+        button: QPushButton,
+        *,
+        side: str,
+    ) -> tuple[
+        float,
+        float,
+        float,
+        float,
+    ]:
+        width = max(
+            1.0,
+            float(self.width()),
+        )
+        height = max(
+            1.0,
+            float(self.height()),
+        )
+        top_left = button.mapTo(
+            self,
+            QPoint(0, 0),
+        )
+        left = max(
+            0.0,
+            min(
+                1.0,
+                top_left.x() / width,
+            ),
+        )
+        top = max(
+            0.0,
+            min(
+                1.0,
+                top_left.y() / height,
+            ),
+        )
+        right = max(
+            0.0,
+            min(
+                1.0,
+                (top_left.x() + button.width()) / width,
+            ),
+        )
+        bottom = max(
+            0.0,
+            min(
+                1.0,
+                (top_left.y() + button.height()) / height,
+            ),
+        )
+
+        if right > left and bottom > top:
+            return (
+                left,
+                top,
+                right,
+                bottom,
+            )
+
+        half_neutral = self.config.neutral_zone_width / 2.0
+
+        if side == "left":
+            return (
+                0.0,
+                0.0,
+                0.5 - half_neutral,
+                1.0,
+            )
+
+        return (
+            0.5 + half_neutral,
+            0.0,
+            1.0,
+            1.0,
+        )
+
+    def recording_context_for_sample(
+        self,
+        sample: EyeTrackerSample,
+    ) -> dict[str, object]:
+        """Return answer AOIs and semantic roles."""
+
+        correct_side = self.config.correct_side
+
+        def role_for_side(
+            side: str,
+        ) -> str:
+            if correct_side is None:
+                return "other"
+
+            if side == correct_side:
+                return "correct_option"
+
+            return "incorrect_option"
+
+        left_bounds = self._button_bounds_normalized(
+            self.left_button,
+            side="left",
+        )
+        right_bounds = self._button_bounds_normalized(
+            self.right_button,
+            side="right",
+        )
+
+        left_aoi = {
+            "aoi_id": "left_answer",
+            "role": role_for_side("left"),
+            "left": left_bounds[0],
+            "top": left_bounds[1],
+            "right": left_bounds[2],
+            "bottom": left_bounds[3],
+            "label": self.config.left_answer,
+            "metadata": {
+                "side": "left",
+                "answer": (self.config.left_answer),
+            },
+        }
+        right_aoi = {
+            "aoi_id": "right_answer",
+            "role": role_for_side("right"),
+            "left": right_bounds[0],
+            "top": right_bounds[1],
+            "right": right_bounds[2],
+            "bottom": right_bounds[3],
+            "label": self.config.right_answer,
+            "metadata": {
+                "side": "right",
+                "answer": (self.config.right_answer),
+            },
+        }
+
+        sample_side: str | None = None
+
+        if sample.gaze_valid and sample.gaze_x_normalized is not None:
+            sample_side = self._side_for_gaze(
+                max(
+                    0.0,
+                    min(
+                        1.0,
+                        float(sample.gaze_x_normalized),
+                    ),
+                )
+            )
+
+        phase = f"dwell_{sample_side}" if sample_side is not None else "response"
+
+        if self._result is not None:
+            phase = "answered"
+
+        return {
+            "question_id": "binary-question-1",
+            "phase": phase,
+            "aois": [
+                left_aoi,
+                right_aoi,
+            ],
+            "register_layout": True,
+            "question_metadata": {
+                "question": (self.config.question),
+                "left_answer": (self.config.left_answer),
+                "right_answer": (self.config.right_answer),
+                "correct_side": correct_side,
+                "layout": "horizontal",
+            },
+        }
+
     def consume_sample(
         self,
         sample: EyeTrackerSample,
@@ -407,6 +587,20 @@ class BinaryQuestionSetupDialog(QDialog):
         self.left_edit = QLineEdit("是")
         self.right_edit = QLineEdit("否")
 
+        self.correct_side_combo = QComboBox()
+        self.correct_side_combo.addItem(
+            "未指定",
+            None,
+        )
+        self.correct_side_combo.addItem(
+            "左侧答案正确",
+            "left",
+        )
+        self.correct_side_combo.addItem(
+            "右侧答案正确",
+            "right",
+        )
+
         self.dwell_spin = QSpinBox()
         self.dwell_spin.setRange(
             250,
@@ -448,6 +642,10 @@ class BinaryQuestionSetupDialog(QDialog):
             self.right_edit,
         )
         form.addRow(
+            "正确答案：",
+            self.correct_side_combo,
+        )
+        form.addRow(
             "停留确认：",
             self.dwell_spin,
         )
@@ -484,4 +682,5 @@ class BinaryQuestionSetupDialog(QDialog):
             duration_seconds=self.duration_spin.value(),
             question_font_family=(self.question_font_combo.currentFont().family()),
             question_font_size_pt=(self.question_font_size_spin.value()),
+            correct_side=self.correct_side_combo.currentData(),
         )
