@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from oculidoc.application.experiment_session_service import (
     ExperimentSessionService,
 )
+from oculidoc.application.gaze_report import generate_gaze_session_report
 from oculidoc.application.session_history import (
     SessionHistoryEntry,
     build_patient_session_history,
@@ -181,6 +182,10 @@ class PatientSessionHistoryDialog(QDialog):
         self.result_button.setObjectName("viewSessionResultButton")
         self.result_button.clicked.connect(self._show_result)
 
+        self.report_button = QPushButton("生成报告")
+        self.report_button.setObjectName("generateGazeReportButton")
+        self.report_button.clicked.connect(self._generate_report)
+
         self.export_button = QPushButton("导出 ZIP")
         self.export_button.setObjectName("exportSessionZipButton")
         self.export_button.clicked.connect(self._export_zip)
@@ -191,6 +196,7 @@ class PatientSessionHistoryDialog(QDialog):
         actions = QHBoxLayout()
         actions.addWidget(self.open_button)
         actions.addWidget(self.result_button)
+        actions.addWidget(self.report_button)
         actions.addWidget(self.export_button)
         actions.addStretch(1)
         actions.addWidget(close_button)
@@ -385,6 +391,50 @@ class PatientSessionHistoryDialog(QDialog):
             "实验结果",
             message,
         )
+
+    def _generate_report(
+        self,
+        checked: bool = False,
+    ) -> None:
+        """Generate and open a gaze report."""
+
+        del checked
+        entry = self._require_entry()
+
+        if entry is None:
+            return
+
+        if entry.status is not ExperimentSessionStatus.COMPLETED:
+            QMessageBox.information(
+                self,
+                "无法生成报告",
+                "仅已完成的实验会话可以生成报告。",
+            )
+            return
+
+        try:
+            report = generate_gaze_session_report(
+                self.service,
+                entry.session_id,
+            )
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "报告生成失败",
+                str(error),
+            )
+            return
+
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(report.html_path)))
+
+        if not opened:
+            QMessageBox.information(
+                self,
+                "报告已生成",
+                str(report.html_path),
+            )
+
+        self.refresh_sessions()
 
     def _default_archive_name(
         self,
