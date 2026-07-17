@@ -79,6 +79,7 @@ class AdminMainWindow(QMainWindow):
             UUID,
             GazeTaskLaunch,
         ] = {}
+        self._active_gaze_module_ids: set[str] = set()
         self._patient_window = PatientDisplayWindow()
         self._patient_window.exit_requested.connect(self._restore_admin_window)
 
@@ -552,6 +553,26 @@ class AdminMainWindow(QMainWindow):
                 str(error),
             )
 
+    def _set_gaze_module_busy(
+        self,
+        module_id: str,
+        busy: bool,
+    ) -> None:
+        """Reserve or release one gaze-task module."""
+
+        if busy:
+            self._active_gaze_module_ids.add(module_id)
+        else:
+            self._active_gaze_module_ids.discard(module_id)
+
+        button = self.module_buttons.get(module_id)
+
+        if button is None:
+            return
+
+        button.setEnabled(not busy)
+        button.setText("任务运行中…" if busy else "打开项目")
+
     def _open_gaze_task_module(
         self,
         module: ModuleDefinition,
@@ -574,12 +595,24 @@ class AdminMainWindow(QMainWindow):
             )
             return
 
+        if module.module_id in self._active_gaze_module_ids:
+            QMessageBox.information(
+                self,
+                "任务已在运行",
+                (f"{module.title}已经在启动、设置或运行中，请先关闭当前任务。"),
+            )
+            return
+
+        self._set_gaze_module_busy(
+            module.module_id,
+            True,
+        )
         launch: GazeTaskLaunch | None = None
 
         try:
             launch = create_gaze_task_launch(
                 self.experiment_session_service,
-                patient_id=(self.current_patient.patient_id),
+                patient_id=self.current_patient.patient_id,
                 module_id=module.module_id,
             )
 
@@ -587,10 +620,7 @@ class AdminMainWindow(QMainWindow):
             environment = QProcessEnvironment.systemEnvironment()
 
             for name, value in launch.process_environment.items():
-                environment.insert(
-                    name,
-                    value,
-                )
+                environment.insert(name, value)
 
             environment.insert(
                 "OCULIDOC_GAZE_SOURCE",
@@ -621,6 +651,11 @@ class AdminMainWindow(QMainWindow):
             if not process.waitForStarted(5_000):
                 raise RuntimeError(process.errorString() or "任务子进程启动失败。")
         except Exception as error:
+            self._set_gaze_module_busy(
+                module.module_id,
+                False,
+            )
+
             if launch is not None:
                 self._gaze_processes.pop(
                     launch.session_id,
@@ -664,6 +699,12 @@ class AdminMainWindow(QMainWindow):
             None,
         )
 
+        if launch is not None:
+            self._set_gaze_module_busy(
+                launch.module_id,
+                False,
+            )
+
         if process is None or launch is None or self.experiment_session_service is None:
             return
 
@@ -701,7 +742,7 @@ class AdminMainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "眼动任务已保存",
-                f"任务记录已关联到当前患者的实验会话。\n目录：{launch.session_directory}",
+                (f"任务记录已关联到当前患者的实验会话。\n目录：{launch.session_directory}"),
             )
         elif status is ExperimentSessionStatus.ABORTED:
             QMessageBox.information(
