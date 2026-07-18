@@ -1,11 +1,13 @@
 """Administrator desktop dashboard."""
 
 import mimetypes
+import sys
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
 from uuid import UUID
 
+from PySide6.QtCore import QProcess, QProcessEnvironment
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -29,6 +31,11 @@ from oculidoc.application.experiment_session_service import (
     ExperimentSessionService,
     RegisterSessionArtifactRequest,
 )
+from oculidoc.application.gaze_task_session import (
+    GazeTaskLaunch,
+    create_gaze_task_launch,
+    finalize_gaze_task_launch,
+)
 from oculidoc.config import Settings
 from oculidoc.domain import Patient
 from oculidoc.domain.experiment_session import (
@@ -41,6 +48,7 @@ from oculidoc.ui.patient_management import (
     diagnosis_display_name,
 )
 from oculidoc.ui.patient_window import PatientDisplayWindow
+from oculidoc.ui.session_history import PatientSessionHistoryDialog
 from oculidoc.vision.camera_preview_window import (
     CameraPreviewWindow,
 )
@@ -64,6 +72,15 @@ class AdminMainWindow(QMainWindow):
             UUID,
             CameraPreviewWindow,
         ] = {}
+        self._gaze_processes: dict[
+            UUID,
+            QProcess,
+        ] = {}
+        self._gaze_launches: dict[
+            UUID,
+            GazeTaskLaunch,
+        ] = {}
+        self._active_gaze_module_ids: set[str] = set()
         self._patient_window = PatientDisplayWindow()
         self._patient_window.exit_requested.connect(self._restore_admin_window)
 
@@ -174,11 +191,18 @@ class AdminMainWindow(QMainWindow):
         header.addWidget(emergency_button)
         return header
 
-    def _build_patient_panel(self) -> QFrame:
+    def _build_patient_panel(
+        self,
+    ) -> QFrame:
         panel = QFrame()
         panel.setObjectName("panel")
         layout = QHBoxLayout(panel)
-        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setContentsMargins(
+            20,
+            16,
+            20,
+            16,
+        )
 
         text = QVBoxLayout()
         title = QLabel("当前患者")
@@ -192,14 +216,50 @@ class AdminMainWindow(QMainWindow):
         manage_button.setObjectName("secondaryButton")
         manage_button.clicked.connect(self._show_patient_placeholder)
 
+        self.history_button = QPushButton("实验记录")
+        self.history_button.setObjectName("patientSessionHistoryButton")
+        self.history_button.clicked.connect(self._open_session_history)
+
         display_button = QPushButton("打开患者显示端")
         display_button.setObjectName("primaryButton")
         display_button.clicked.connect(self._open_patient_display)
 
         layout.addLayout(text, 1)
         layout.addWidget(manage_button)
+        layout.addWidget(self.history_button)
         layout.addWidget(display_button)
         return panel
+
+    def _open_session_history(
+        self,
+        checked: bool = False,
+    ) -> None:
+        """Open history for the selected patient."""
+
+        del checked
+
+        if self.current_patient is None:
+            QMessageBox.information(
+                self,
+                "尚未选择患者",
+                "请先选择当前患者，再查看实验记录。",
+            )
+            return
+
+        if self.experiment_session_service is None:
+            QMessageBox.warning(
+                self,
+                "实验会话服务未连接",
+                "无法读取患者实验记录。",
+            )
+            return
+
+        dialog = PatientSessionHistoryDialog(
+            self.experiment_session_service,
+            self.current_patient,
+            self,
+        )
+        dialog.exec()
 
     def _build_module_area(self) -> QScrollArea:
         scroll = QScrollArea()
@@ -358,6 +418,13 @@ class AdminMainWindow(QMainWindow):
 
         if module.module_id == "eye_observation":
             self._open_eye_observation_module(module)
+            return
+
+        if module.module_id in {
+            "tracking_ball",
+            "binary_horizontal",
+        }:
+            self._open_gaze_task_module(module)
             return
 
         self._show_module_placeholder(module)
@@ -528,6 +595,215 @@ class AdminMainWindow(QMainWindow):
                 self,
                 "实验会话结束失败",
                 str(error),
+            )
+
+    def _set_gaze_module_busy(
+        self,
+        module_id: str,
+        busy: bool,
+    ) -> None:
+        """Reserve or release one gaze-task module."""
+
+        if busy:
+            self._active_gaze_module_ids.add(module_id)
+        else:
+            self._active_gaze_module_ids.discard(module_id)
+
+        button = self.module_buttons.get(module_id)
+
+        if button is None:
+            return
+
+        button.setEnabled(not busy)
+        button.setText("任务运行中…" if busy else "打开项目")
+
+    def _open_gaze_task_module(
+        self,
+        module: ModuleDefinition,
+    ) -> None:
+        """Create a patient session and launch a gaze task."""
+
+        if self.current_patient is None:
+            QMessageBox.warning(
+                self,
+                "尚未选择患者",
+                "请先在患者管理中选择一名启用患者。",
+            )
+            return
+
+        if self.experiment_session_service is None:
+            QMessageBox.warning(
+                self,
+                "实验会话服务未连接",
+                "无法创建眼动任务会话。",
+            )
+            return
+
+        if module.module_id in self._active_gaze_module_ids:
+            QMessageBox.information(
+                self,
+                "任务已在运行",
+                (f"{module.title}已经在启动、设置或运行中，请先关闭当前任务。"),
+            )
+            return
+
+        self._set_gaze_module_busy(
+            module.module_id,
+            True,
+        )
+        launch: GazeTaskLaunch | None = None
+
+        try:
+            launch = create_gaze_task_launch(
+                self.experiment_session_service,
+                patient_id=self.current_patient.patient_id,
+                module_id=module.module_id,
+            )
+
+            process = QProcess(self)
+            environment = QProcessEnvironment.systemEnvironment()
+
+            for name, value in launch.process_environment.items():
+                environment.insert(name, value)
+
+            environment.insert(
+                "OCULIDOC_GAZE_SOURCE",
+                self.settings.gaze_source,
+            )
+            process.setProcessEnvironment(environment)
+            process.setProgram(sys.executable)
+            process.setArguments(
+                [
+                    "-m",
+                    "oculidoc.tasks",
+                    launch.command,
+                ]
+            )
+            process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+            process.finished.connect(
+                partial(
+                    self._finish_gaze_task_process,
+                    launch.session_id,
+                )
+            )
+
+            self._gaze_processes[launch.session_id] = process
+            self._gaze_launches[launch.session_id] = launch
+
+            process.start()
+
+            if not process.waitForStarted(5_000):
+                raise RuntimeError(process.errorString() or "任务子进程启动失败。")
+        except Exception as error:
+            self._set_gaze_module_busy(
+                module.module_id,
+                False,
+            )
+
+            if launch is not None:
+                self._gaze_processes.pop(
+                    launch.session_id,
+                    None,
+                )
+                self._gaze_launches.pop(
+                    launch.session_id,
+                    None,
+                )
+
+                with suppress(Exception):
+                    session = self.experiment_session_service.get_session(launch.session_id)
+
+                    if not session.is_terminal:
+                        self.experiment_session_service.fail_session(
+                            launch.session_id,
+                            str(error),
+                        )
+
+            QMessageBox.critical(
+                self,
+                "无法启动眼动任务",
+                str(error),
+            )
+
+    def _finish_gaze_task_process(
+        self,
+        session_id: UUID,
+        exit_code: int,
+        exit_status: object,
+    ) -> None:
+        """Register child outputs and close the database session."""
+
+        del exit_status
+        process = self._gaze_processes.pop(
+            session_id,
+            None,
+        )
+        launch = self._gaze_launches.pop(
+            session_id,
+            None,
+        )
+
+        if launch is not None:
+            self._set_gaze_module_busy(
+                launch.module_id,
+                False,
+            )
+
+        if process is None or launch is None or self.experiment_session_service is None:
+            return
+
+        raw_output = bytes(process.readAllStandardOutput())
+        process_output = raw_output.decode(
+            "utf-8",
+            errors="replace",
+        )
+
+        try:
+            status = finalize_gaze_task_launch(
+                self.experiment_session_service,
+                launch,
+                exit_code=exit_code,
+                process_output=process_output,
+            )
+        except Exception as error:
+            with suppress(Exception):
+                session = self.experiment_session_service.get_session(session_id)
+
+                if not session.is_terminal:
+                    self.experiment_session_service.fail_session(
+                        session_id,
+                        str(error),
+                    )
+
+            QMessageBox.warning(
+                self,
+                "眼动任务会话结束失败",
+                str(error),
+            )
+            return
+
+        if status is ExperimentSessionStatus.COMPLETED:
+            QMessageBox.information(
+                self,
+                "眼动任务已保存",
+                (f"任务记录已关联到当前患者的实验会话。\n目录：{launch.session_directory}"),
+            )
+        elif status is ExperimentSessionStatus.ABORTED:
+            QMessageBox.information(
+                self,
+                "眼动任务已取消",
+                "设置窗口关闭，未产生正式任务记录。",
+            )
+        else:
+            message = "任务进程未正常完成。"
+
+            if process_output.strip():
+                message += "\n\n进程输出：\n" + process_output.strip()[-2_000:]
+
+            QMessageBox.warning(
+                self,
+                "眼动任务失败",
+                message,
             )
 
     def _show_module_placeholder(
