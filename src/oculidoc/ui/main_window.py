@@ -36,6 +36,9 @@ from oculidoc.application.gaze_task_session import (
     create_gaze_task_launch,
     finalize_gaze_task_launch,
 )
+from oculidoc.branding import (
+    brand_mark_pixmap,
+)
 from oculidoc.config import Settings
 from oculidoc.domain import Patient
 from oculidoc.domain.experiment_session import (
@@ -168,9 +171,25 @@ class AdminMainWindow(QMainWindow):
 
         return f"患者数据：已初始化 · 总计 {total_count} · 启用 {active_count}"
 
-    def _build_header(self) -> QHBoxLayout:
+    def _build_header(
+        self,
+    ) -> QHBoxLayout:
         header = QHBoxLayout()
         titles = QVBoxLayout()
+
+        logo_label = QLabel()
+        logo_label.setObjectName("brandMark")
+        logo_pixmap = brand_mark_pixmap(
+            variant="blue",
+            max_width=150,
+            max_height=90,
+        )
+
+        if logo_pixmap.isNull():
+            logo_label.hide()
+        else:
+            logo_label.setPixmap(logo_pixmap)
+            logo_label.setFixedSize(logo_pixmap.size())
 
         app_title = QLabel("OculiDoC")
         app_title.setObjectName("appTitle")
@@ -186,6 +205,7 @@ class AdminMainWindow(QMainWindow):
         emergency_button.setObjectName("dangerButton")
         emergency_button.clicked.connect(self._request_application_exit)
 
+        header.addWidget(logo_label)
         header.addLayout(titles)
         header.addStretch(1)
         header.addWidget(emergency_button)
