@@ -30,6 +30,7 @@ from oculidoc.application.session_history import (
     SessionHistoryEntry,
     build_patient_session_history,
     export_session_zip,
+    format_task_result_lines,
 )
 from oculidoc.domain import Patient
 from oculidoc.domain.experiment_session import (
@@ -318,6 +319,12 @@ class PatientSessionHistoryDialog(QDialog):
             f"AOI 停留：{dwell_text}",
         ]
 
+        result_lines = format_task_result_lines(entry.task_results)
+
+        if result_lines:
+            details.append("结构化结果：")
+            details.extend(f"  {line}" for line in result_lines)
+
         if entry.failure_reason:
             details.append(f"失败/取消原因：{entry.failure_reason}")
 
@@ -385,6 +392,11 @@ class PatientSessionHistoryDialog(QDialog):
                 dwell_text,
             ]
         )
+
+        result_lines = format_task_result_lines(entry.task_results)
+
+        if result_lines:
+            message += "\n\n结构化结果：\n" + "\n".join(f"  {line}" for line in result_lines)
 
         QMessageBox.information(
             self,
