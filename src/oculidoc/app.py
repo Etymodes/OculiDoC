@@ -5,6 +5,9 @@ from collections.abc import Sequence
 
 from PySide6.QtWidgets import QApplication
 
+from oculidoc.branding import (
+    apply_application_branding,
+)
 from oculidoc.config import Settings, get_settings
 from oculidoc.infrastructure.database import (
     DatabaseRuntime,
@@ -16,16 +19,19 @@ from oculidoc.ui.main_window import AdminMainWindow
 def create_qt_application(
     argv: Sequence[str] | None = None,
 ) -> QApplication:
-    """Return the existing Qt application or create one."""
+    "Return the existing Qt application or create one."
+
     existing = QApplication.instance()
 
-    if isinstance(existing, QApplication):
+    if isinstance(
+        existing,
+        QApplication,
+    ):
+        apply_application_branding(existing)
         return existing
 
     app = QApplication(list(argv) if argv is not None else sys.argv)
-    app.setApplicationName("OculiDoC")
-    app.setApplicationDisplayName("OculiDoC")
-    app.setOrganizationName("Etymodes and TiantanDoC")
+    apply_application_branding(app)
 
     return app
 

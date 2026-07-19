@@ -1,7 +1,6 @@
 """Administrator desktop dashboard."""
 
 import mimetypes
-import sys
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
@@ -36,6 +35,9 @@ from oculidoc.application.gaze_task_session import (
     create_gaze_task_launch,
     finalize_gaze_task_launch,
 )
+from oculidoc.branding import (
+    brand_mark_pixmap,
+)
 from oculidoc.config import Settings
 from oculidoc.domain import Patient
 from oculidoc.domain.experiment_session import (
@@ -43,6 +45,9 @@ from oculidoc.domain.experiment_session import (
     SessionArtifactKind,
 )
 from oculidoc.modules.registry import DEFAULT_MODULES, ModuleDefinition
+from oculidoc.process_launch import (
+    gaze_task_process_command,
+)
 from oculidoc.ui.patient_management import (
     PatientManagementDialog,
     diagnosis_display_name,
@@ -168,9 +173,37 @@ class AdminMainWindow(QMainWindow):
 
         return f"患者数据：已初始化 · 总计 {total_count} · 启用 {active_count}"
 
-    def _build_header(self) -> QHBoxLayout:
+    def _gaze_source_status_text(self) -> str:
+        """Return the configured gaze source without pretending it is live."""
+        labels = {
+            "mock": "眼动源：模拟数据源",
+            "tobii_stream_engine": ("眼动源：Tobii Eye Tracker 5 · 原生 Stream Engine"),
+            "tobii_legacy_bridge": "眼动源：Tobii 兼容桥接",
+        }
+        return labels.get(
+            self.settings.gaze_source,
+            f"眼动源：{self.settings.gaze_source}",
+        )
+
+    def _build_header(
+        self,
+    ) -> QHBoxLayout:
         header = QHBoxLayout()
         titles = QVBoxLayout()
+
+        logo_label = QLabel()
+        logo_label.setObjectName("brandMark")
+        logo_pixmap = brand_mark_pixmap(
+            variant="blue",
+            max_width=150,
+            max_height=90,
+        )
+
+        if logo_pixmap.isNull():
+            logo_label.hide()
+        else:
+            logo_label.setPixmap(logo_pixmap)
+            logo_label.setFixedSize(logo_pixmap.size())
 
         app_title = QLabel("OculiDoC")
         app_title.setObjectName("appTitle")
@@ -186,6 +219,7 @@ class AdminMainWindow(QMainWindow):
         emergency_button.setObjectName("dangerButton")
         emergency_button.clicked.connect(self._request_application_exit)
 
+        header.addWidget(logo_label)
         header.addLayout(titles)
         header.addStretch(1)
         header.addWidget(emergency_button)
@@ -324,12 +358,12 @@ class AdminMainWindow(QMainWindow):
         layout = QHBoxLayout(panel)
         layout.setContentsMargins(18, 13, 18, 13)
 
-        gaze_label = QLabel("眼动源：模拟数据源")
+        self.gaze_status_label = QLabel(self._gaze_source_status_text())
         backend_label = QLabel(f"本地后台：未启动 · {self.settings.admin_base_url}")
         self.patient_status_label = QLabel(self._patient_status_text())
 
         for label in (
-            gaze_label,
+            self.gaze_status_label,
             backend_label,
             self.patient_status_label,
         ):
@@ -671,14 +705,9 @@ class AdminMainWindow(QMainWindow):
                 self.settings.gaze_source,
             )
             process.setProcessEnvironment(environment)
-            process.setProgram(sys.executable)
-            process.setArguments(
-                [
-                    "-m",
-                    "oculidoc.tasks",
-                    launch.command,
-                ]
-            )
+            program, arguments = gaze_task_process_command(launch.command)
+            process.setProgram(program)
+            process.setArguments(arguments)
             process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
             process.finished.connect(
                 partial(

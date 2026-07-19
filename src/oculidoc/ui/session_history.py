@@ -22,6 +22,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from oculidoc.application.clinical_trends import (
+    generate_patient_trend_report,
+)
 from oculidoc.application.experiment_session_service import (
     ExperimentSessionService,
 )
@@ -30,6 +33,7 @@ from oculidoc.application.session_history import (
     SessionHistoryEntry,
     build_patient_session_history,
     export_session_zip,
+    format_task_result_lines,
 )
 from oculidoc.domain import Patient
 from oculidoc.domain.experiment_session import (
@@ -186,6 +190,11 @@ class PatientSessionHistoryDialog(QDialog):
         self.report_button.setObjectName("generateGazeReportButton")
         self.report_button.clicked.connect(self._generate_report)
 
+        self.trend_button = QPushButton("患者趋势")
+        self.trend_button.setObjectName("generatePatientTrendReportButton")
+        self.trend_button.setToolTip("汇总该患者历次同类任务结果与数据质量")
+        self.trend_button.clicked.connect(self._generate_trend_report)
+
         self.export_button = QPushButton("导出 ZIP")
         self.export_button.setObjectName("exportSessionZipButton")
         self.export_button.clicked.connect(self._export_zip)
@@ -197,6 +206,7 @@ class PatientSessionHistoryDialog(QDialog):
         actions.addWidget(self.open_button)
         actions.addWidget(self.result_button)
         actions.addWidget(self.report_button)
+        actions.addWidget(self.trend_button)
         actions.addWidget(self.export_button)
         actions.addStretch(1)
         actions.addWidget(close_button)
@@ -318,6 +328,12 @@ class PatientSessionHistoryDialog(QDialog):
             f"AOI 停留：{dwell_text}",
         ]
 
+        result_lines = format_task_result_lines(entry.task_results)
+
+        if result_lines:
+            details.append("结构化结果：")
+            details.extend(f"  {line}" for line in result_lines)
+
         if entry.failure_reason:
             details.append(f"失败/取消原因：{entry.failure_reason}")
 
@@ -386,6 +402,11 @@ class PatientSessionHistoryDialog(QDialog):
             ]
         )
 
+        result_lines = format_task_result_lines(entry.task_results)
+
+        if result_lines:
+            message += "\n\n结构化结果：\n" + "\n".join(f"  {line}" for line in result_lines)
+
         QMessageBox.information(
             self,
             "实验结果",
@@ -444,6 +465,42 @@ class PatientSessionHistoryDialog(QDialog):
         safe_patient_code = self.patient.patient_code.replace("/", "_").replace("\\", "_")
 
         return f"{safe_patient_code}_{entry.module_id}_{timestamp}.zip"
+
+    def _generate_trend_report(
+        self,
+        checked: bool = False,
+    ) -> None:
+        "Generate and open the patient's longitudinal report."
+
+        del checked
+        entry = self._require_entry()
+
+        if entry is None:
+            return
+
+        try:
+            report = generate_patient_trend_report(
+                self.service,
+                entry.session_id,
+            )
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "趋势报告生成失败",
+                str(error),
+            )
+            return
+
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(report.html_path)))
+
+        if not opened:
+            QMessageBox.information(
+                self,
+                "趋势报告已生成",
+                str(report.html_path),
+            )
+
+        self.refresh_sessions()
 
     def _export_zip(
         self,

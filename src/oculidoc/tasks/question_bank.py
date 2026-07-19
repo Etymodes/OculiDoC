@@ -243,6 +243,40 @@ class CommonQuestionStore:
         self._write_user_templates(existing)
         return template
 
+    def update(
+        self,
+        template_id: str,
+        template: CommonQuestionTemplate,
+    ) -> CommonQuestionTemplate:
+        """Update one user template while preserving its identity."""
+        normalized_id = template_id.strip()
+
+        if not normalized_id:
+            raise ValueError("template_id cannot be empty.")
+
+        if any(item.template_id == normalized_id for item in BUILT_IN_QUESTION_TEMPLATES):
+            raise ValueError("Built-in question templates cannot be overwritten.")
+
+        existing = list(self._load_user_templates())
+
+        for index, item in enumerate(existing):
+            if item.template_id != normalized_id:
+                continue
+
+            updated = CommonQuestionTemplate(
+                template_id=normalized_id,
+                question_type=template.question_type,
+                question=template.question,
+                option_1=template.option_1,
+                option_2=template.option_2,
+                correct_option_id=template.correct_option_id,
+            )
+            existing[index] = updated
+            self._write_user_templates(existing)
+            return updated
+
+        raise KeyError(f"Unknown user question template: {normalized_id}")
+
     def _write_user_templates(
         self,
         templates: list[CommonQuestionTemplate],

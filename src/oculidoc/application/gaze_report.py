@@ -167,6 +167,378 @@ def _load_rows(
     return rows
 
 
+def _load_event_counts(
+    run_directory: Path,
+) -> dict[str, int]:
+    event_path = run_directory / "task_events.jsonl"
+    counts: dict[str, int] = {}
+
+    if not event_path.is_file():
+        return counts
+
+    try:
+        lines = event_path.read_text(
+            encoding="utf-8",
+        ).splitlines()
+    except (
+        OSError,
+        UnicodeDecodeError,
+    ):
+        return counts
+
+    for line in lines:
+        if not line.strip():
+            continue
+
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        if not isinstance(event, dict):
+            continue
+
+        event_type = str(
+            event.get(
+                "event_type",
+                "",
+            )
+        ).strip()
+
+        if event_type:
+            counts[event_type] = (
+                counts.get(
+                    event_type,
+                    0,
+                )
+                + 1
+            )
+
+    return dict(sorted(counts.items()))
+
+
+def _load_task_results(
+    session_directory: Path,
+) -> list[dict[str, object]]:
+    task_results: list[dict[str, object]] = []
+
+    for result_path in sorted(session_directory.glob("tasks/*/task_result.json")):
+        try:
+            payload = json.loads(
+                result_path.read_text(
+                    encoding="utf-8",
+                )
+            )
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as error:
+            task_results.append(
+                {
+                    "run_id": result_path.parent.name,
+                    "source_path": (result_path.relative_to(session_directory).as_posix()),
+                    "load_error": str(error),
+                    "event_counts": (_load_event_counts(result_path.parent)),
+                }
+            )
+            continue
+
+        if not isinstance(payload, dict):
+            task_results.append(
+                {
+                    "run_id": result_path.parent.name,
+                    "source_path": (result_path.relative_to(session_directory).as_posix()),
+                    "load_error": ("task_result.json root must be an object."),
+                    "event_counts": (_load_event_counts(result_path.parent)),
+                }
+            )
+            continue
+
+        summary = payload.get("summary")
+        result = payload.get("result")
+        task_results.append(
+            {
+                "run_id": str(payload.get("run_id") or result_path.parent.name),
+                "task_kind": (
+                    str(payload.get("task_kind")) if payload.get("task_kind") is not None else None
+                ),
+                "end_reason": (
+                    str(payload.get("end_reason"))
+                    if payload.get("end_reason") is not None
+                    else None
+                ),
+                "source_path": (result_path.relative_to(session_directory).as_posix()),
+                "summary": (dict(summary) if isinstance(summary, dict) else {}),
+                "result": (dict(result) if isinstance(result, dict) else {}),
+                "event_counts": (_load_event_counts(result_path.parent)),
+            }
+        )
+
+    return task_results
+
+
+def _display_value(
+    value: object,
+    *,
+    suffix: str = "",
+) -> str:
+    if value is None:
+        return "-"
+
+    if isinstance(value, bool):
+        return "是" if value else "否"
+
+    if isinstance(value, float):
+        return f"{value:.3f}{suffix}"
+
+    return f"{value}{suffix}"
+
+
+def _display_ratio(
+    value: object,
+) -> str:
+    number = _finite_float(value)
+
+    if number is None:
+        return "-"
+
+    return f"{number:.1%}"
+
+
+def _display_ms(
+    value: object,
+) -> str:
+    number = _finite_float(value)
+
+    if number is None:
+        return "-"
+
+    return f"{number:.0f} ms"
+
+
+def _task_result_rows(
+    task_record: dict[str, object],
+) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    result_value = task_record.get("result")
+    result = result_value if isinstance(result_value, dict) else {}
+    task_kind = task_record.get("task_kind")
+    end_reason = task_record.get("end_reason")
+    rows.extend(
+        (
+            (
+                "运行 ID",
+                _display_value(task_record.get("run_id")),
+            ),
+            (
+                "任务类型",
+                _display_value(task_kind),
+            ),
+            (
+                "结束原因",
+                _display_value(end_reason),
+            ),
+            (
+                "完成状态",
+                _display_value(result.get("completion_status")),
+            ),
+        )
+    )
+
+    is_binary = any(
+        key in result
+        for key in (
+            "question",
+            "question_type",
+            "selected_option_id",
+            "selected_answer",
+        )
+    )
+
+    if is_binary:
+        correct = result.get("correct")
+
+        if result.get("is_scored") is False:
+            correctness = "不评分"
+        elif correct is True:
+            correctness = "正确"
+        elif correct is False:
+            correctness = "错误"
+        else:
+            correctness = "-"
+
+        rows.extend(
+            (
+                (
+                    "问题",
+                    _display_value(result.get("question")),
+                ),
+                (
+                    "问题类型",
+                    _display_value(result.get("question_type")),
+                ),
+                (
+                    "患者选择",
+                    _display_value(result.get("selected_answer")),
+                ),
+                (
+                    "逻辑选项",
+                    _display_value(result.get("selected_option_id")),
+                ),
+                (
+                    "显示侧",
+                    _display_value(result.get("selected_side")),
+                ),
+                (
+                    "评分结果",
+                    correctness,
+                ),
+                (
+                    "反应时间",
+                    _display_ms(result.get("reaction_time_ms")),
+                ),
+                (
+                    "确认停留",
+                    _display_ms(result.get("confirmation_dwell_ms")),
+                ),
+            )
+        )
+
+    is_tracking = task_kind == "tracking_ball" or any(
+        key in result
+        for key in (
+            "target_hit_ratio",
+            "tracking_error_normalized",
+            "first_target_acquired_ms",
+        )
+    )
+
+    if is_tracking:
+        normalized_error = result.get("tracking_error_normalized")
+
+        if not isinstance(
+            normalized_error,
+            dict,
+        ):
+            normalized_error = {}
+
+        pixel_error = result.get("tracking_error_px")
+
+        if not isinstance(
+            pixel_error,
+            dict,
+        ):
+            pixel_error = {}
+
+        rows.extend(
+            (
+                (
+                    "有效样本率",
+                    _display_ratio(result.get("valid_sample_ratio")),
+                ),
+                (
+                    "目标命中率",
+                    _display_ratio(result.get("target_hit_ratio")),
+                ),
+                (
+                    "命中时长占比",
+                    _display_ratio(result.get("target_hit_duration_ratio")),
+                ),
+                (
+                    "首次进入目标",
+                    _display_ms(result.get("first_target_entry_ms")),
+                ),
+                (
+                    "首次稳定获得",
+                    _display_ms(result.get("first_target_acquired_ms")),
+                ),
+                (
+                    "最长连续追踪",
+                    _display_ms(result.get("longest_continuous_tracking_ms")),
+                ),
+                (
+                    "目标丢失次数",
+                    _display_value(result.get("target_loss_count")),
+                ),
+                (
+                    "重新获得次数",
+                    _display_value(result.get("target_reacquisition_count")),
+                ),
+                (
+                    "平均标准化误差",
+                    _display_value(normalized_error.get("mean")),
+                ),
+                (
+                    "中位标准化误差",
+                    _display_value(normalized_error.get("median")),
+                ),
+                (
+                    "P95 标准化误差",
+                    _display_value(normalized_error.get("p95")),
+                ),
+                (
+                    "平均像素误差",
+                    _display_value(
+                        pixel_error.get("mean"),
+                        suffix=" px",
+                    ),
+                ),
+            )
+        )
+
+    event_counts = task_record.get("event_counts")
+
+    if isinstance(event_counts, dict):
+        event_text = "、".join(
+            f"{event_type}: {count}" for event_type, count in sorted(event_counts.items())
+        )
+        rows.append(
+            (
+                "事件计数",
+                event_text or "-",
+            )
+        )
+
+    load_error = task_record.get("load_error")
+
+    if load_error is not None:
+        rows.append(
+            (
+                "读取错误",
+                str(load_error),
+            )
+        )
+
+    return rows
+
+
+def _task_result_sections(
+    task_results: list[dict[str, object]],
+) -> str:
+    if not task_results:
+        return "<section><h2>结构化任务结果</h2><p>没有可读取的 task_result.json。</p></section>"
+
+    cards: list[str] = []
+
+    for index, task_record in enumerate(
+        task_results,
+        start=1,
+    ):
+        table_rows = "\n".join(
+            ("<tr><th>" + html.escape(label) + "</th><td>" + html.escape(value) + "</td></tr>")
+            for label, value in _task_result_rows(task_record)
+        )
+        cards.append(
+            '<article class="task-result">'
+            f"<h3>任务结果 {index}</h3>"
+            f"<table>{table_rows}</table>"
+            "</article>"
+        )
+
+    return "<section><h2>结构化任务结果</h2>" + "\n".join(cards) + "</section>"
+
+
 def _build_metrics(
     rows: list[dict[str, object]],
 ) -> dict[str, object]:
@@ -572,8 +944,10 @@ def _html_document(
     module_id: str,
     generated_at: str,
     metrics: dict[str, object],
+    task_results: list[dict[str, object]],
     has_tracking_plot: bool,
 ) -> str:
+    task_result_html = _task_result_sections(task_results)
     tracking_image = (
         "<section><h2>Tracking error</h2>"
         '<img src="tracking_error.png" '
@@ -628,6 +1002,7 @@ code {{ word-break: break-all; }}
 <h2>核心指标</h2>
 <table>{_metric_rows(metrics)}</table>
 </section>
+{task_result_html}
 <section>
 <h2>屏幕空间热图</h2>
 <img src="screen_heatmap.png" alt="Screen heatmap">
@@ -661,6 +1036,7 @@ def generate_gaze_session_report(
 
     session_directory = service.resolve_session_directory(session_id)
     rows = _load_rows(session_directory)
+    task_results = _load_task_results(session_directory)
 
     if not rows:
         raise ValueError("No gaze_events.parquet rows were found.")
@@ -709,7 +1085,8 @@ def generate_gaze_session_report(
 
     generated_at_text = generated_at.isoformat()
     report_document = {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
+        "task_results": task_results,
         "generated_at_utc": (generated_at_text),
         "patient_id": str(session.patient_id),
         "session_id": str(session.session_id),
@@ -731,6 +1108,7 @@ def generate_gaze_session_report(
             module_id=(session.module_id),
             generated_at=(generated_at_text),
             metrics=metrics,
+            task_results=task_results,
             has_tracking_plot=(tracking_error_path is not None),
         ),
     )

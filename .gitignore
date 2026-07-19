@@ -60,3 +60,5 @@ MCeyegazethesisNET461.exe
 
 # Runtime eye-observation images and labels
 data/eye_observations/
+build/pyinstaller/
+dist/windows/

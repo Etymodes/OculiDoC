@@ -200,8 +200,8 @@ def test_question_setup_loads_and_saves_templates(
     assert dialog.common_question_combo.count() >= 5
     assert dialog.option_1_label.text() == "选项1："
 
-    type_index = dialog.question_type_combo.findData(BinaryQuestionType.QUESTION_ANSWER)
-    dialog.question_type_combo.setCurrentIndex(type_index)
+    dialog.question_type_buttons[BinaryQuestionType.QUESTION_ANSWER].setChecked(True)
+    dialog._refresh_option_labels()
 
     assert dialog.option_1_label.text() == "正确选项："
     assert dialog.option_2_label.text() == "错误选项："
@@ -221,3 +221,108 @@ def test_question_setup_loads_and_saves_templates(
     assert config.option_2 == "六"
     assert config.correct_option_id == "option_1"
     assert config.randomize_sides is True
+
+
+def test_question_store_updates_custom_template_in_place(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "common_questions.json"
+    store = CommonQuestionStore(path)
+    original = CommonQuestionTemplate.create(
+        question_type=BinaryQuestionType.INQUIRY,
+        question="你想休息吗？",
+        option_1="想",
+        option_2="不想",
+    )
+    store.add(original)
+
+    updated = CommonQuestionTemplate(
+        template_id=original.template_id,
+        question_type=BinaryQuestionType.INQUIRY,
+        question="你现在想休息吗？",
+        option_1="想休息",
+        option_2="继续",
+    )
+    saved = store.update(
+        original.template_id,
+        updated,
+    )
+
+    assert saved.template_id == original.template_id
+    reloaded = {item.template_id: item for item in store.load()}
+    assert reloaded[original.template_id].question == "你现在想休息吗？"
+    assert reloaded[original.template_id].option_1 == "想休息"
+
+
+def test_question_setup_uses_radio_buttons_and_edits_custom_template(
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    path = tmp_path / "common_questions.json"
+    store = CommonQuestionStore(path)
+    original = CommonQuestionTemplate.create(
+        question_type=BinaryQuestionType.INQUIRY,
+        question="你感到冷吗？",
+        option_1="冷",
+        option_2="不冷",
+    )
+    store.add(original)
+    messages: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args: messages.append(args),
+    )
+
+    dialog = BinaryQuestionSetupDialog(
+        question_bank_path=path,
+    )
+    qtbot.addWidget(dialog)
+
+    assert not hasattr(
+        dialog,
+        "question_type_combo",
+    )
+    assert tuple(dialog.question_type_buttons) == tuple(BinaryQuestionType)
+    assert dialog.question_type_buttons[BinaryQuestionType.INQUIRY].isChecked()
+
+    selected_index = dialog.common_question_combo.findData(original.template_id)
+    dialog.common_question_combo.setCurrentIndex(selected_index)
+    dialog.question_edit.setText("你现在感到冷吗？")
+    dialog.option_1_edit.setText("是")
+    dialog.option_2_edit.setText("否")
+    dialog._edit_common_question()
+
+    reloaded = {item.template_id: item for item in store.load()}
+    assert reloaded[original.template_id].question == "你现在感到冷吗？"
+    assert dialog.common_question_combo.currentData() == original.template_id
+    assert messages
+
+
+def test_builtin_question_is_copied_instead_of_overwritten(
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    path = tmp_path / "common_questions.json"
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *_args: None,
+    )
+    dialog = BinaryQuestionSetupDialog(
+        question_bank_path=path,
+    )
+    qtbot.addWidget(dialog)
+
+    builtin_index = dialog.common_question_combo.findData("builtin-comfort")
+    dialog.common_question_combo.setCurrentIndex(builtin_index)
+    dialog.question_edit.setText("你现在身体舒服吗？")
+    dialog._edit_common_question()
+
+    templates = CommonQuestionStore(path).load()
+    custom = [item for item in templates if not item.built_in]
+    assert len(custom) == 1
+    assert custom[0].template_id != "builtin-comfort"
+    assert custom[0].question == "你现在身体舒服吗？"
