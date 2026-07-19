@@ -173,6 +173,18 @@ class AdminMainWindow(QMainWindow):
 
         return f"患者数据：已初始化 · 总计 {total_count} · 启用 {active_count}"
 
+    def _gaze_source_status_text(self) -> str:
+        """Return the configured gaze source without pretending it is live."""
+        labels = {
+            "mock": "眼动源：模拟数据源",
+            "tobii_stream_engine": ("眼动源：Tobii Eye Tracker 5 · 原生 Stream Engine"),
+            "tobii_legacy_bridge": "眼动源：Tobii 兼容桥接",
+        }
+        return labels.get(
+            self.settings.gaze_source,
+            f"眼动源：{self.settings.gaze_source}",
+        )
+
     def _build_header(
         self,
     ) -> QHBoxLayout:
@@ -346,12 +358,12 @@ class AdminMainWindow(QMainWindow):
         layout = QHBoxLayout(panel)
         layout.setContentsMargins(18, 13, 18, 13)
 
-        gaze_label = QLabel("眼动源：模拟数据源")
+        self.gaze_status_label = QLabel(self._gaze_source_status_text())
         backend_label = QLabel(f"本地后台：未启动 · {self.settings.admin_base_url}")
         self.patient_status_label = QLabel(self._patient_status_text())
 
         for label in (
-            gaze_label,
+            self.gaze_status_label,
             backend_label,
             self.patient_status_label,
         ):

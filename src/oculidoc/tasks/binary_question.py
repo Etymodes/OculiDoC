@@ -16,6 +16,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QRadioButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -1031,26 +1033,38 @@ class BinaryQuestionSetupDialog(QDialog):
 
         self.common_question_combo = QComboBox()
         self.common_question_combo.setObjectName("commonQuestionCombo")
+
+        self.edit_common_button = QPushButton("保存修改")
+        self.edit_common_button.setObjectName("editCommonQuestionButton")
+        self.edit_common_button.setEnabled(False)
+        self.edit_common_button.clicked.connect(self._edit_common_question)
+
         self.add_common_button = QPushButton("添加新常用问题")
         self.add_common_button.setObjectName("addCommonQuestionButton")
         self.add_common_button.clicked.connect(self._add_common_question)
+
         common_row = QHBoxLayout()
         common_row.addWidget(self.common_question_combo, 1)
+        common_row.addWidget(self.edit_common_button)
         common_row.addWidget(self.add_common_button)
         form.addRow("常用问题：", common_row)
 
-        self.question_type_combo = QComboBox()
-        self.question_type_combo.setObjectName("binaryQuestionTypeCombo")
+        self.question_type_group = QButtonGroup(self)
+        self.question_type_group.setExclusive(True)
+        self.question_type_buttons: dict[BinaryQuestionType, QRadioButton] = {}
+        question_type_row = QHBoxLayout()
 
         for question_type in BinaryQuestionType:
-            self.question_type_combo.addItem(
-                question_type.display_label,
-                question_type,
-            )
+            button = QRadioButton(question_type.display_label)
+            button.setObjectName(f"binaryQuestionType_{question_type.value}")
+            button.clicked.connect(self._refresh_option_labels)
+            self.question_type_group.addButton(button)
+            self.question_type_buttons[question_type] = button
+            question_type_row.addWidget(button)
 
-        inquiry_index = self.question_type_combo.findData(BinaryQuestionType.INQUIRY)
-        self.question_type_combo.setCurrentIndex(inquiry_index)
-        form.addRow("问题类型：", self.question_type_combo)
+        question_type_row.addStretch(1)
+        self.question_type_buttons[BinaryQuestionType.INQUIRY].setChecked(True)
+        form.addRow("问题类型：", question_type_row)
 
         self.question_edit = QLineEdit("你现在感到舒服吗？")
         self.question_edit.setObjectName("binaryQuestionEdit")
@@ -1105,7 +1119,6 @@ class BinaryQuestionSetupDialog(QDialog):
         root.addStretch(1)
         root.addWidget(buttons)
 
-        self.question_type_combo.currentIndexChanged.connect(self._refresh_option_labels)
         self.common_question_combo.currentIndexChanged.connect(self._load_selected_template)
         self._reload_common_questions()
         self._refresh_option_labels()
@@ -1113,7 +1126,18 @@ class BinaryQuestionSetupDialog(QDialog):
     def _current_question_type(
         self,
     ) -> BinaryQuestionType:
-        return BinaryQuestionType(self.question_type_combo.currentData())
+        for question_type, button in self.question_type_buttons.items():
+            if button.isChecked():
+                return question_type
+
+        return BinaryQuestionType.INQUIRY
+
+    def _set_question_type(
+        self,
+        question_type: BinaryQuestionType,
+    ) -> None:
+        self.question_type_buttons[question_type].setChecked(True)
+        self._refresh_option_labels()
 
     def _refresh_option_labels(
         self,
@@ -1160,6 +1184,19 @@ class BinaryQuestionSetupDialog(QDialog):
 
         self.common_question_combo.setCurrentIndex(selected_index)
         self.common_question_combo.blockSignals(False)
+        self._refresh_common_question_actions()
+
+    def _refresh_common_question_actions(
+        self,
+    ) -> None:
+        template_id = self.common_question_combo.currentData()
+        template = self._templates.get(str(template_id)) if template_id is not None else None
+        self.edit_common_button.setEnabled(template is not None)
+
+        if template is not None and template.built_in:
+            self.edit_common_button.setText("另存为自定义")
+        else:
+            self.edit_common_button.setText("保存修改")
 
     def _load_selected_template(
         self,
@@ -1168,31 +1205,86 @@ class BinaryQuestionSetupDialog(QDialog):
         template_id = self.common_question_combo.currentData()
 
         if template_id is None:
+            self._refresh_common_question_actions()
             return
 
         template = self._templates.get(str(template_id))
 
         if template is None:
+            self._refresh_common_question_actions()
             return
 
-        type_index = self.question_type_combo.findData(template.question_type)
-        self.question_type_combo.setCurrentIndex(type_index)
+        self._set_question_type(template.question_type)
         self.question_edit.setText(template.question)
         self.option_1_edit.setText(template.option_1)
         self.option_2_edit.setText(template.option_2)
-        self._refresh_option_labels()
+        self._refresh_common_question_actions()
 
     def _template_from_fields(
         self,
+        *,
+        template_id: str | None = None,
     ) -> CommonQuestionTemplate:
         question_type = self._current_question_type()
+        values = {
+            "question_type": question_type,
+            "question": self.question_edit.text(),
+            "option_1": self.option_1_edit.text(),
+            "option_2": self.option_2_edit.text(),
+            "correct_option_id": ("option_1" if question_type.is_scored else None),
+        }
 
-        return CommonQuestionTemplate.create(
-            question_type=question_type,
-            question=self.question_edit.text(),
-            option_1=self.option_1_edit.text(),
-            option_2=self.option_2_edit.text(),
-            correct_option_id=("option_1" if question_type.is_scored else None),
+        if template_id is None:
+            return CommonQuestionTemplate.create(**values)
+
+        return CommonQuestionTemplate(
+            template_id=template_id,
+            **values,
+        )
+
+    def _edit_common_question(
+        self,
+        checked: bool = False,
+    ) -> None:
+        del checked
+        template_id = self.common_question_combo.currentData()
+        selected = self._templates.get(str(template_id)) if template_id is not None else None
+
+        if selected is None:
+            QMessageBox.information(
+                self,
+                "尚未选择常用问题",
+                "请先选择需要修改的常用问题。",
+            )
+            return
+
+        try:
+            if selected.built_in:
+                template = self._template_from_fields()
+                self.question_store.add(template)
+                title = "已另存为自定义问题"
+            else:
+                template = self._template_from_fields(
+                    template_id=selected.template_id,
+                )
+                self.question_store.update(
+                    selected.template_id,
+                    template,
+                )
+                title = "常用问题已更新"
+        except Exception as error:  # noqa: BLE001
+            QMessageBox.warning(
+                self,
+                "无法修改常用问题",
+                str(error),
+            )
+            return
+
+        self._reload_common_questions(template.template_id)
+        QMessageBox.information(
+            self,
+            title,
+            template.question,
         )
 
     def _add_common_question(
