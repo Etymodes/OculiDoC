@@ -41,6 +41,9 @@ hiddenimports = sorted(
         collect_submodules(
             "oculidoc.tasks"
         )
+        + collect_submodules(
+            "oculidoc.api"
+        )
         + [
             "oculidoc.package_smoke",
         ]

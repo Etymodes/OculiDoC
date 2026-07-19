@@ -1,12 +1,17 @@
 """Administrator desktop dashboard."""
 
 import mimetypes
+import os
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
 from uuid import UUID
 
-from PySide6.QtCore import QProcess, QProcessEnvironment
+from PySide6.QtCore import (
+    QProcess,
+    QProcessEnvironment,
+    QTimer,
+)
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -44,9 +49,20 @@ from oculidoc.domain.experiment_session import (
     ExperimentSessionStatus,
     SessionArtifactKind,
 )
+from oculidoc.lan_control import (
+    LanControlStateStore,
+    build_control_url,
+    generate_pairing_token,
+    preferred_private_ipv4,
+)
 from oculidoc.modules.registry import DEFAULT_MODULES, ModuleDefinition
 from oculidoc.process_launch import (
     gaze_task_process_command,
+    local_api_process_command,
+)
+from oculidoc.ui.lan_pairing import (
+    HoverPairingButton,
+    LanPairingDialog,
 )
 from oculidoc.ui.patient_management import (
     PatientManagementDialog,
@@ -86,6 +102,23 @@ class AdminMainWindow(QMainWindow):
             GazeTaskLaunch,
         ] = {}
         self._active_gaze_module_ids: set[str] = set()
+        self._backend_process: QProcess | None = None
+        self._pairing_dialog: LanPairingDialog | None = None
+        self._lan_host = preferred_private_ipv4()
+        self._lan_token = generate_pairing_token()
+        self._lan_state_path = (
+            self.settings.data_dir.expanduser() / "runtime" / "lan_control_state.json"
+        ).resolve()
+        self._lan_state_store = LanControlStateStore(self._lan_state_path)
+        self._lan_control_url = build_control_url(
+            self._lan_host,
+            self.settings.admin_port,
+            self._lan_token,
+        )
+        self._last_lan_revision = -1
+        self._lan_poll_timer = QTimer(self)
+        self._lan_poll_timer.setInterval(300)
+        self._lan_poll_timer.timeout.connect(self._poll_lan_control_state)
         self._patient_window = PatientDisplayWindow()
         self._patient_window.exit_requested.connect(self._restore_admin_window)
 
@@ -120,6 +153,17 @@ class AdminMainWindow(QMainWindow):
                 color: #184e77;
                 border: 1px solid #bfd3e4;
             }
+            QPushButton#backendStatusButton {
+                background: transparent;
+                color: #184e77;
+                border: 1px solid transparent;
+                min-height: 28px;
+                padding: 2px 8px;
+            }
+            QPushButton#backendStatusButton:hover {
+                background: #edf4fb;
+                border: 1px solid #bfd3e4;
+            }
             QPushButton#dangerButton { background: #b42318; color: white; border: none; }
             """
         )
@@ -135,6 +179,14 @@ class AdminMainWindow(QMainWindow):
         root.addWidget(self._build_status_panel())
 
         self.setCentralWidget(central)
+        self._lan_poll_timer.start()
+        self._poll_lan_control_state()
+
+        if self._should_auto_start_backend():
+            QTimer.singleShot(
+                0,
+                self._start_local_backend,
+            )
 
     def _patient_counts(self) -> tuple[int, int]:
         """Return total and active patient counts."""
@@ -359,23 +411,142 @@ class AdminMainWindow(QMainWindow):
         layout.setContentsMargins(18, 13, 18, 13)
 
         self.gaze_status_label = QLabel(self._gaze_source_status_text())
-        backend_label = QLabel(f"本地后台：未启动 · {self.settings.admin_base_url}")
+        self.gaze_status_label.setObjectName("subtitle")
+
+        self.backend_status_button = HoverPairingButton(
+            f"本地后台：准备启动 · {self._lan_host}:{self.settings.admin_port} · 悬停扫码"
+        )
+        self.backend_status_button.setObjectName("backendStatusButton")
+        self.backend_status_button.setToolTip("悬停或点击显示局域网手机控制二维码")
+        self.backend_status_button.clicked.connect(self._show_lan_pairing)
+        self.backend_status_button.hover_entered.connect(self._show_lan_pairing)
+
         self.patient_status_label = QLabel(self._patient_status_text())
+        self.patient_status_label.setObjectName("subtitle")
 
-        for label in (
-            self.gaze_status_label,
-            backend_label,
-            self.patient_status_label,
-        ):
-            label.setObjectName("subtitle")
-            layout.addWidget(label)
-            layout.addStretch(1)
-
+        layout.addWidget(self.gaze_status_label)
+        layout.addStretch(1)
+        layout.addWidget(self.backend_status_button)
+        layout.addStretch(1)
+        layout.addWidget(self.patient_status_label)
         return panel
+
+    def _should_auto_start_backend(self) -> bool:
+        return self.settings.environment != "test" and "PYTEST_CURRENT_TEST" not in os.environ
+
+    def _start_local_backend(self) -> None:
+        if (
+            self._backend_process is not None
+            and self._backend_process.state() != QProcess.ProcessState.NotRunning
+        ):
+            return
+
+        self._lan_state_store.ensure()
+        process = QProcess(self)
+        environment = QProcessEnvironment.systemEnvironment()
+        environment.insert(
+            "OCULIDOC_ADMIN_HOST",
+            "0.0.0.0",
+        )
+        environment.insert(
+            "OCULIDOC_ADMIN_PORT",
+            str(self.settings.admin_port),
+        )
+        environment.insert(
+            "OCULIDOC_DATA_DIR",
+            str(self.settings.data_dir),
+        )
+        environment.insert(
+            "OCULIDOC_GAZE_SOURCE",
+            self.settings.gaze_source,
+        )
+        environment.insert(
+            "OCULIDOC_LAN_TOKEN",
+            self._lan_token,
+        )
+        environment.insert(
+            "OCULIDOC_LAN_STATE_PATH",
+            str(self._lan_state_path),
+        )
+        process.setProcessEnvironment(environment)
+        program, arguments = local_api_process_command()
+        process.setProgram(program)
+        process.setArguments(arguments)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        process.started.connect(self._backend_started)
+        process.finished.connect(self._backend_finished)
+        process.errorOccurred.connect(self._backend_error)
+        process.readyReadStandardOutput.connect(self._drain_backend_output)
+        self._backend_process = process
+        self.backend_status_button.setText(
+            f"本地后台：启动中 · {self._lan_host}:{self.settings.admin_port}"
+        )
+        process.start()
+
+    def _backend_started(self) -> None:
+        self.backend_status_button.setText(
+            f"本地后台：已启动 · {self._lan_host}:{self.settings.admin_port} · 悬停扫码"
+        )
+
+    def _backend_finished(
+        self,
+        exit_code: int,
+        exit_status: object,
+    ) -> None:
+        del exit_status
+        self.backend_status_button.setText(f"本地后台：已停止 · 退出码 {exit_code} · 点击重启")
+
+    def _backend_error(
+        self,
+        error: object,
+    ) -> None:
+        del error
+        self.backend_status_button.setText("本地后台：启动失败 · 点击重试")
+
+    def _drain_backend_output(self) -> None:
+        if self._backend_process is not None:
+            self._backend_process.readAllStandardOutput()
+
+    def _show_lan_pairing(
+        self,
+        checked: bool = False,
+    ) -> None:
+        del checked
+
+        if (
+            self._backend_process is None
+            or self._backend_process.state() == QProcess.ProcessState.NotRunning
+        ):
+            self._start_local_backend()
+
+        if self._pairing_dialog is None:
+            self._pairing_dialog = LanPairingDialog(
+                self._lan_control_url,
+                self,
+            )
+
+        self._pairing_dialog.show_near(self.backend_status_button)
+
+    def _poll_lan_control_state(self) -> None:
+        try:
+            state = self._lan_state_store.load()
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+        ):
+            return
+
+        if state.revision <= self._last_lan_revision:
+            return
+
+        self._last_lan_revision = state.revision
+        self._patient_window.set_placeholder(state.text)
 
     def _open_patient_display(self, checked: bool = False) -> None:
         del checked
-        self._patient_window.set_placeholder("患者显示端已打开\n等待管理员启动实验")
+        self._poll_lan_control_state()
         self._patient_window.showFullScreen()
         self._patient_window.raise_()
         self._patient_window.activateWindow()
@@ -860,6 +1031,21 @@ class AdminMainWindow(QMainWindow):
             QApplication.quit()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._lan_poll_timer.stop()
+
+        if self._pairing_dialog is not None:
+            self._pairing_dialog.close()
+
+        if (
+            self._backend_process is not None
+            and self._backend_process.state() != QProcess.ProcessState.NotRunning
+        ):
+            self._backend_process.terminate()
+
+            if not self._backend_process.waitForFinished(1_500):
+                self._backend_process.kill()
+                self._backend_process.waitForFinished(1_000)
+
         for workbench in tuple(self._eye_windows.values()):
             workbench.close()
 

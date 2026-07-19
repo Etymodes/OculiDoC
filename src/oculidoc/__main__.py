@@ -12,7 +12,7 @@ from oculidoc.app import run
 def dispatch(
     argv: Sequence[str] | None = None,
 ) -> int:
-    """Route desktop, package-smoke, and child-task invocations."""
+    """Route desktop, local API, package-smoke, and child-task invocations."""
 
     arguments = list(sys.argv[1:] if argv is None else argv)
 
@@ -25,6 +25,14 @@ def dispatch(
         )
 
         return write_package_smoke_report(Path(arguments[1]))
+
+    if arguments == ["--api"]:
+        from oculidoc.api.__main__ import (
+            main as run_api,
+        )
+
+        run_api()
+        return 0
 
     if arguments[:1] == ["--task"]:
         if len(arguments) != 2:
