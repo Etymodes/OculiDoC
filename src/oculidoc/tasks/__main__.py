@@ -1,6 +1,7 @@
 """Standalone demos for gaze-driven tasks."""
 
 import argparse
+from collections.abc import Sequence
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
@@ -27,7 +28,9 @@ from oculidoc.tasks.tracking_ball import (
 )
 
 
-def main() -> int:
+def main(
+    argv: Sequence[str] | None = None,
+) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "task",
@@ -36,7 +39,7 @@ def main() -> int:
             "binary",
         ),
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     app = create_qt_application()
     settings = get_settings()

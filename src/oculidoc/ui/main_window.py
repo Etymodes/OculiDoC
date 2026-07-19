@@ -1,7 +1,6 @@
 """Administrator desktop dashboard."""
 
 import mimetypes
-import sys
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
@@ -46,6 +45,9 @@ from oculidoc.domain.experiment_session import (
     SessionArtifactKind,
 )
 from oculidoc.modules.registry import DEFAULT_MODULES, ModuleDefinition
+from oculidoc.process_launch import (
+    gaze_task_process_command,
+)
 from oculidoc.ui.patient_management import (
     PatientManagementDialog,
     diagnosis_display_name,
@@ -691,14 +693,9 @@ class AdminMainWindow(QMainWindow):
                 self.settings.gaze_source,
             )
             process.setProcessEnvironment(environment)
-            process.setProgram(sys.executable)
-            process.setArguments(
-                [
-                    "-m",
-                    "oculidoc.tasks",
-                    launch.command,
-                ]
-            )
+            program, arguments = gaze_task_process_command(launch.command)
+            process.setProgram(program)
+            process.setArguments(arguments)
             process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
             process.finished.connect(
                 partial(

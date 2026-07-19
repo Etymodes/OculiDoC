@@ -87,3 +87,6 @@ select = ["E", "F", "I", "UP", "B"]
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
+
+[tool.setuptools.package-data]
+oculidoc = ["assets/*.ico", "assets/*.png"]
