@@ -33,3 +33,19 @@ def gaze_task_process_command(
         else ["-m", "oculidoc.tasks", normalized_command]
     )
     return program, arguments
+
+
+def local_api_process_command(
+    *,
+    executable: str | Path | None = None,
+    frozen: bool | None = None,
+) -> tuple[str, list[str]]:
+    """Build the child process command for the local FastAPI backend."""
+    program = str(executable if executable is not None else sys.executable).strip()
+
+    if not program:
+        raise ValueError("API process executable cannot be empty.")
+
+    frozen_mode = is_frozen_application() if frozen is None else bool(frozen)
+    arguments = ["--api"] if frozen_mode else ["-m", "oculidoc.api"]
+    return program, arguments

@@ -11,6 +11,25 @@ from PySide6.QtWidgets import (
 )
 
 
+def patient_message_font_size(text: str) -> int:
+    """Choose a large readable pixel size from the message length."""
+    character_count = len("".join(text.split()))
+
+    if character_count <= 10:
+        return 84
+
+    if character_count <= 24:
+        return 72
+
+    if character_count <= 48:
+        return 60
+
+    if character_count <= 90:
+        return 48
+
+    return 40
+
+
 class PatientDisplayWindow(QWidget):
     exit_requested = Signal()
 
@@ -30,10 +49,10 @@ class PatientDisplayWindow(QWidget):
                 font-weight: 700;
             }
             QLabel#patientPlaceholder {
-                color: #294861;
+                color: #203f58;
                 font-family: "Microsoft YaHei UI";
-                font-size: 38px;
-                font-weight: 600;
+                font-weight: 700;
+                padding: 34px;
             }
             QPushButton#emergencyExitButton {
                 background: #b42318;
@@ -70,7 +89,7 @@ class PatientDisplayWindow(QWidget):
         )
         display_layout = QVBoxLayout(display_frame)
 
-        self.placeholder_label = QLabel("等待管理员选择测试项目")
+        self.placeholder_label = QLabel()
         self.placeholder_label.setObjectName("patientPlaceholder")
         self.placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.placeholder_label.setWordWrap(True)
@@ -78,9 +97,17 @@ class PatientDisplayWindow(QWidget):
 
         root.addLayout(header)
         root.addWidget(display_frame, 1)
+        self.set_placeholder("等待管理员选择测试项目")
 
-    def set_placeholder(self, text: str) -> None:
-        self.placeholder_label.setText(text)
+    def set_placeholder(
+        self,
+        text: str,
+    ) -> None:
+        normalized = text.strip()
+        font = self.placeholder_label.font()
+        font.setPixelSize(patient_message_font_size(normalized))
+        self.placeholder_label.setFont(font)
+        self.placeholder_label.setText(normalized)
 
     def _emergency_exit(self, checked: bool = False) -> None:
         del checked
