@@ -59,7 +59,8 @@ def test_terminal_command_cannot_transition(tmp_path: Path) -> None:
 def test_mobile_page_contains_desktop_commands() -> None:
     html = mobile_control_html("secret-pairing-token")
 
-    assert "桌面管理员命令" in html
+    assert "任务设置与启动" in html
+    assert "保存并直接启动" in html
     assert "open_patient_display" in html
     assert "start_task" in html
     assert "stop_task" in html

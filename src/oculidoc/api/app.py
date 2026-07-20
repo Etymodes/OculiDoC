@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from oculidoc import __version__
@@ -21,6 +21,10 @@ from oculidoc.lan_commands import (
 )
 from oculidoc.lan_control import LanControlStateStore, generate_pairing_token
 from oculidoc.modules.registry import DEFAULT_MODULES
+from oculidoc.task_configs import (
+    TaskConfigConflict,
+    TaskConfigStore,
+)
 
 
 class DisplayTextRequest(BaseModel):
@@ -34,6 +38,12 @@ class TaskPreviewRequest(BaseModel):
 class DesktopCommandRequest(BaseModel):
     command_type: LanCommandType
     module_id: str | None = Field(default=None, min_length=1, max_length=100)
+    config_revision: int | None = Field(default=None, ge=0)
+
+
+class TaskConfigUpdateRequest(BaseModel):
+    revision: int = Field(ge=0)
+    config: dict[str, object]
 
 
 def create_api(
@@ -42,6 +52,7 @@ def create_api(
     token: str | None = None,
     state_store: LanControlStateStore | None = None,
     command_store: LanCommandStore | None = None,
+    task_config_store: TaskConfigStore | None = None,
 ) -> FastAPI:
     active_settings = settings or get_settings()
     active_token = (
@@ -61,6 +72,9 @@ def create_api(
     )
     store = state_store if state_store is not None else LanControlStateStore(state_path)
     commands = command_store if command_store is not None else LanCommandStore(command_directory)
+    task_configs = task_config_store or TaskConfigStore(
+        active_settings.data_dir / "runtime" / "task_configs.json"
+    )
     modules = {module.module_id: module for module in DEFAULT_MODULES}
 
     api = FastAPI(
@@ -70,6 +84,7 @@ def create_api(
     api.state.lan_token = active_token
     api.state.lan_state_store = store
     api.state.lan_command_store = commands
+    api.state.task_config_store = task_configs
 
     def authorize(provided_token: str) -> None:
         if not secrets.compare_digest(provided_token, active_token):
@@ -110,6 +125,11 @@ def create_api(
                     "title": module.title,
                     "status": module.status,
                     "remote_start_available": (module.module_id in REMOTE_GAZE_MODULE_IDS),
+                    "config_revision": (
+                        task_configs.load(module.module_id).revision
+                        if module.module_id in REMOTE_GAZE_MODULE_IDS
+                        else None
+                    ),
                 }
                 for module in DEFAULT_MODULES
             ],
@@ -162,6 +182,43 @@ def create_api(
         authorize(token)
         return [command.to_dict() for command in commands.list_commands(limit=limit)]
 
+    @api.get("/api/v1/task-configs/{module_id}", tags=["task-configs"])
+    def get_task_config(
+        module_id: str,
+        token: Annotated[str, Query(min_length=8)],
+    ) -> dict[str, object]:
+        authorize(token)
+
+        try:
+            return task_configs.load(module_id).to_dict()
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @api.put(
+        "/api/v1/task-configs/{module_id}",
+        tags=["task-configs"],
+        response_model=None,
+    )
+    def update_task_config(
+        module_id: str,
+        request: TaskConfigUpdateRequest,
+        token: Annotated[str, Query(min_length=8)],
+    ) -> dict[str, object] | JSONResponse:
+        authorize(token)
+
+        try:
+            return task_configs.save(
+                module_id,
+                request.config,
+                expected_revision=request.revision,
+            ).to_dict()
+        except TaskConfigConflict as error:
+            return JSONResponse(status_code=409, content=error.current.to_dict())
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
     @api.post("/api/v1/commands", tags=["desktop-commands"])
     def submit_command(
         request: DesktopCommandRequest,
@@ -179,13 +236,35 @@ def create_api(
                 detail="This task is not available for remote start.",
             )
 
+        if request.command_type is LanCommandType.START_TASK and request.config_revision is None:
+            raise HTTPException(
+                status_code=422,
+                detail="start_task requires config_revision.",
+            )
+
+        if (
+            request.command_type is not LanCommandType.START_TASK
+            and request.config_revision is not None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="config_revision is only valid for start_task.",
+            )
+
         if request.command_type is LanCommandType.OPEN_PATIENT_DISPLAY and module_id is not None:
             raise HTTPException(
                 status_code=422,
                 detail="open_patient_display does not accept module_id.",
             )
 
-        payload = {"module_id": module_id} if module_id is not None else {}
+        payload: dict[str, object] = {}
+
+        if module_id is not None:
+            payload["module_id"] = module_id
+
+        if request.config_revision is not None:
+            payload["config_revision"] = request.config_revision
+
         return commands.submit(request.command_type, payload=payload).to_dict()
 
     return api

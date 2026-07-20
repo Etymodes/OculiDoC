@@ -14,6 +14,7 @@ def is_frozen_application() -> bool:
 def gaze_task_process_command(
     command: str,
     *,
+    config_revision: int | None = None,
     executable: str | Path | None = None,
     frozen: bool | None = None,
 ) -> tuple[str, list[str]]:
@@ -32,6 +33,13 @@ def gaze_task_process_command(
         if frozen_mode
         else ["-m", "oculidoc.tasks", normalized_command]
     )
+
+    if config_revision is not None:
+        if config_revision < 0:
+            raise ValueError("config_revision cannot be negative.")
+
+        arguments.extend(["--direct", "--config-revision", str(config_revision)])
+
     return program, arguments
 
 

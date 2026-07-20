@@ -78,6 +78,25 @@ def test_tracking_setup_uses_new_defaults(
     assert dialog.path_combo.findData(TargetPath.Z) >= 0
 
 
+def test_tracking_setup_loads_shared_config(qtbot: QtBot) -> None:
+    shared = TrackingBallConfig(
+        path=TargetPath.VERTICAL,
+        diameter_px=180,
+        background_color="#fff4cc",
+        dwell_hit_radius_scale=1.4,
+        show_gaze_cursor=False,
+    )
+    dialog = TrackingBallSetupDialog(config=shared)
+    qtbot.addWidget(dialog)
+
+    assert TargetPath(dialog.path_combo.currentData()) is TargetPath.VERTICAL
+    assert dialog.diameter_spin.value() == 180
+    assert dialog.background_color_edit.text() == "#fff4cc"
+    assert dialog.hit_radius_spin.value() == 1.4
+    assert not dialog.show_gaze_cursor_check.isChecked()
+    assert dialog.build_config() == shared
+
+
 def test_scored_options_randomize_logical_sides(
     qtbot: QtBot,
 ) -> None:
@@ -203,8 +222,9 @@ def test_question_setup_loads_and_saves_templates(
     dialog.question_type_buttons[BinaryQuestionType.QUESTION_ANSWER].setChecked(True)
     dialog._refresh_option_labels()
 
-    assert dialog.option_1_label.text() == "正确选项："
-    assert dialog.option_2_label.text() == "错误选项："
+    assert dialog.option_1_label.text() == "选项1："
+    assert dialog.option_2_label.text() == "选项2："
+    assert dialog.correct_option_combo.isEnabled()
 
     dialog.question_edit.setText("三加二等于几？")
     dialog.option_1_edit.setText("五")
@@ -221,6 +241,43 @@ def test_question_setup_loads_and_saves_templates(
     assert config.option_2 == "六"
     assert config.correct_option_id == "option_1"
     assert config.randomize_sides is True
+
+
+def test_question_setup_loads_shared_config(qtbot: QtBot, tmp_path: Path) -> None:
+    shared = BinaryQuestionConfig(
+        question="香蕉是哪一个？",
+        option_1="狮子",
+        option_2="香蕉",
+        question_type=BinaryQuestionType.QUESTION_ANSWER,
+        correct_option_id="option_2",
+        neutral_zone_width=0.14,
+        randomize_sides=False,
+    )
+    dialog = BinaryQuestionSetupDialog(
+        question_bank_path=tmp_path / "common_questions.json",
+        config=shared,
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog.question_edit.text() == "香蕉是哪一个？"
+    assert dialog.correct_option_combo.currentData() == "option_2"
+    assert dialog.neutral_zone_spin.value() == 0.14
+    assert not dialog.randomize_sides_check.isChecked()
+    assert dialog.build_config() == shared
+
+
+def test_question_setup_preserves_unavailable_font(qtbot: QtBot, tmp_path: Path) -> None:
+    shared = BinaryQuestionConfig(
+        question="请选择",
+        question_font_family="OculiDoC Missing Test Font",
+    )
+    dialog = BinaryQuestionSetupDialog(
+        question_bank_path=tmp_path / "common_questions.json",
+        config=shared,
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog.build_config().question_font_family == shared.question_font_family
 
 
 def test_question_store_updates_custom_template_in_place(

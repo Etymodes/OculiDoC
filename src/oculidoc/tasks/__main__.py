@@ -12,6 +12,12 @@ from PySide6.QtWidgets import (
 from oculidoc.app import create_qt_application
 from oculidoc.config import get_settings
 from oculidoc.experiments.task_runtime import RecordedTaskRuntime
+from oculidoc.task_configs import (
+    TaskConfigConflict,
+    TaskConfigStore,
+    task_config_from_dict,
+    task_config_to_dict,
+)
 from oculidoc.tasks.binary_question import (
     BinaryQuestionSetupDialog,
     BinaryQuestionTask,
@@ -39,19 +45,61 @@ def main(
             "binary",
         ),
     )
+    parser.add_argument("--direct", action="store_true")
+    parser.add_argument("--config-revision", type=int)
     args = parser.parse_args(argv)
+
+    if args.direct != (args.config_revision is not None):
+        parser.error("--direct and --config-revision must be used together.")
 
     app = create_qt_application()
     settings = get_settings()
     allow_mouse_fallback = settings.gaze_source == "mock"
+    module_id = "tracking_ball" if args.task == "tracking" else "binary_horizontal"
+    config_store = TaskConfigStore(settings.data_dir / "runtime" / "task_configs.json")
+    record = config_store.load(module_id)
+    config = task_config_from_dict(module_id, record.config)
 
-    if args.task == "tracking":
-        setup = TrackingBallSetupDialog()
+    if args.direct:
+        if args.config_revision != record.revision:
+            raise SystemExit(
+                "Task config revision changed before launch: "
+                f"requested {args.config_revision}, current {record.revision}."
+            )
+    elif args.task == "tracking":
+        setup = TrackingBallSetupDialog(config=config)
 
         if setup.exec() != QDialog.DialogCode.Accepted:
             return 0
 
         config = setup.build_config()
+    else:
+        setup = BinaryQuestionSetupDialog(
+            question_bank_path=(settings.data_dir / "common_questions.json"),
+            config=config,
+        )
+
+        if setup.exec() != QDialog.DialogCode.Accepted:
+            return 0
+
+        config = setup.build_config()
+
+    if not args.direct:
+        try:
+            config_store.save(
+                module_id,
+                task_config_to_dict(config),
+                expected_revision=record.revision,
+            )
+        except TaskConfigConflict:
+            QMessageBox.warning(
+                setup,
+                "任务设置已更新",
+                "手机端已修改这项任务设置。请关闭后重新打开设置窗口。",
+            )
+            return 2
+
+    if args.task == "tracking":
         task = TrackingBallTask(
             config,
             allow_mouse_fallback=(allow_mouse_fallback),
@@ -59,14 +107,6 @@ def main(
         title = "追踪球"
         duration_seconds = config.duration_seconds
     else:
-        setup = BinaryQuestionSetupDialog(
-            question_bank_path=(settings.data_dir / "common_questions.json")
-        )
-
-        if setup.exec() != QDialog.DialogCode.Accepted:
-            return 0
-
-        config = setup.build_config()
         task = BinaryQuestionTask(
             config,
             allow_mouse_fallback=(allow_mouse_fallback),

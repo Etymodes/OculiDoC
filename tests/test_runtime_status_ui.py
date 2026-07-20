@@ -201,21 +201,56 @@ def test_desktop_accepts_remote_start_after_validation(
     window.current_patient = object()
     window.experiment_session_service = object()
 
-    def fake_open(module) -> None:
+    launched: list[int | None] = []
+
+    def fake_open(module, *, config_revision=None) -> None:
+        launched.append(config_revision)
         window._active_gaze_module_ids.add(module.module_id)
 
     monkeypatch.setattr(window, "_open_gaze_task_module", fake_open)
     command = window._lan_command_store.submit(
         LanCommandType.START_TASK,
-        payload={"module_id": "tracking_ball"},
+        payload={"module_id": "tracking_ball", "config_revision": 0},
     )
 
     window._poll_lan_commands()
 
     completed = window._lan_command_store.load(command.command_id)
     assert completed.status is LanCommandStatus.COMPLETED
-    assert "设置窗口" in completed.message
+    assert "直接启动" in completed.message
+    assert launched == [0]
     assert window._lan_state_store.load().mode == "ready"
+
+
+def test_desktop_rejects_remote_start_with_stale_config(
+    qtbot: QtBot,
+    tmp_path,
+) -> None:
+    from oculidoc.lan_commands import (
+        LanCommandStatus,
+        LanCommandType,
+    )
+
+    window = AdminMainWindow(Settings(environment="test", data_dir=tmp_path, gaze_source="mock"))
+    qtbot.addWidget(window)
+    window.current_patient = object()
+    window.experiment_session_service = object()
+    record = window._task_config_store.load("tracking_ball")
+    window._task_config_store.save(
+        "tracking_ball",
+        record.config,
+        expected_revision=record.revision,
+    )
+    command = window._lan_command_store.submit(
+        LanCommandType.START_TASK,
+        payload={"module_id": "tracking_ball", "config_revision": 0},
+    )
+
+    window._poll_lan_commands()
+
+    rejected = window._lan_command_store.load(command.command_id)
+    assert rejected.status is LanCommandStatus.REJECTED
+    assert "设置已更新" in rejected.message
 
 
 def test_desktop_rejects_stop_without_running_task(

@@ -11,6 +11,7 @@ from oculidoc.lan_control import (
     LanControlStateStore,
     build_control_url,
 )
+from oculidoc.task_configs import TaskConfigStore
 
 
 def test_lan_control_state_round_trip(
@@ -73,6 +74,7 @@ def test_mobile_api_controls_patient_display(
     )
     assert control_page.status_code == 200
     assert "OculiDoC 手机管理员端" in control_page.text
+    assert "保存并直接启动" in control_page.text
 
     sent = client.post(
         "/api/v1/patient-display/text",
@@ -143,9 +145,11 @@ def test_mobile_api_submits_desktop_commands(
         json={
             "command_type": "start_task",
             "module_id": "tracking_ball",
+            "config_revision": 0,
         },
     )
     assert started.status_code == 200
+    assert started.json()["payload"]["config_revision"] == 0
 
     unsupported = client.post(
         "/api/v1/commands",
@@ -153,6 +157,7 @@ def test_mobile_api_submits_desktop_commands(
         json={
             "command_type": "start_task",
             "module_id": "screen_keyboard",
+            "config_revision": 0,
         },
     )
     assert unsupported.status_code == 422
@@ -163,3 +168,41 @@ def test_mobile_api_submits_desktop_commands(
     )
     assert listed.status_code == 200
     assert len(listed.json()) == 2
+
+
+def test_mobile_api_synchronizes_versioned_task_configs(tmp_path: Path) -> None:
+    task_configs = TaskConfigStore(tmp_path / "task_configs.json")
+    api = create_api(
+        Settings(environment="test", data_dir=tmp_path, gaze_source="mock"),
+        token="secret-pairing-token",
+        task_config_store=task_configs,
+    )
+    client = TestClient(api)
+    parameters = {"token": "secret-pairing-token"}
+
+    loaded = client.get("/api/v1/task-configs/tracking_ball", params=parameters)
+    assert loaded.status_code == 200
+    assert loaded.json()["revision"] == 0
+
+    config = loaded.json()["config"]
+    config["diameter_px"] = 160
+    saved = client.put(
+        "/api/v1/task-configs/tracking_ball",
+        params=parameters,
+        json={"revision": 0, "config": config},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["revision"] == 1
+    assert saved.json()["config"]["diameter_px"] == 160
+
+    conflict = client.put(
+        "/api/v1/task-configs/tracking_ball",
+        params=parameters,
+        json={"revision": 0, "config": config},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json() == saved.json()
+
+    runtime = client.get("/api/v1/runtime", params=parameters)
+    modules = {item["module_id"]: item for item in runtime.json()["modules"]}
+    assert modules["tracking_ball"]["config_revision"] == 1

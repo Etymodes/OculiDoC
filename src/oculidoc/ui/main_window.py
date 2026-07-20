@@ -68,6 +68,7 @@ from oculidoc.process_launch import (
     gaze_task_process_command,
     local_api_process_command,
 )
+from oculidoc.task_configs import TaskConfigStore
 from oculidoc.ui.lan_pairing import (
     HoverPairingButton,
     LanPairingDialog,
@@ -128,6 +129,9 @@ class AdminMainWindow(QMainWindow):
             self.settings.data_dir.expanduser() / "runtime" / "lan_commands"
         ).resolve()
         self._lan_command_store = LanCommandStore(self._lan_command_directory)
+        self._task_config_store = TaskConfigStore(
+            self.settings.data_dir.expanduser() / "runtime" / "task_configs.json"
+        )
         self._lan_control_url = build_control_url(
             self._lan_host,
             self.settings.admin_port,
@@ -712,6 +716,7 @@ class AdminMainWindow(QMainWindow):
 
     def _execute_remote_task_start(self, command: LanCommand) -> str:
         module_id = command.module_id
+        config_revision = command.config_revision
 
         if module_id not in REMOTE_GAZE_MODULE_IDS:
             raise LanCommandRejected("该模块尚不支持手机远程启动。")
@@ -733,17 +738,27 @@ class AdminMainWindow(QMainWindow):
         if module_id in self._active_gaze_module_ids:
             raise LanCommandRejected("该任务已经在启动、设置或运行中。")
 
+        if config_revision is None:
+            raise LanCommandRejected("远程启动缺少任务设置版本。")
+
+        current_config = self._task_config_store.load(module_id)
+
+        if current_config.revision != config_revision:
+            raise LanCommandRejected(
+                f"任务设置已更新，请在手机端刷新后重新启动。当前版本：{current_config.revision}。"
+            )
+
         self._lan_state_store.set_display(
-            f"任务准备：{module.title}\n等待管理员确认设置",
+            f"任务准备：{module.title}\n正在使用已保存设置启动",
             mode="ready",
             task_id=module_id,
         )
-        self._open_gaze_task_module(module)
+        self._open_gaze_task_module(module, config_revision=config_revision)
 
         if module_id not in self._active_gaze_module_ids:
             raise LanCommandRejected("任务进程未能启动，请查看电脑端提示。")
 
-        return f"{module.title}设置窗口已在电脑端打开；当前版本仍需在电脑端确认设置。"
+        return f"{module.title}已按设置版本 {config_revision} 直接启动。"
 
     def _execute_remote_task_stop(self, command: LanCommand) -> str:
         module_id = command.module_id
@@ -1052,6 +1067,8 @@ class AdminMainWindow(QMainWindow):
     def _open_gaze_task_module(
         self,
         module: ModuleDefinition,
+        *,
+        config_revision: int | None = None,
     ) -> None:
         """Create a patient session and launch a gaze task."""
 
@@ -1102,8 +1119,15 @@ class AdminMainWindow(QMainWindow):
                 "OCULIDOC_GAZE_SOURCE",
                 self.settings.gaze_source,
             )
+            environment.insert(
+                "OCULIDOC_DATA_DIR",
+                str(self.settings.data_dir),
+            )
             process.setProcessEnvironment(environment)
-            program, arguments = gaze_task_process_command(launch.command)
+            program, arguments = gaze_task_process_command(
+                launch.command,
+                config_revision=config_revision,
+            )
             process.setProgram(program)
             process.setArguments(arguments)
             process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)

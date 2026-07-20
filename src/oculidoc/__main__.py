@@ -35,18 +35,14 @@ def dispatch(
         return 0
 
     if arguments[:1] == ["--task"]:
-        if len(arguments) != 2:
-            raise SystemExit("--task requires exactly one task command.")
+        if len(arguments) < 2:
+            raise SystemExit("--task requires a task command.")
 
         from oculidoc.tasks.__main__ import (
             main as run_task,
         )
 
-        return run_task(
-            [
-                arguments[1],
-            ]
-        )
+        return run_task(arguments[1:])
 
     if arguments:
         raise SystemExit("Unsupported OculiDoC arguments: " + " ".join(arguments))

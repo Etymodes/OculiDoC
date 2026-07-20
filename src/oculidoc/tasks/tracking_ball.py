@@ -23,6 +23,7 @@ from PySide6.QtGui import (
     QPolygonF,
 )
 from PySide6.QtWidgets import (
+    QCheckBox,
     QColorDialog,
     QComboBox,
     QDialog,
@@ -1136,10 +1137,13 @@ class TrackingBallSetupDialog(QDialog):
     def __init__(
         self,
         parent: QWidget | None = None,
+        *,
+        config: TrackingBallConfig | None = None,
     ) -> None:
         super().__init__(parent)
+        initial = config or TrackingBallConfig()
         self.setWindowTitle("追踪球设置")
-        self.resize(480, 360)
+        self.resize(560, 700)
 
         form = QFormLayout()
 
@@ -1160,6 +1164,7 @@ class TrackingBallSetupDialog(QDialog):
             "星形",
             TargetShape.STAR,
         )
+        self.shape_combo.setCurrentIndex(self.shape_combo.findData(initial.shape))
         form.addRow(
             "目标形状：",
             self.shape_combo,
@@ -1190,6 +1195,7 @@ class TrackingBallSetupDialog(QDialog):
             "平滑随机运动",
             TargetPath.RANDOM,
         )
+        self.path_combo.setCurrentIndex(self.path_combo.findData(initial.path))
         form.addRow(
             "运动轨迹：",
             self.path_combo,
@@ -1208,6 +1214,7 @@ class TrackingBallSetupDialog(QDialog):
             "旋转",
             TargetEffect.SPIN,
         )
+        self.effect_combo.setCurrentIndex(self.effect_combo.findData(initial.effect))
         form.addRow(
             "动画效果：",
             self.effect_combo,
@@ -1215,7 +1222,7 @@ class TrackingBallSetupDialog(QDialog):
 
         self.diameter_spin = QSpinBox()
         self.diameter_spin.setRange(16, 600)
-        self.diameter_spin.setValue(300)
+        self.diameter_spin.setValue(initial.diameter_px)
         self.diameter_spin.setSuffix(" px")
         form.addRow(
             "目标直径：",
@@ -1224,7 +1231,7 @@ class TrackingBallSetupDialog(QDialog):
 
         self.period_spin = QDoubleSpinBox()
         self.period_spin.setRange(1.0, 120.0)
-        self.period_spin.setValue(12.0)
+        self.period_spin.setValue(initial.period_seconds)
         self.period_spin.setSingleStep(0.5)
         self.period_spin.setSuffix(" 秒/周期")
         form.addRow(
@@ -1237,7 +1244,7 @@ class TrackingBallSetupDialog(QDialog):
             5,
             3_600,
         )
-        self.duration_spin.setValue(60)
+        self.duration_spin.setValue(initial.duration_seconds)
         self.duration_spin.setSuffix(" 秒")
         form.addRow(
             "任务时长：",
@@ -1249,7 +1256,7 @@ class TrackingBallSetupDialog(QDialog):
             100,
             10_000,
         )
-        self.dwell_time_spin.setValue(900)
+        self.dwell_time_spin.setValue(initial.dwell_time_ms)
         self.dwell_time_spin.setSingleStep(100)
         self.dwell_time_spin.setSuffix(" ms")
         form.addRow(
@@ -1258,7 +1265,7 @@ class TrackingBallSetupDialog(QDialog):
         )
 
         color_row = QHBoxLayout()
-        self.color_edit = QLineEdit("#ffcc00")
+        self.color_edit = QLineEdit(initial.color)
         color_button = QPushButton("选择颜色")
         color_button.clicked.connect(self._select_color)
         color_row.addWidget(self.color_edit, 1)
@@ -1269,7 +1276,7 @@ class TrackingBallSetupDialog(QDialog):
         )
 
         image_row = QHBoxLayout()
-        self.image_edit = QLineEdit()
+        self.image_edit = QLineEdit(initial.image_path or "")
         image_button = QPushButton("选择图片")
         image_button.clicked.connect(self._select_image)
         image_row.addWidget(self.image_edit, 1)
@@ -1278,6 +1285,25 @@ class TrackingBallSetupDialog(QDialog):
             "填充图片：",
             image_row,
         )
+
+        self.hit_radius_spin = QDoubleSpinBox()
+        self.hit_radius_spin.setRange(0.5, 2.5)
+        self.hit_radius_spin.setSingleStep(0.05)
+        self.hit_radius_spin.setValue(initial.dwell_hit_radius_scale)
+        form.addRow("命中范围倍率：", self.hit_radius_spin)
+
+        self.background_color_edit = QLineEdit(initial.background_color)
+        form.addRow("背景颜色：", self.background_color_edit)
+
+        self.feedback_color_edit = QLineEdit(initial.dwell_feedback_color)
+        form.addRow("命中反馈颜色：", self.feedback_color_edit)
+
+        self.outline_color_edit = QLineEdit(initial.dwell_outline_color)
+        form.addRow("目标轮廓颜色：", self.outline_color_edit)
+
+        self.show_gaze_cursor_check = QCheckBox("在任务中显示实时视线光标")
+        self.show_gaze_cursor_check.setChecked(initial.show_gaze_cursor)
+        form.addRow("视线反馈：", self.show_gaze_cursor_check)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -1322,4 +1348,9 @@ class TrackingBallSetupDialog(QDialog):
             period_seconds=(self.period_spin.value()),
             duration_seconds=self.duration_spin.value(),
             dwell_time_ms=(self.dwell_time_spin.value()),
+            dwell_feedback_color=self.feedback_color_edit.text(),
+            dwell_outline_color=self.outline_color_edit.text(),
+            dwell_hit_radius_scale=self.hit_radius_spin.value(),
+            background_color=self.background_color_edit.text(),
+            show_gaze_cursor=self.show_gaze_cursor_check.isChecked(),
         )

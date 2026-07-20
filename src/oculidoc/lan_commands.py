@@ -85,6 +85,23 @@ class LanCommand:
         normalized = str(value).strip()
         return normalized or None
 
+    @property
+    def config_revision(self) -> int | None:
+        value = self.payload.get("config_revision")
+
+        if value is None:
+            return None
+
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError("config_revision must be an integer.")
+
+        revision = value
+
+        if revision < 0:
+            raise ValueError("config_revision cannot be negative.")
+
+        return revision
+
     def to_dict(self) -> dict[str, object]:
         return {
             "command_id": self.command_id,
