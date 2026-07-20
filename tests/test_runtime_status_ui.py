@@ -4,6 +4,7 @@ from pytestqt.qtbot import QtBot
 
 import oculidoc.ui.main_window as main_window_module
 from oculidoc.config import Settings
+from oculidoc.devices.preflight import GazePreflightResult, GazePreflightStore
 from oculidoc.lan_control import PatientDisplayMode
 from oculidoc.ui.main_window import AdminMainWindow
 
@@ -21,7 +22,8 @@ def test_main_window_displays_native_tobii_source(
     )
     qtbot.addWidget(window)
 
-    assert window.gaze_status_label.text() == ("眼动源：Tobii Eye Tracker 5 · 原生 Stream Engine")
+    assert window.gaze_status_label.text() == ("眼动源：Tobii Eye Tracker 5 · 尚未预检")
+    assert "#b42318" in window.gaze_status_label.styleSheet()
 
 
 def test_main_window_marks_mock_source(
@@ -37,7 +39,71 @@ def test_main_window_marks_mock_source(
     )
     qtbot.addWidget(window)
 
-    assert window.gaze_status_label.text() == "眼动源：模拟数据源"
+    assert window.gaze_status_label.text() == "眼动源：模拟模式（仅工程测试）"
+    assert "#6b7280" in window.gaze_status_label.styleSheet()
+
+
+def test_main_window_displays_latest_live_gaze_quality(qtbot: QtBot, tmp_path) -> None:
+    GazePreflightStore(tmp_path / "runtime" / "gaze_preflight.json").save(
+        GazePreflightResult(
+            source="tobii_stream_engine",
+            device_name="Tobii Eye Tracker 5",
+            device_url="tobii://device-1",
+            library_path="C:/Tobii/tobii_stream_engine.dll",
+            duration_seconds=3.0,
+            sample_count=99,
+            valid_sample_count=98,
+            sample_rate_hz=33.0,
+            valid_ratio=98 / 99,
+            minimum_valid_ratio=0.60,
+            passed=True,
+            error=None,
+            updated_at_utc="2026-07-20T00:00:00+00:00",
+        )
+    )
+    window = AdminMainWindow(
+        Settings(
+            environment="test",
+            data_dir=tmp_path,
+            gaze_source="tobii_stream_engine",
+        )
+    )
+    qtbot.addWidget(window)
+
+    assert "33 Hz" in window.gaze_status_label.text()
+    assert "有效率 99%" in window.gaze_status_label.text()
+    assert "#176b36" in window.gaze_status_label.styleSheet()
+
+
+def test_main_window_marks_low_live_validity_yellow(qtbot: QtBot, tmp_path) -> None:
+    GazePreflightStore(tmp_path / "runtime" / "gaze_preflight.json").save(
+        GazePreflightResult(
+            source="tobii_stream_engine",
+            device_name="Tobii Eye Tracker 5",
+            device_url="tobii://device-1",
+            library_path=None,
+            duration_seconds=3.0,
+            sample_count=90,
+            valid_sample_count=20,
+            sample_rate_hz=30.0,
+            valid_ratio=20 / 90,
+            minimum_valid_ratio=0.60,
+            passed=False,
+            error="有效率低于要求",
+            updated_at_utc="2026-07-20T00:00:00+00:00",
+        )
+    )
+    window = AdminMainWindow(
+        Settings(
+            environment="test",
+            data_dir=tmp_path,
+            gaze_source="tobii_stream_engine",
+        )
+    )
+    qtbot.addWidget(window)
+
+    assert "有效率不足" in window.gaze_status_label.text()
+    assert "#8a5a00" in window.gaze_status_label.styleSheet()
 
 
 def test_main_window_exposes_lan_pairing_status(

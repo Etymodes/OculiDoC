@@ -1,6 +1,9 @@
 """Qt worker for simulated or bridged gaze input."""
 
 from contextlib import suppress
+from dataclasses import replace
+from datetime import UTC, datetime
+from time import monotonic
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -10,7 +13,14 @@ from oculidoc.devices.contracts import (
     EyeTrackerDevice,
 )
 from oculidoc.devices.errors import (
+    DeviceConnectionError,
     DeviceStreamEndedError,
+)
+from oculidoc.devices.preflight import (
+    GazePreflightResult,
+    GazePreflightStore,
+    failed_gaze_preflight,
+    run_gaze_preflight,
 )
 from oculidoc.devices.simulated import (
     SimulatedEyeTrackerDevice,
@@ -58,6 +68,7 @@ class GazeStreamWorker(QThread):
     """Read eye-tracker samples away from the Qt UI thread."""
 
     sample_received = Signal(object)
+    preflight_completed = Signal(object)
     status_changed = Signal(str)
     stream_error = Signal(str)
 
@@ -65,22 +76,61 @@ class GazeStreamWorker(QThread):
         self,
         settings: Settings,
         parent: QObject | None = None,
+        *,
+        preflight_seconds: float | None = None,
+        preflight_store: GazePreflightStore | None = None,
     ) -> None:
         super().__init__(parent)
+        if preflight_seconds is not None and preflight_seconds < 0:
+            raise ValueError("preflight_seconds cannot be negative.")
+
+        self._settings = settings
         self._device = create_eye_tracker(settings)
+        self._preflight_seconds = preflight_seconds
+        self._preflight_store = preflight_store
+        self._sample_delivery_enabled = preflight_seconds is None
 
     @property
     def device(self) -> EyeTrackerDevice:
         return self._device
 
+    def enable_sample_delivery(self) -> None:
+        """Forward subsequent live samples after preflight and countdown."""
+        self._sample_delivery_enabled = True
+
     def run(self) -> None:
+        preflight_result: GazePreflightResult | None = None
+
         try:
             self.status_changed.emit("正在连接眼动源")
             self._device.connect()
             self.status_changed.emit(f"已连接：{self._device.info.name}")
 
             self._device.start_stream()
+
+            if self._preflight_seconds is not None:
+                self.status_changed.emit(
+                    f"设备预检中：{self._device.info.name} · {self._preflight_seconds:g} 秒"
+                )
+                preflight_result = run_gaze_preflight(
+                    self._device,
+                    source=self._settings.gaze_source,
+                    duration_seconds=self._preflight_seconds,
+                    minimum_valid_ratio=self._settings.gaze_minimum_valid_ratio,
+                )
+
+                if self._preflight_store is not None:
+                    self._preflight_store.save(preflight_result)
+
+                self.preflight_completed.emit(preflight_result)
+
+                if not preflight_result.passed:
+                    raise DeviceConnectionError(preflight_result.error or "眼动设备预检未通过。")
+
             self.status_changed.emit(f"采集中：{self._device.info.name}")
+            live_started_at = monotonic()
+            live_sample_count = 0
+            live_valid_sample_count = 0
 
             while not self.isInterruptionRequested():
                 try:
@@ -93,9 +143,49 @@ class GazeStreamWorker(QThread):
 
                     raise
 
-                self.sample_received.emit(sample)
+                if self._sample_delivery_enabled:
+                    self.sample_received.emit(sample)
+                live_sample_count += 1
+                live_valid_sample_count += int(sample.gaze_valid)
+                live_elapsed = monotonic() - live_started_at
+
+                if (
+                    preflight_result is not None
+                    and self._preflight_store is not None
+                    and live_elapsed >= 1.0
+                ):
+                    valid_ratio = live_valid_sample_count / live_sample_count
+                    self._preflight_store.save(
+                        replace(
+                            preflight_result,
+                            duration_seconds=live_elapsed,
+                            sample_count=live_sample_count,
+                            valid_sample_count=live_valid_sample_count,
+                            sample_rate_hz=live_sample_count / live_elapsed,
+                            valid_ratio=valid_ratio,
+                            passed=(valid_ratio >= self._settings.gaze_minimum_valid_ratio),
+                            error=None,
+                            updated_at_utc=datetime.now(UTC).isoformat(),
+                        )
+                    )
+                    live_started_at = monotonic()
+                    live_sample_count = 0
+                    live_valid_sample_count = 0
         except Exception as error:
             if not self.isInterruptionRequested():
+                if preflight_result is None:
+                    preflight_result = failed_gaze_preflight(
+                        source=self._settings.gaze_source,
+                        device_name=self._device.info.name,
+                        minimum_valid_ratio=self._settings.gaze_minimum_valid_ratio,
+                        error=str(error),
+                    )
+
+                    if self._preflight_store is not None:
+                        self._preflight_store.save(preflight_result)
+
+                    self.preflight_completed.emit(preflight_result)
+
                 self.stream_error.emit(str(error))
         finally:
             if self._device.state is DeviceState.STREAMING:

@@ -293,7 +293,15 @@ async function refresh() {
       running: "任务进行中", paused: "已暂停", result: "任务结束", error: "异常"
     };
     document.getElementById("online").textContent = "本地后台在线";
-    document.getElementById("gaze").textContent = "眼动源：" + runtime.gaze_source;
+    const preflight = runtime.gaze_preflight;
+    let gazeText = "眼动源：" +
+      (runtime.gaze_source === "mock" ? "模拟模式（仅工程测试）" : runtime.gaze_source);
+    if (preflight && preflight.source === runtime.gaze_source) {
+      gazeText += " · " + Math.round(preflight.sample_rate_hz) + " Hz" +
+        " · 有效率 " + Math.round(preflight.valid_ratio * 100) + "%";
+      if (preflight.device_url) gazeText += "\n设备 URL：" + preflight.device_url;
+    }
+    document.getElementById("gaze").textContent = gazeText;
     document.getElementById("display").textContent =
       runtime.patient_display.text + "\n\n状态：" +
       (displayLabels[runtime.patient_display.mode] || runtime.patient_display.mode);

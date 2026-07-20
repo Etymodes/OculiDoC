@@ -44,7 +44,8 @@ from oculidoc.application.gaze_task_session import (
 from oculidoc.branding import (
     brand_mark_pixmap,
 )
-from oculidoc.config import Settings
+from oculidoc.config import GazeDeviceConfig, GazeDeviceConfigStore, Settings
+from oculidoc.devices.preflight import GazePreflightResult, GazePreflightStore
 from oculidoc.domain import Patient
 from oculidoc.domain.experiment_session import (
     ExperimentSessionStatus,
@@ -73,6 +74,7 @@ from oculidoc.process_launch import (
     local_api_process_command,
 )
 from oculidoc.task_configs import TaskConfigStore
+from oculidoc.ui.device_settings import DeviceSettingsDialog
 from oculidoc.ui.lan_pairing import (
     HoverPairingButton,
     LanPairingDialog,
@@ -137,6 +139,10 @@ class AdminMainWindow(QMainWindow):
         self._lan_command_store = LanCommandStore(self._lan_command_directory)
         self._task_config_store = TaskConfigStore(
             self.settings.data_dir.expanduser() / "runtime" / "task_configs.json"
+        )
+        self._gaze_device_config_store = GazeDeviceConfigStore.for_settings(self.settings)
+        self._gaze_preflight_store = GazePreflightStore(
+            self.settings.data_dir.expanduser() / "runtime" / "gaze_preflight.json"
         )
         self._lan_control_url = build_control_url(
             self._lan_host,
@@ -265,16 +271,62 @@ class AdminMainWindow(QMainWindow):
         return f"患者数据：已初始化 · 总计 {total_count} · 启用 {active_count}"
 
     def _gaze_source_status_text(self) -> str:
-        """Return the configured gaze source without pretending it is live."""
+        """Return configured source plus the latest measured live quality."""
+        preflight = self._current_gaze_preflight()
+
+        if self.settings.gaze_source == "mock":
+            if preflight is None:
+                return "眼动源：模拟模式（仅工程测试）"
+
+            return (
+                "眼动源：模拟模式（仅工程测试）"
+                f" · {preflight.sample_rate_hz:.0f} Hz"
+                f" · 有效率 {preflight.valid_ratio:.0%}"
+            )
+
         labels = {
-            "mock": "眼动源：模拟数据源",
-            "tobii_stream_engine": ("眼动源：Tobii Eye Tracker 5 · 原生 Stream Engine"),
-            "tobii_legacy_bridge": "眼动源：Tobii 兼容桥接",
+            "tobii_stream_engine": "Tobii Eye Tracker 5",
+            "tobii_legacy_bridge": "Tobii 兼容桥接",
         }
-        return labels.get(
-            self.settings.gaze_source,
-            f"眼动源：{self.settings.gaze_source}",
+        source_name = labels.get(self.settings.gaze_source, self.settings.gaze_source)
+
+        if preflight is None:
+            return f"眼动源：{source_name} · 尚未预检"
+
+        connection = "已连接" if self._active_gaze_module_ids else "最近预检"
+        suffix = (
+            f"{connection} · {preflight.sample_rate_hz:.0f} Hz · 有效率 {preflight.valid_ratio:.0%}"
         )
+        if preflight.error and preflight.sample_count == 0:
+            suffix = f"预检失败 · {preflight.error}"
+        elif not preflight.passed:
+            suffix = (
+                f"有效率不足 · {preflight.sample_rate_hz:.0f} Hz"
+                f" · 有效率 {preflight.valid_ratio:.0%}"
+            )
+        return f"眼动源：{source_name} · {suffix}"
+
+    def _current_gaze_preflight(self) -> GazePreflightResult | None:
+        result = self._gaze_preflight_store.load()
+        if result is None or result.source != self.settings.gaze_source:
+            return None
+        return result
+
+    def _refresh_gaze_status(self) -> None:
+        if not hasattr(self, "gaze_status_label"):
+            return
+
+        result = self._current_gaze_preflight()
+        color = "#6b7280"
+        if self.settings.gaze_source != "mock":
+            if result is None or (result.error and result.sample_count == 0):
+                color = "#b42318"
+            elif result.passed:
+                color = "#176b36"
+            else:
+                color = "#8a5a00"
+        self.gaze_status_label.setText(self._gaze_source_status_text())
+        self.gaze_status_label.setStyleSheet(f"color:{color}; font-weight:700;")
 
     def _build_header(
         self,
@@ -461,6 +513,9 @@ class AdminMainWindow(QMainWindow):
 
         self.gaze_status_label = QLabel(self._gaze_source_status_text())
         self.gaze_status_label.setObjectName("subtitle")
+        self.device_settings_button = QPushButton("设备设置")
+        self.device_settings_button.setObjectName("secondaryButton")
+        self.device_settings_button.clicked.connect(self._open_device_settings)
 
         self.backend_status_button = HoverPairingButton(self._backend_status_text())
         self.backend_status_button.setObjectName("backendStatusButton")
@@ -473,11 +528,37 @@ class AdminMainWindow(QMainWindow):
         self.patient_status_label.setObjectName("subtitle")
 
         layout.addWidget(self.gaze_status_label)
+        layout.addWidget(self.device_settings_button)
         layout.addStretch(1)
         layout.addWidget(self.backend_status_button)
         layout.addStretch(1)
         layout.addWidget(self.patient_status_label)
+        self._refresh_gaze_status()
         return panel
+
+    def _open_device_settings(self, checked: bool = False) -> None:
+        del checked
+
+        if self._active_gaze_module_ids:
+            QMessageBox.information(
+                self,
+                "任务进行中",
+                "请先结束当前眼动任务，再修改设备设置。",
+            )
+            return
+
+        dialog = DeviceSettingsDialog(
+            self.settings,
+            self._gaze_device_config_store,
+            self._current_gaze_preflight(),
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        config = self._gaze_device_config_store.load(GazeDeviceConfig.from_settings(self.settings))
+        self.settings = config.apply(self.settings)
+        self._refresh_gaze_status()
 
     def _backend_status_text(self) -> str:
         return (
@@ -670,6 +751,8 @@ class AdminMainWindow(QMainWindow):
             self._pairing_dialog.show_near(self.backend_status_button)
 
     def _poll_lan_control_state(self) -> None:
+        self._refresh_gaze_status()
+
         try:
             state = self._lan_state_store.load()
         except (
@@ -1145,6 +1228,8 @@ class AdminMainWindow(QMainWindow):
             self._active_gaze_module_ids.add(module_id)
         else:
             self._active_gaze_module_ids.discard(module_id)
+
+        self._refresh_gaze_status()
 
         button = self.module_buttons.get(module_id)
 

@@ -10,10 +10,12 @@ from PySide6.QtWidgets import (
 )
 
 from oculidoc.app import create_qt_application
-from oculidoc.config import get_settings
+from oculidoc.config import apply_saved_gaze_device_config, get_settings
+from oculidoc.devices.preflight import GazePreflightResult, GazePreflightStore
 from oculidoc.experiments.task_runtime import RecordedTaskRuntime
 from oculidoc.lan_control import (
     LanControlStateStore,
+    LanControlTransitionError,
     PatientDisplayMode,
 )
 from oculidoc.task_configs import (
@@ -59,7 +61,7 @@ def main(
         parser.error("--direct and --config-revision must be used together.")
 
     app = create_qt_application()
-    settings = get_settings()
+    settings = apply_saved_gaze_device_config(get_settings())
     allow_mouse_fallback = settings.gaze_source == "mock"
     module_id = "tracking_ball" if args.task == "tracking" else "binary_horizontal"
     config_store = TaskConfigStore(settings.data_dir / "runtime" / "task_configs.json")
@@ -137,9 +139,13 @@ def main(
             )
         )
 
+    preflight_seconds = 0 if settings.environment == "test" else settings.gaze_preflight_seconds
+    preflight_store = GazePreflightStore(settings.data_dir / "runtime" / "gaze_preflight.json")
     worker = GazeStreamWorker(
         settings,
         window,
+        preflight_seconds=preflight_seconds,
+        preflight_store=preflight_store,
     )
     recorded_runtime = RecordedTaskRuntime(
         task=task,
@@ -148,13 +154,6 @@ def main(
         parent=task,
     )
     worker.sample_received.connect(recorded_runtime.handle_sample)
-    worker.stream_error.connect(
-        lambda message: QMessageBox.warning(
-            window,
-            "眼动源连接失败",
-            message + "\n\n当前仍可使用鼠标测试。",
-        )
-    )
 
     window.finished.connect(recorded_runtime.finish)
     window.finished.connect(lambda reason: app.quit())
@@ -164,12 +163,38 @@ def main(
         settings.data_dir / "runtime" / "lan_control_state.json"
     )
     countdown_seconds = 0 if settings.environment == "test" else TASK_START_COUNTDOWN_SECONDS
+    source_hint = "\n模拟模式" if settings.gaze_source == "mock" else ""
     display_state_store.set_display(
-        f"{title}\n即将开始\n{countdown_seconds}",
-        mode=PatientDisplayMode.READY,
+        f"{title}\n正在进行眼动设备预检{source_hint}",
+        mode=PatientDisplayMode.PREVIEW,
         task_id=module_id,
-        countdown_seconds=countdown_seconds,
     )
+
+    preflight_failed = False
+
+    def fail_preflight(message: str) -> None:
+        nonlocal preflight_failed
+
+        if preflight_failed:
+            return
+
+        preflight_failed = True
+        try:
+            display_state_store.set_display(
+                "眼动设备预检失败\n请联系管理员",
+                mode=PatientDisplayMode.ERROR,
+                task_id=module_id,
+            )
+        except LanControlTransitionError:
+            pass
+        QMessageBox.warning(
+            window,
+            "眼动设备预检失败",
+            message + "\n\n任务已阻止，不会回退到模拟眼动源。",
+        )
+        app.exit(3)
+
+    worker.stream_error.connect(fail_preflight)
 
     def start_task() -> None:
         current = display_state_store.load()
@@ -183,13 +208,34 @@ def main(
             mode=PatientDisplayMode.RUNNING,
             task_id=module_id,
         )
+        worker.enable_sample_delivery()
         window.showFullScreen()
         window.start()
-        worker.start()
 
-    if countdown_seconds == 0:
-        start_task()
-    else:
+    def begin_countdown(result: GazePreflightResult) -> None:
+        if not result.passed:
+            return
+
+        current = display_state_store.load()
+        if current.mode is not PatientDisplayMode.PREVIEW or current.task_id != module_id:
+            app.exit(2)
+            return
+
+        try:
+            display_state_store.set_display(
+                f"{title}\n即将开始\n{countdown_seconds}",
+                mode=PatientDisplayMode.READY,
+                task_id=module_id,
+                countdown_seconds=countdown_seconds,
+            )
+        except LanControlTransitionError:
+            app.exit(2)
+            return
+
+        if countdown_seconds == 0:
+            start_task()
+            return
+
         remaining_seconds = countdown_seconds
         countdown_timer = QTimer(window)
         countdown_timer.setInterval(1_000)
@@ -219,6 +265,9 @@ def main(
 
         countdown_timer.timeout.connect(advance_countdown)
         countdown_timer.start()
+
+    worker.preflight_completed.connect(begin_countdown)
+    worker.start()
 
     return app.exec()
 

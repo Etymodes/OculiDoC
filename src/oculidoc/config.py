@@ -1,11 +1,22 @@
-"""Application configuration."""
+"""Application and persisted eye-tracker configuration."""
 
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Literal
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+GazeSource = Literal[
+    "mock",
+    "tobii_stream_engine",
+    "tobii_legacy_bridge",
+]
 
 
 class Settings(BaseSettings):
@@ -31,12 +42,10 @@ class Settings(BaseSettings):
     admin_host: str = "127.0.0.1"
     admin_port: int = Field(default=8000, ge=1, le=65535)
 
-    gaze_source: Literal[
-        "mock",
-        "tobii_stream_engine",
-        "tobii_legacy_bridge",
-    ] = "mock"
+    gaze_source: GazeSource = "mock"
     tobii_stream_engine_dll: Path | None = None
+    gaze_preflight_seconds: int = Field(default=3, ge=3, le=10)
+    gaze_minimum_valid_ratio: float = Field(default=0.60, ge=0.0, le=1.0)
     tobii_bridge_mode: Literal[
         "hospital_server",
         "client",
@@ -74,6 +83,99 @@ class Settings(BaseSettings):
     def admin_base_url(self) -> str:
         """Return the local administrator API base URL."""
         return f"http://{self.admin_host}:{self.admin_port}"
+
+
+class GazeDeviceConfig(BaseModel):
+    """The small device configuration edited inside OculiDoC."""
+
+    gaze_source: GazeSource
+    tobii_stream_engine_dll: Path | None = None
+    gaze_preflight_seconds: int = Field(ge=3, le=10)
+    gaze_minimum_valid_ratio: float = Field(ge=0.0, le=1.0)
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> GazeDeviceConfig:
+        return cls(
+            gaze_source=settings.gaze_source,
+            tobii_stream_engine_dll=settings.tobii_stream_engine_dll,
+            gaze_preflight_seconds=settings.gaze_preflight_seconds,
+            gaze_minimum_valid_ratio=settings.gaze_minimum_valid_ratio,
+        )
+
+    def apply(self, settings: Settings) -> Settings:
+        """Return settings with this persisted device selection applied."""
+        return settings.model_copy(
+            update={
+                "gaze_source": self.gaze_source,
+                "tobii_stream_engine_dll": self.tobii_stream_engine_dll,
+                "gaze_preflight_seconds": self.gaze_preflight_seconds,
+                "gaze_minimum_valid_ratio": self.gaze_minimum_valid_ratio,
+            }
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "gaze_source": self.gaze_source,
+            "tobii_stream_engine_dll": (
+                str(self.tobii_stream_engine_dll)
+                if self.tobii_stream_engine_dll is not None
+                else None
+            ),
+            "gaze_preflight_seconds": self.gaze_preflight_seconds,
+            "gaze_minimum_valid_ratio": self.gaze_minimum_valid_ratio,
+        }
+
+
+class GazeDeviceConfigStore:
+    """Atomically persist the administrator's eye-tracker selection."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path).expanduser().resolve()
+
+    @classmethod
+    def for_settings(cls, settings: Settings) -> GazeDeviceConfigStore:
+        return cls(settings.data_dir / "runtime" / "gaze_device_config.json")
+
+    def load(self, default: GazeDeviceConfig) -> GazeDeviceConfig:
+        if not self.path.exists():
+            return default
+
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise TypeError("Saved gaze-device configuration must be an object.")
+            value = payload.get("config", payload)
+            return GazeDeviceConfig.model_validate(value)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError) as error:
+            raise ValueError(f"已保存的眼动设备配置无效：{self.path}") from error
+
+    def save(self, config: GazeDeviceConfig) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": "1.0",
+            "updated_at_utc": datetime.now(UTC).isoformat(),
+            "config": config.to_dict(),
+        }
+
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=self.path.parent,
+            prefix=f".{self.path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+
+        temporary_path.replace(self.path)
+
+
+def apply_saved_gaze_device_config(settings: Settings) -> Settings:
+    """Apply the last valid in-app device configuration when present."""
+    default = GazeDeviceConfig.from_settings(settings)
+    return GazeDeviceConfigStore.for_settings(settings).load(default).apply(settings)
 
 
 @lru_cache(maxsize=1)

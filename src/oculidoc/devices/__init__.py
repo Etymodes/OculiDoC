@@ -42,6 +42,12 @@ from oculidoc.devices.models import (
 from oculidoc.devices.opencv_camera import (
     OpenCVCameraDevice,
 )
+from oculidoc.devices.preflight import (
+    GazePreflightResult,
+    GazePreflightStore,
+    failed_gaze_preflight,
+    run_gaze_preflight,
+)
 from oculidoc.devices.simulated import (
     SimulatedCameraDevice,
     SimulatedEyeTrackerDevice,
@@ -82,6 +88,8 @@ __all__ = [
     "EyeTrackerDevice",
     "EyeTrackerSample",
     "GazeFrameMatch",
+    "GazePreflightResult",
+    "GazePreflightStore",
     "GazeSampleBuffer",
     "InvalidDeviceStateError",
     "MatchStatus",
@@ -103,5 +111,7 @@ __all__ = [
     "parse_tobii_bridge_payload",
     "probe_cameras",
     "discover_tobii_stream_engine_dll",
+    "failed_gaze_preflight",
+    "run_gaze_preflight",
     "write_diagnostic_report",
 ]
