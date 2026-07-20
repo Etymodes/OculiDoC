@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from oculidoc.api.app import create_api
@@ -9,6 +10,8 @@ from oculidoc.config import Settings
 from oculidoc.lan_control import (
     DEFAULT_IDLE_TEXT,
     LanControlStateStore,
+    LanControlTransitionError,
+    PatientDisplayMode,
     build_control_url,
 )
 from oculidoc.task_configs import TaskConfigStore
@@ -29,11 +32,53 @@ def test_lan_control_state_round_trip(
 
     reloaded = store.load()
     assert reloaded.text == "请看向屏幕中央"
-    assert reloaded.mode == "message"
+    assert reloaded.mode is PatientDisplayMode.PREVIEW
 
     idle = store.reset_idle()
     assert idle.revision == 2
     assert idle.text == DEFAULT_IDLE_TEXT
+
+
+def test_patient_display_state_machine_and_countdown(tmp_path: Path) -> None:
+    store = LanControlStateStore(tmp_path / "state.json")
+    ready = store.set_display(
+        "追踪球即将开始",
+        mode=PatientDisplayMode.READY,
+        task_id="tracking_ball",
+        countdown_seconds=3,
+    )
+    assert ready.countdown_seconds == 3
+
+    running = store.set_display(
+        "正在进行追踪球",
+        mode=PatientDisplayMode.RUNNING,
+        task_id="tracking_ball",
+    )
+    assert running.mode is PatientDisplayMode.RUNNING
+
+    with pytest.raises(LanControlTransitionError, match="running -> preview"):
+        store.set_display("不应覆盖运行中任务", mode=PatientDisplayMode.PREVIEW)
+
+    result = store.set_display(
+        "任务已结束",
+        mode=PatientDisplayMode.RESULT,
+        task_id="tracking_ball",
+    )
+    assert result.mode is PatientDisplayMode.RESULT
+    assert store.reset_idle().mode is PatientDisplayMode.IDLE
+    assert store.set_closed().mode is PatientDisplayMode.CLOSED
+    assert store.reset_idle().mode is PatientDisplayMode.IDLE
+
+
+def test_legacy_message_mode_loads_as_preview(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    path.write_text(
+        '{"schema_version":"1.0","state":{"revision":4,"mode":"message",'
+        '"text":"旧版投屏文字","task_id":null,"updated_at_utc":"2026-07-20T00:00:00Z"}}',
+        encoding="utf-8",
+    )
+
+    assert LanControlStateStore(path).load().mode is PatientDisplayMode.PREVIEW
 
 
 def test_control_url_contains_pairing_token() -> None:
@@ -108,6 +153,31 @@ def test_mobile_api_controls_patient_display(
     )
     assert idle.status_code == 200
     assert store.load().mode == "idle"
+
+    store.set_display(
+        "准备开始",
+        mode=PatientDisplayMode.READY,
+        task_id="tracking_ball",
+        countdown_seconds=1,
+    )
+    store.set_display(
+        "任务进行中",
+        mode=PatientDisplayMode.RUNNING,
+        task_id="tracking_ball",
+    )
+    blocked = client.post(
+        "/api/v1/patient-display/text",
+        params={"token": "secret-pairing-token"},
+        json={"text": "不应覆盖任务"},
+    )
+    assert blocked.status_code == 409
+
+    blocked_idle = client.post(
+        "/api/v1/patient-display/idle",
+        params={"token": "secret-pairing-token"},
+        json={},
+    )
+    assert blocked_idle.status_code == 409
 
 
 def test_mobile_api_submits_desktop_commands(

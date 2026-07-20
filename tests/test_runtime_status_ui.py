@@ -2,16 +2,20 @@ from __future__ import annotations
 
 from pytestqt.qtbot import QtBot
 
+import oculidoc.ui.main_window as main_window_module
 from oculidoc.config import Settings
+from oculidoc.lan_control import PatientDisplayMode
 from oculidoc.ui.main_window import AdminMainWindow
 
 
 def test_main_window_displays_native_tobii_source(
     qtbot: QtBot,
+    tmp_path,
 ) -> None:
     window = AdminMainWindow(
         Settings(
             environment="test",
+            data_dir=tmp_path,
             gaze_source="tobii_stream_engine",
         )
     )
@@ -22,10 +26,12 @@ def test_main_window_displays_native_tobii_source(
 
 def test_main_window_marks_mock_source(
     qtbot: QtBot,
+    tmp_path,
 ) -> None:
     window = AdminMainWindow(
         Settings(
             environment="test",
+            data_dir=tmp_path,
             gaze_source="mock",
         )
     )
@@ -73,6 +79,28 @@ def test_main_window_polls_mobile_display_state(
 
     assert window._last_lan_revision == state.revision
     assert window._patient_window.placeholder_label.text() == "来自手机的患者端文字"
+    assert window._patient_window.current_state.mode is PatientDisplayMode.PREVIEW
+
+
+def test_desktop_projects_text_through_shared_state(
+    qtbot: QtBot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window = AdminMainWindow(Settings(environment="test", data_dir=tmp_path, gaze_source="mock"))
+    qtbot.addWidget(window)
+    monkeypatch.setattr(
+        main_window_module.QInputDialog,
+        "getMultiLineText",
+        lambda *args: ("请看向屏幕中央", True),
+    )
+
+    window._project_patient_text()
+
+    state = window._lan_state_store.load()
+    assert state.mode is PatientDisplayMode.PREVIEW
+    assert state.text == "请看向屏幕中央"
+    assert window._patient_window.isVisible()
 
 
 def test_main_window_refreshes_lan_address(
@@ -219,7 +247,7 @@ def test_desktop_accepts_remote_start_after_validation(
     assert completed.status is LanCommandStatus.COMPLETED
     assert "直接启动" in completed.message
     assert launched == [0]
-    assert window._lan_state_store.load().mode == "ready"
+    assert window._lan_state_store.load().mode is PatientDisplayMode.PREVIEW
 
 
 def test_desktop_rejects_remote_start_with_stale_config(

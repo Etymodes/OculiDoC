@@ -288,10 +288,17 @@ function renderLatestCommand(commands) {
 async function refresh() {
   try {
     const runtime = await request("/api/v1/runtime");
+    const displayLabels = {
+      closed: "已关闭", idle: "待机", ready: "准备", preview: "提示",
+      running: "任务进行中", paused: "已暂停", result: "任务结束", error: "异常"
+    };
     document.getElementById("online").textContent = "本地后台在线";
     document.getElementById("gaze").textContent = "眼动源：" + runtime.gaze_source;
     document.getElementById("display").textContent =
-      runtime.patient_display.text + "\n\n状态：" + runtime.patient_display.mode;
+      runtime.patient_display.text + "\n\n状态：" +
+      (displayLabels[runtime.patient_display.mode] || runtime.patient_display.mode);
+    document.getElementById("idle").disabled =
+      ["ready", "running", "paused"].includes(runtime.patient_display.mode);
     refillSelect(document.getElementById("preview-module"), runtime.modules, () => true);
     refillSelect(
       document.getElementById("run-module"), runtime.modules,

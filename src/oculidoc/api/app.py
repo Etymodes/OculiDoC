@@ -19,7 +19,12 @@ from oculidoc.lan_commands import (
     LanCommandStore,
     LanCommandType,
 )
-from oculidoc.lan_control import LanControlStateStore, generate_pairing_token
+from oculidoc.lan_control import (
+    LanControlStateStore,
+    LanControlTransitionError,
+    PatientDisplayMode,
+    generate_pairing_token,
+)
 from oculidoc.modules.registry import DEFAULT_MODULES
 from oculidoc.task_configs import (
     TaskConfigConflict,
@@ -148,13 +153,31 @@ def create_api(
         token: Annotated[str, Query(min_length=8)],
     ) -> dict[str, object]:
         authorize(token)
-        return store.set_display(request.text, mode="message").to_dict()
+
+        try:
+            return store.set_display(
+                request.text,
+                mode=PatientDisplayMode.PREVIEW,
+            ).to_dict()
+        except LanControlTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @api.post("/api/v1/patient-display/idle", tags=["lan-control"])
     def reset_patient_display(
         token: Annotated[str, Query(min_length=8)],
     ) -> dict[str, object]:
         authorize(token)
+
+        if store.load().mode in {
+            PatientDisplayMode.READY,
+            PatientDisplayMode.RUNNING,
+            PatientDisplayMode.PAUSED,
+        }:
+            raise HTTPException(
+                status_code=409,
+                detail="Stop the active task before returning the patient display to idle.",
+            )
+
         return store.reset_idle().to_dict()
 
     @api.post("/api/v1/tasks/preview", tags=["lan-control"])
@@ -168,11 +191,14 @@ def create_api(
         if module is None:
             raise HTTPException(status_code=404, detail="Unknown OculiDoC module.")
 
-        return store.set_display(
-            f"任务预览：{module.title}\n等待管理员开始",
-            mode="preview",
-            task_id=module.module_id,
-        ).to_dict()
+        try:
+            return store.set_display(
+                f"任务预览：{module.title}\n等待管理员开始",
+                mode=PatientDisplayMode.PREVIEW,
+                task_id=module.module_id,
+            ).to_dict()
+        except LanControlTransitionError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @api.get("/api/v1/commands", tags=["desktop-commands"])
     def list_commands(

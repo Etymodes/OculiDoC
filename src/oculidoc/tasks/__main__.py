@@ -12,6 +12,10 @@ from PySide6.QtWidgets import (
 from oculidoc.app import create_qt_application
 from oculidoc.config import get_settings
 from oculidoc.experiments.task_runtime import RecordedTaskRuntime
+from oculidoc.lan_control import (
+    LanControlStateStore,
+    PatientDisplayMode,
+)
 from oculidoc.task_configs import (
     TaskConfigConflict,
     TaskConfigStore,
@@ -32,6 +36,8 @@ from oculidoc.tasks.tracking_ball import (
     TrackingBallSetupDialog,
     TrackingBallTask,
 )
+
+TASK_START_COUNTDOWN_SECONDS = 3
 
 
 def main(
@@ -154,9 +160,65 @@ def main(
     window.finished.connect(lambda reason: app.quit())
     app.aboutToQuit.connect(worker.stop)
 
-    window.showFullScreen()
-    window.start()
-    worker.start()
+    display_state_store = LanControlStateStore(
+        settings.data_dir / "runtime" / "lan_control_state.json"
+    )
+    countdown_seconds = 0 if settings.environment == "test" else TASK_START_COUNTDOWN_SECONDS
+    display_state_store.set_display(
+        f"{title}\n即将开始\n{countdown_seconds}",
+        mode=PatientDisplayMode.READY,
+        task_id=module_id,
+        countdown_seconds=countdown_seconds,
+    )
+
+    def start_task() -> None:
+        current = display_state_store.load()
+
+        if current.mode is not PatientDisplayMode.READY or current.task_id != module_id:
+            app.quit()
+            return
+
+        display_state_store.set_display(
+            f"正在进行：{title}",
+            mode=PatientDisplayMode.RUNNING,
+            task_id=module_id,
+        )
+        window.showFullScreen()
+        window.start()
+        worker.start()
+
+    if countdown_seconds == 0:
+        start_task()
+    else:
+        remaining_seconds = countdown_seconds
+        countdown_timer = QTimer(window)
+        countdown_timer.setInterval(1_000)
+
+        def advance_countdown() -> None:
+            nonlocal remaining_seconds
+            current = display_state_store.load()
+
+            if current.mode is not PatientDisplayMode.READY or current.task_id != module_id:
+                countdown_timer.stop()
+                app.quit()
+                return
+
+            remaining_seconds -= 1
+
+            if remaining_seconds <= 0:
+                countdown_timer.stop()
+                start_task()
+                return
+
+            display_state_store.set_display(
+                f"{title}\n即将开始\n{remaining_seconds}",
+                mode=PatientDisplayMode.READY,
+                task_id=module_id,
+                countdown_seconds=remaining_seconds,
+            )
+
+        countdown_timer.timeout.connect(advance_countdown)
+        countdown_timer.start()
 
     return app.exec()
 

@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -58,7 +59,10 @@ from oculidoc.lan_commands import (
     LanCommandType,
 )
 from oculidoc.lan_control import (
+    LanControlState,
     LanControlStateStore,
+    LanControlTransitionError,
+    PatientDisplayMode,
     build_control_url,
     generate_pairing_token,
     preferred_private_ipv4,
@@ -82,6 +86,8 @@ from oculidoc.ui.session_history import PatientSessionHistoryDialog
 from oculidoc.vision.camera_preview_window import (
     CameraPreviewWindow,
 )
+
+RESULT_DISPLAY_MILLISECONDS = 1_500
 
 
 class AdminMainWindow(QMainWindow):
@@ -137,7 +143,6 @@ class AdminMainWindow(QMainWindow):
             self.settings.admin_port,
             self._lan_token,
         )
-        self._last_lan_revision = -1
         self._lan_poll_timer = QTimer(self)
         self._lan_poll_timer.setInterval(300)
         self._lan_poll_timer.timeout.connect(self._poll_lan_control_state)
@@ -145,7 +150,10 @@ class AdminMainWindow(QMainWindow):
         self._lan_command_timer.setInterval(250)
         self._lan_command_timer.timeout.connect(self._poll_lan_commands)
         self._patient_window = PatientDisplayWindow()
-        self._patient_window.exit_requested.connect(self._restore_admin_window)
+        self._patient_window.exit_requested.connect(self._handle_patient_display_exit)
+        initial_display_state = self._lan_state_store.reset_idle()
+        self._last_lan_revision = initial_display_state.revision
+        self._patient_window.apply_state(initial_display_state)
 
         self.setWindowTitle("OculiDoC 管理员端")
         self.resize(1280, 820)
@@ -213,6 +221,10 @@ class AdminMainWindow(QMainWindow):
             QTimer.singleShot(
                 0,
                 self._start_local_backend,
+            )
+            QTimer.singleShot(
+                0,
+                self._open_patient_display,
             )
 
     def _patient_counts(self) -> tuple[int, int]:
@@ -337,9 +349,14 @@ class AdminMainWindow(QMainWindow):
         display_button.setObjectName("primaryButton")
         display_button.clicked.connect(self._open_patient_display)
 
+        project_text_button = QPushButton("投送文字")
+        project_text_button.setObjectName("secondaryButton")
+        project_text_button.clicked.connect(self._project_patient_text)
+
         layout.addLayout(text, 1)
         layout.addWidget(manage_button)
         layout.addWidget(self.history_button)
+        layout.addWidget(project_text_button)
         layout.addWidget(display_button)
         return panel
 
@@ -667,7 +684,64 @@ class AdminMainWindow(QMainWindow):
             return
 
         self._last_lan_revision = state.revision
-        self._patient_window.set_placeholder(state.text)
+        self._patient_window.apply_state(state)
+
+        if (
+            state.mode is not PatientDisplayMode.CLOSED
+            and self.settings.environment != "test"
+            and not self._patient_window.isVisible()
+        ):
+            self._patient_window.showFullScreen()
+
+    def _publish_patient_display(
+        self,
+        text: str,
+        *,
+        mode: PatientDisplayMode,
+        task_id: str | None = None,
+        countdown_seconds: int | None = None,
+    ) -> LanControlState:
+        state = self._lan_state_store.set_display(
+            text,
+            mode=mode,
+            task_id=task_id,
+            countdown_seconds=countdown_seconds,
+        )
+        self._last_lan_revision = state.revision
+        self._patient_window.apply_state(state)
+        return state
+
+    def _reset_patient_display(self) -> LanControlState:
+        state = self._lan_state_store.reset_idle()
+        self._last_lan_revision = state.revision
+        self._patient_window.apply_state(state)
+        return state
+
+    def _project_patient_text(self, checked: bool = False) -> None:
+        del checked
+        text, accepted = QInputDialog.getMultiLineText(
+            self,
+            "投送患者端文字",
+            "显示内容：",
+        )
+
+        if not accepted or not text.strip():
+            return
+
+        try:
+            self._publish_patient_display(
+                text,
+                mode=PatientDisplayMode.PREVIEW,
+            )
+        except LanControlTransitionError:
+            QMessageBox.information(
+                self,
+                "任务正在进行",
+                "请先结束当前任务，再投送普通文字。",
+            )
+            return
+
+        self._open_patient_display()
 
     def _poll_lan_commands(self) -> None:
         for command in self._lan_command_store.pending():
@@ -735,8 +809,8 @@ class AdminMainWindow(QMainWindow):
         if self.experiment_session_service is None:
             raise LanCommandRejected("实验会话服务未连接。")
 
-        if module_id in self._active_gaze_module_ids:
-            raise LanCommandRejected("该任务已经在启动、设置或运行中。")
+        if self._active_gaze_module_ids:
+            raise LanCommandRejected("已有任务正在启动、设置或运行，请先结束当前任务。")
 
         if config_revision is None:
             raise LanCommandRejected("远程启动缺少任务设置版本。")
@@ -748,9 +822,9 @@ class AdminMainWindow(QMainWindow):
                 f"任务设置已更新，请在手机端刷新后重新启动。当前版本：{current_config.revision}。"
             )
 
-        self._lan_state_store.set_display(
-            f"任务准备：{module.title}\n正在使用已保存设置启动",
-            mode="ready",
+        self._publish_patient_display(
+            f"正在启动：{module.title}",
+            mode=PatientDisplayMode.PREVIEW,
             task_id=module_id,
         )
         self._open_gaze_task_module(module, config_revision=config_revision)
@@ -783,15 +857,31 @@ class AdminMainWindow(QMainWindow):
                 process.kill()
                 process.waitForFinished(1_000)
 
-        self._lan_state_store.reset_idle()
+        self._reset_patient_display()
         return f"已向 {len(matches)} 个任务进程发送终止命令。"
 
     def _open_patient_display(self, checked: bool = False) -> None:
         del checked
-        self._poll_lan_control_state()
+        state = self._lan_state_store.load()
+
+        if state.mode is PatientDisplayMode.CLOSED:
+            state = self._lan_state_store.reset_idle()
+
+        self._last_lan_revision = state.revision
+        self._patient_window.apply_state(state)
         self._patient_window.showFullScreen()
         self._patient_window.raise_()
         self._patient_window.activateWindow()
+
+    def _handle_patient_display_exit(self) -> None:
+        state = self._lan_state_store.load()
+
+        if state.mode is not PatientDisplayMode.CLOSED:
+            state = self._lan_state_store.set_closed()
+            self._last_lan_revision = state.revision
+            self._patient_window.apply_state(state)
+
+        self._restore_admin_window()
 
     def _restore_admin_window(self) -> None:
         self.show()
@@ -1088,24 +1178,41 @@ class AdminMainWindow(QMainWindow):
             )
             return
 
-        if module.module_id in self._active_gaze_module_ids:
+        if self._active_gaze_module_ids:
             QMessageBox.information(
                 self,
                 "任务已在运行",
-                (f"{module.title}已经在启动、设置或运行中，请先关闭当前任务。"),
+                "已有任务正在启动、设置或运行，请先关闭当前任务。",
             )
             return
 
-        self._set_gaze_module_busy(
-            module.module_id,
-            True,
+        patient_id = self.current_patient.patient_id
+        self._set_gaze_module_busy(module.module_id, True)
+        self._open_patient_display()
+        self._launch_gaze_task_process(
+            module,
+            patient_id=patient_id,
+            config_revision=config_revision,
         )
+
+    def _launch_gaze_task_process(
+        self,
+        module: ModuleDefinition,
+        *,
+        patient_id: UUID,
+        config_revision: int | None,
+    ) -> None:
+        """Launch a reserved gaze-task child process."""
         launch: GazeTaskLaunch | None = None
+        session_service = self.experiment_session_service
 
         try:
+            if session_service is None:
+                raise RuntimeError("实验会话服务未连接。")
+
             launch = create_gaze_task_launch(
-                self.experiment_session_service,
-                patient_id=self.current_patient.patient_id,
+                session_service,
+                patient_id=patient_id,
                 module_id=module.module_id,
             )
 
@@ -1151,7 +1258,7 @@ class AdminMainWindow(QMainWindow):
                 False,
             )
 
-            if launch is not None:
+            if launch is not None and session_service is not None:
                 self._gaze_processes.pop(
                     launch.session_id,
                     None,
@@ -1162,13 +1269,20 @@ class AdminMainWindow(QMainWindow):
                 )
 
                 with suppress(Exception):
-                    session = self.experiment_session_service.get_session(launch.session_id)
+                    session = session_service.get_session(launch.session_id)
 
                     if not session.is_terminal:
-                        self.experiment_session_service.fail_session(
+                        session_service.fail_session(
                             launch.session_id,
                             str(error),
                         )
+
+            with suppress(Exception):
+                self._publish_patient_display(
+                    f"{module.title}启动失败\n请联系管理员",
+                    mode=PatientDisplayMode.ERROR,
+                    task_id=module.module_id,
+                )
 
             QMessageBox.critical(
                 self,
@@ -1226,6 +1340,13 @@ class AdminMainWindow(QMainWindow):
                         str(error),
                     )
 
+            with suppress(Exception):
+                self._publish_patient_display(
+                    "任务记录处理失败\n请联系管理员",
+                    mode=PatientDisplayMode.ERROR,
+                    task_id=launch.module_id,
+                )
+
             QMessageBox.warning(
                 self,
                 "眼动任务会话结束失败",
@@ -1234,12 +1355,25 @@ class AdminMainWindow(QMainWindow):
             return
 
         if status is ExperimentSessionStatus.COMPLETED:
+            result_state = self._publish_patient_display(
+                "任务已结束\n请休息",
+                mode=PatientDisplayMode.RESULT,
+                task_id=launch.module_id,
+            )
+            QTimer.singleShot(
+                RESULT_DISPLAY_MILLISECONDS,
+                partial(
+                    self._reset_patient_display_after_result,
+                    result_state.revision,
+                ),
+            )
             QMessageBox.information(
                 self,
                 "眼动任务已保存",
                 (f"任务记录已关联到当前患者的实验会话。\n目录：{launch.session_directory}"),
             )
         elif status is ExperimentSessionStatus.ABORTED:
+            self._reset_patient_display()
             QMessageBox.information(
                 self,
                 "眼动任务已取消",
@@ -1247,6 +1381,12 @@ class AdminMainWindow(QMainWindow):
             )
         else:
             message = "任务进程未正常完成。"
+
+            self._publish_patient_display(
+                "任务运行异常\n请联系管理员",
+                mode=PatientDisplayMode.ERROR,
+                task_id=launch.module_id,
+            )
 
             if process_output.strip():
                 message += "\n\n进程输出：\n" + process_output.strip()[-2_000:]
@@ -1256,6 +1396,12 @@ class AdminMainWindow(QMainWindow):
                 "眼动任务失败",
                 message,
             )
+
+    def _reset_patient_display_after_result(self, result_revision: int) -> None:
+        state = self._lan_state_store.load()
+
+        if state.revision == result_revision and state.mode is PatientDisplayMode.RESULT:
+            self._reset_patient_display()
 
     def _show_module_placeholder(
         self,
@@ -1285,6 +1431,9 @@ class AdminMainWindow(QMainWindow):
         self._lan_poll_timer.stop()
         self._lan_command_timer.stop()
         self._pairing_hide_timer.stop()
+
+        with suppress(Exception):
+            self._lan_state_store.set_closed()
 
         if self._pairing_dialog is not None:
             self._pairing_dialog.close()

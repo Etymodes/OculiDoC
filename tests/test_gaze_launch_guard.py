@@ -18,6 +18,7 @@ from oculidoc.domain.experiment_session import (
 from oculidoc.infrastructure.database import (
     initialize_database,
 )
+from oculidoc.lan_control import PatientDisplayMode
 from oculidoc.modules.registry import DEFAULT_MODULES
 from oculidoc.ui.main_window import AdminMainWindow
 
@@ -205,6 +206,16 @@ def test_duplicate_module_launch_is_blocked(
     session_id, process = next(iter(window._gaze_processes.items()))
     launch = window._gaze_launches[session_id]
 
+    window._lan_state_store.set_display(
+        "准备",
+        mode=PatientDisplayMode.READY,
+        task_id=launch.module_id,
+    )
+    window._lan_state_store.set_display(
+        "运行中",
+        mode=PatientDisplayMode.RUNNING,
+        task_id=launch.module_id,
+    )
     write_completed_run(launch)
     process.finished.emit(0, None)
 
@@ -245,6 +256,7 @@ def test_start_failure_releases_module_guard(
     assert button.isEnabled() is True
     assert button.text() == "打开项目"
     assert any("无法启动眼动任务" in str(message) for call in messages for message in call)
+    assert window._lan_state_store.load().mode is PatientDisplayMode.ERROR
 
     window.close()
     runtime.dispose()
