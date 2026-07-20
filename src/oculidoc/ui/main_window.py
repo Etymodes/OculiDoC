@@ -49,6 +49,14 @@ from oculidoc.domain.experiment_session import (
     ExperimentSessionStatus,
     SessionArtifactKind,
 )
+from oculidoc.lan_commands import (
+    REMOTE_GAZE_MODULE_IDS,
+    LanCommand,
+    LanCommandRejected,
+    LanCommandStatus,
+    LanCommandStore,
+    LanCommandType,
+)
 from oculidoc.lan_control import (
     LanControlStateStore,
     build_control_url,
@@ -116,6 +124,10 @@ class AdminMainWindow(QMainWindow):
             self.settings.data_dir.expanduser() / "runtime" / "lan_control_state.json"
         ).resolve()
         self._lan_state_store = LanControlStateStore(self._lan_state_path)
+        self._lan_command_directory = (
+            self.settings.data_dir.expanduser() / "runtime" / "lan_commands"
+        ).resolve()
+        self._lan_command_store = LanCommandStore(self._lan_command_directory)
         self._lan_control_url = build_control_url(
             self._lan_host,
             self.settings.admin_port,
@@ -125,6 +137,9 @@ class AdminMainWindow(QMainWindow):
         self._lan_poll_timer = QTimer(self)
         self._lan_poll_timer.setInterval(300)
         self._lan_poll_timer.timeout.connect(self._poll_lan_control_state)
+        self._lan_command_timer = QTimer(self)
+        self._lan_command_timer.setInterval(250)
+        self._lan_command_timer.timeout.connect(self._poll_lan_commands)
         self._patient_window = PatientDisplayWindow()
         self._patient_window.exit_requested.connect(self._restore_admin_window)
 
@@ -186,7 +201,9 @@ class AdminMainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self._lan_poll_timer.start()
+        self._lan_command_timer.start()
         self._poll_lan_control_state()
+        self._poll_lan_commands()
 
         if self._should_auto_start_backend():
             QTimer.singleShot(
@@ -490,6 +507,10 @@ class AdminMainWindow(QMainWindow):
             "OCULIDOC_LAN_STATE_PATH",
             str(self._lan_state_path),
         )
+        environment.insert(
+            "OCULIDOC_LAN_COMMAND_DIR",
+            str(self._lan_command_directory),
+        )
         process.setProcessEnvironment(environment)
         program, arguments = local_api_process_command()
         process.setProgram(program)
@@ -643,6 +664,112 @@ class AdminMainWindow(QMainWindow):
 
         self._last_lan_revision = state.revision
         self._patient_window.set_placeholder(state.text)
+
+    def _poll_lan_commands(self) -> None:
+        for command in self._lan_command_store.pending():
+            try:
+                accepted = self._lan_command_store.transition(
+                    command.command_id,
+                    LanCommandStatus.ACCEPTED,
+                    "桌面管理员端已接收命令。",
+                )
+            except (OSError, ValueError):
+                continue
+
+            try:
+                message = self._execute_lan_command(accepted)
+            except LanCommandRejected as error:
+                self._lan_command_store.transition(
+                    accepted.command_id,
+                    LanCommandStatus.REJECTED,
+                    str(error),
+                )
+            except Exception as error:
+                self._lan_command_store.transition(
+                    accepted.command_id,
+                    LanCommandStatus.REJECTED,
+                    f"桌面端执行失败：{error}",
+                )
+            else:
+                self._lan_command_store.transition(
+                    accepted.command_id,
+                    LanCommandStatus.COMPLETED,
+                    message,
+                )
+
+    def _execute_lan_command(self, command: LanCommand) -> str:
+        if command.command_type is LanCommandType.OPEN_PATIENT_DISPLAY:
+            self._open_patient_display()
+            return "患者显示端已打开。"
+
+        if command.command_type is LanCommandType.START_TASK:
+            return self._execute_remote_task_start(command)
+
+        if command.command_type is LanCommandType.STOP_TASK:
+            return self._execute_remote_task_stop(command)
+
+        raise LanCommandRejected("未知桌面命令。")
+
+    def _execute_remote_task_start(self, command: LanCommand) -> str:
+        module_id = command.module_id
+
+        if module_id not in REMOTE_GAZE_MODULE_IDS:
+            raise LanCommandRejected("该模块尚不支持手机远程启动。")
+
+        module = next(
+            (item for item in DEFAULT_MODULES if item.module_id == module_id),
+            None,
+        )
+
+        if module is None:
+            raise LanCommandRejected("未找到对应实验模块。")
+
+        if self.current_patient is None:
+            raise LanCommandRejected("尚未选择患者，请先在电脑端选择当前患者。")
+
+        if self.experiment_session_service is None:
+            raise LanCommandRejected("实验会话服务未连接。")
+
+        if module_id in self._active_gaze_module_ids:
+            raise LanCommandRejected("该任务已经在启动、设置或运行中。")
+
+        self._lan_state_store.set_display(
+            f"任务准备：{module.title}\n等待管理员确认设置",
+            mode="ready",
+            task_id=module_id,
+        )
+        self._open_gaze_task_module(module)
+
+        if module_id not in self._active_gaze_module_ids:
+            raise LanCommandRejected("任务进程未能启动，请查看电脑端提示。")
+
+        return f"{module.title}设置窗口已在电脑端打开；当前版本仍需在电脑端确认设置。"
+
+    def _execute_remote_task_stop(self, command: LanCommand) -> str:
+        module_id = command.module_id
+        matches: list[tuple[UUID, QProcess]] = []
+
+        for session_id, launch in tuple(self._gaze_launches.items()):
+            if module_id is not None and launch.module_id != module_id:
+                continue
+
+            process = self._gaze_processes.get(session_id)
+
+            if process is not None and process.state() != QProcess.ProcessState.NotRunning:
+                matches.append((session_id, process))
+
+        if not matches:
+            raise LanCommandRejected("没有匹配的运行中任务。")
+
+        for _, process in matches:
+            process.terminate()
+
+            if not process.waitForFinished(1_500):
+                process.kill()
+                process.waitForFinished(1_000)
+
+        self._lan_state_store.reset_idle()
+        return f"已向 {len(matches)} 个任务进程发送终止命令。"
 
     def _open_patient_display(self, checked: bool = False) -> None:
         del checked
@@ -1132,6 +1259,7 @@ class AdminMainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._lan_poll_timer.stop()
+        self._lan_command_timer.stop()
         self._pairing_hide_timer.stop()
 
         if self._pairing_dialog is not None:

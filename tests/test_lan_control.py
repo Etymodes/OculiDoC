@@ -72,7 +72,7 @@ def test_mobile_api_controls_patient_display(
         params={"token": "secret-pairing-token"},
     )
     assert control_page.status_code == 200
-    assert "OculiDoC 手机控制端" in control_page.text
+    assert "OculiDoC 手机管理员端" in control_page.text
 
     sent = client.post(
         "/api/v1/patient-display/text",
@@ -106,3 +106,60 @@ def test_mobile_api_controls_patient_display(
     )
     assert idle.status_code == 200
     assert store.load().mode == "idle"
+
+
+def test_mobile_api_submits_desktop_commands(
+    tmp_path: Path,
+) -> None:
+    from oculidoc.lan_commands import (
+        LanCommandStatus,
+        LanCommandStore,
+    )
+
+    command_store = LanCommandStore(tmp_path / "commands")
+    api = create_api(
+        Settings(
+            environment="test",
+            data_dir=tmp_path,
+            gaze_source="mock",
+        ),
+        token="secret-pairing-token",
+        command_store=command_store,
+    )
+    client = TestClient(api)
+    parameters = {"token": "secret-pairing-token"}
+
+    opened = client.post(
+        "/api/v1/commands",
+        params=parameters,
+        json={"command_type": "open_patient_display"},
+    )
+    assert opened.status_code == 200
+    assert opened.json()["status"] == LanCommandStatus.PENDING.value
+
+    started = client.post(
+        "/api/v1/commands",
+        params=parameters,
+        json={
+            "command_type": "start_task",
+            "module_id": "tracking_ball",
+        },
+    )
+    assert started.status_code == 200
+
+    unsupported = client.post(
+        "/api/v1/commands",
+        params=parameters,
+        json={
+            "command_type": "start_task",
+            "module_id": "screen_keyboard",
+        },
+    )
+    assert unsupported.status_code == 422
+
+    listed = client.get(
+        "/api/v1/commands",
+        params=parameters,
+    )
+    assert listed.status_code == 200
+    assert len(listed.json()) == 2

@@ -1,7 +1,7 @@
 # OculiDoC 总任务书（持续更新版）
 
 > 用途：作为开发者、临床合作者和大语言模型恢复项目上下文时的唯一总入口。
-> 当前稳定基线：`feature/gaze-tasks-mvp`，M3D11B HEAD `5d9a7eaedebacafdab62b9c59ca765dc491016f9`。
+> 当前稳定基线：`feature/gaze-tasks-mvp`，M3D11B.1 HEAD `13c57575cb83046338798ff60cf27daa59eb96e6`。
 > 当前版本：`0.1.0.dev0`，Windows engineering validation build。
 > 更新时间：2026-07-19。
 
@@ -320,6 +320,8 @@ Add LAN control pairing demo
 
 ### M3D11B.1：局域网交互体验修正
 
+状态：已完成、推送并通过人工验收，提交 `13c57575cb83046338798ff60cf27daa59eb96e6`。
+
 目标提交：
 
 ```text
@@ -335,7 +337,39 @@ Refine LAN pairing and patient display UX
 - 患者显示端文字改为 40–84 px 自适应大字。
 - 明确手机网页最终是管理员端完整远程镜像，而不是仅有投屏功能。
 
-### M3D11C：患者显示端状态总线 demo
+### M3D11C1：手机—桌面结构化命令总线
+
+目标提交：
+
+```text
+Add mobile desktop command bus
+```
+
+内容：
+
+- FastAPI 只把手机命令写入文件队列，不直接操作 Qt 或启动实验。
+- 桌面主进程轮询 `pending` 命令，先标记 `accepted`，再校验并执行。
+- 命令状态：`pending → accepted → completed / rejected`。
+- 第一轮命令：打开患者显示端、请求启动追踪球/左右二分问答、终止运行中任务。
+- 手机显示桌面端返回的成功信息或拒绝原因。
+- 当前任务启动仍打开电脑端原设置窗口；M3D11C2 再同步全部设置并支持手机直接确认。
+
+### M3D11C2：管理员设置双向同步
+
+目标提交：
+
+```text
+Synchronize mobile task settings
+```
+
+内容：
+
+- 追踪球与左右二分问答使用统一可序列化配置。
+- 手机与桌面读取和修改同一配置版本。
+- 手机正式启动时不再要求回到电脑确认设置。
+- 桌面与手机修改互相同步，冲突按版本拒绝而非静默覆盖。
+
+### M3D11C3：患者显示端统一状态机
 
 目标提交：
 
