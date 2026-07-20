@@ -38,11 +38,12 @@ M3D11D 已完成设备设置与任务前预检。在原有 engineering validatio
 
 ## 安装
 
-新电脑开发安装前需已有 Git 和 Python 3.11。在 PowerShell 中一行完成克隆、
-创建虚拟环境和安装开发依赖：
+新电脑只需 Windows 10/11、网络和系统自带的 `winget`（App Installer）。即使没有
+Git、Python 或 pip，也可在 PowerShell 中用下面一整行自动补齐环境、克隆仓库并安装。
+若提示找不到 `winget`，请先在 Microsoft Store 安装或更新“应用安装程序”，再重新执行：
 
 ```powershell
-git clone --branch feature/gaze-tasks-mvp --single-branch https://github.com/Etymodes/OculiDoC.git OculiDoC; if ($LASTEXITCODE -ne 0) { throw "克隆失败" }; Set-Location OculiDoC; py -3.11 -m venv .venv; if ($LASTEXITCODE -ne 0) { throw "创建虚拟环境失败" }; & .\.venv\Scripts\python.exe -m pip install --upgrade pip; if ($LASTEXITCODE -ne 0) { throw "升级 pip 失败" }; & .\.venv\Scripts\python.exe -m pip install -e ".[dev]"; if ($LASTEXITCODE -ne 0) { throw "安装 OculiDoC 失败" }
+$ErrorActionPreference="Stop"; $Winget=(Get-Command winget -ErrorAction SilentlyContinue); if (-not $Winget) { throw "未找到 winget。请先在 Microsoft Store 安装或更新应用安装程序 (App Installer)，再重试。" }; $WingetExe=$Winget.Source; if (-not (Get-Command git -ErrorAction SilentlyContinue)) { & $WingetExe install --id Git.Git -e --source winget --silent --accept-source-agreements --accept-package-agreements --disable-interactivity; if ($LASTEXITCODE -ne 0) { throw "Git 自动安装失败" } }; $PyReady=$false; $PyCommand=(Get-Command py -ErrorAction SilentlyContinue); if ($PyCommand) { $PyProbe=$PyCommand.Source; & $PyProbe -3.11 -c "import sys" 2>$null; $PyReady=($LASTEXITCODE -eq 0) }; if (-not $PyReady) { & $WingetExe install --id Python.Python.3.11 -e --source winget --silent --accept-source-agreements --accept-package-agreements --disable-interactivity; if ($LASTEXITCODE -ne 0) { throw "Python 3.11 自动安装失败" } }; $env:Path=[Environment]::GetEnvironmentVariable("Path","Machine")+";"+[Environment]::GetEnvironmentVariable("Path","User"); $Git=(Get-Command git -ErrorAction Stop).Source; $Py=(Get-Command py -ErrorAction Stop).Source; & $Py -3.11 -c "import sys; assert sys.version_info[:2] == (3, 11)"; if ($LASTEXITCODE -ne 0) { throw "Python 3.11 核验失败" }; $Root=Join-Path ([Environment]::GetFolderPath("MyDocuments")) "OculiDoC-Development"; $Repo=Join-Path $Root "OculiDoC"; New-Item -ItemType Directory -Force -Path $Root | Out-Null; if (-not (Test-Path (Join-Path $Repo ".git"))) { if (Test-Path $Repo) { throw "目标目录已存在但不是 Git 仓库：$Repo" }; & $Git clone --branch feature/gaze-tasks-mvp --single-branch https://github.com/Etymodes/OculiDoC.git $Repo; if ($LASTEXITCODE -ne 0) { throw "克隆 OculiDoC 失败" } }; Set-Location $Repo; & $Py -3.11 -m venv .venv; if ($LASTEXITCODE -ne 0) { throw "创建虚拟环境失败" }; $VenvPython=Join-Path $Repo ".venv\Scripts\python.exe"; & $VenvPython -m ensurepip --upgrade; if ($LASTEXITCODE -ne 0) { throw "在虚拟环境中补齐 pip 失败" }; & $VenvPython -m pip install --upgrade pip; if ($LASTEXITCODE -ne 0) { throw "升级 pip 失败" }; & $VenvPython -m pip install -e ".[dev]"; if ($LASTEXITCODE -ne 0) { throw "安装 OculiDoC 失败" }; Write-Host "OculiDoC 安装完成：$Repo" -ForegroundColor Green
 ```
 
 已有 Python 环境且仓库已经克隆时：
