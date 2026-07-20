@@ -104,6 +104,12 @@ class AdminMainWindow(QMainWindow):
         self._active_gaze_module_ids: set[str] = set()
         self._backend_process: QProcess | None = None
         self._pairing_dialog: LanPairingDialog | None = None
+        self._pairing_pinned = False
+        self._backend_status_name = "准备启动"
+        self._pairing_hide_timer = QTimer(self)
+        self._pairing_hide_timer.setSingleShot(True)
+        self._pairing_hide_timer.setInterval(450)
+        self._pairing_hide_timer.timeout.connect(self._hide_lan_pairing_if_unpinned)
         self._lan_host = preferred_private_ipv4()
         self._lan_token = generate_pairing_token()
         self._lan_state_path = (
@@ -408,18 +414,22 @@ class AdminMainWindow(QMainWindow):
         panel = QFrame()
         panel.setObjectName("panel")
         layout = QHBoxLayout(panel)
-        layout.setContentsMargins(18, 13, 18, 13)
+        layout.setContentsMargins(
+            18,
+            13,
+            18,
+            13,
+        )
 
         self.gaze_status_label = QLabel(self._gaze_source_status_text())
         self.gaze_status_label.setObjectName("subtitle")
 
-        self.backend_status_button = HoverPairingButton(
-            f"本地后台：准备启动 · {self._lan_host}:{self.settings.admin_port} · 悬停扫码"
-        )
+        self.backend_status_button = HoverPairingButton(self._backend_status_text())
         self.backend_status_button.setObjectName("backendStatusButton")
-        self.backend_status_button.setToolTip("悬停或点击显示局域网手机控制二维码")
-        self.backend_status_button.clicked.connect(self._show_lan_pairing)
-        self.backend_status_button.hover_entered.connect(self._show_lan_pairing)
+        self.backend_status_button.setToolTip("悬停显示二维码；点击可固定或关闭配对卡")
+        self.backend_status_button.clicked.connect(self._toggle_lan_pairing_pin)
+        self.backend_status_button.hover_entered.connect(self._show_lan_pairing_hover)
+        self.backend_status_button.hover_left.connect(self._schedule_lan_pairing_hide)
 
         self.patient_status_label = QLabel(self._patient_status_text())
         self.patient_status_label.setObjectName("subtitle")
@@ -431,6 +441,17 @@ class AdminMainWindow(QMainWindow):
         layout.addWidget(self.patient_status_label)
         return panel
 
+    def _backend_status_text(self) -> str:
+        return (
+            f"本地后台：{self._backend_status_name}"
+            f" · {self._lan_host}:{self.settings.admin_port}"
+            " · 悬停扫码"
+        )
+
+    def _update_backend_status_button(self) -> None:
+        if hasattr(self, "backend_status_button"):
+            self.backend_status_button.setText(self._backend_status_text())
+
     def _should_auto_start_backend(self) -> bool:
         return self.settings.environment != "test" and "PYTEST_CURRENT_TEST" not in os.environ
 
@@ -441,6 +462,7 @@ class AdminMainWindow(QMainWindow):
         ):
             return
 
+        self._refresh_lan_pairing_address()
         self._lan_state_store.ensure()
         process = QProcess(self)
         environment = QProcessEnvironment.systemEnvironment()
@@ -484,9 +506,8 @@ class AdminMainWindow(QMainWindow):
         process.start()
 
     def _backend_started(self) -> None:
-        self.backend_status_button.setText(
-            f"本地后台：已启动 · {self._lan_host}:{self.settings.admin_port} · 悬停扫码"
-        )
+        self._backend_status_name = "已启动"
+        self._update_backend_status_button()
 
     def _backend_finished(
         self,
@@ -494,24 +515,48 @@ class AdminMainWindow(QMainWindow):
         exit_status: object,
     ) -> None:
         del exit_status
-        self.backend_status_button.setText(f"本地后台：已停止 · 退出码 {exit_code} · 点击重启")
+        self._backend_status_name = f"已停止 · 退出码 {exit_code}"
+        self._update_backend_status_button()
 
     def _backend_error(
         self,
         error: object,
     ) -> None:
         del error
-        self.backend_status_button.setText("本地后台：启动失败 · 点击重试")
+        self._backend_status_name = "启动失败"
+        self._update_backend_status_button()
 
     def _drain_backend_output(self) -> None:
         if self._backend_process is not None:
             self._backend_process.readAllStandardOutput()
 
+    def _ensure_pairing_dialog(
+        self,
+    ) -> LanPairingDialog:
+        if self._pairing_dialog is None:
+            dialog = LanPairingDialog(
+                self._lan_control_url,
+                self,
+            )
+            dialog.pointer_entered.connect(self._cancel_lan_pairing_hide)
+            dialog.pointer_left.connect(self._schedule_lan_pairing_hide)
+            dialog.close_requested.connect(self._close_lan_pairing)
+            dialog.refresh_requested.connect(self._refresh_lan_pairing_address)
+            self._pairing_dialog = dialog
+
+        return self._pairing_dialog
+
+    def _show_lan_pairing_hover(
+        self,
+    ) -> None:
+        self._show_lan_pairing(pin=False)
+
     def _show_lan_pairing(
         self,
-        checked: bool = False,
+        *,
+        pin: bool,
     ) -> None:
-        del checked
+        self._cancel_lan_pairing_hide()
 
         if (
             self._backend_process is None
@@ -519,13 +564,68 @@ class AdminMainWindow(QMainWindow):
         ):
             self._start_local_backend()
 
-        if self._pairing_dialog is None:
-            self._pairing_dialog = LanPairingDialog(
-                self._lan_control_url,
-                self,
-            )
+        if pin:
+            self._pairing_pinned = True
 
-        self._pairing_dialog.show_near(self.backend_status_button)
+        dialog = self._ensure_pairing_dialog()
+        dialog.show_near(self.backend_status_button)
+
+    def _toggle_lan_pairing_pin(
+        self,
+        checked: bool = False,
+    ) -> None:
+        del checked
+
+        if (
+            self._pairing_pinned
+            and self._pairing_dialog is not None
+            and self._pairing_dialog.isVisible()
+        ):
+            self._close_lan_pairing()
+            return
+
+        self._show_lan_pairing(pin=True)
+
+    def _schedule_lan_pairing_hide(
+        self,
+    ) -> None:
+        if not self._pairing_pinned:
+            self._pairing_hide_timer.start()
+
+    def _cancel_lan_pairing_hide(
+        self,
+    ) -> None:
+        self._pairing_hide_timer.stop()
+
+    def _hide_lan_pairing_if_unpinned(
+        self,
+    ) -> None:
+        if not self._pairing_pinned and self._pairing_dialog is not None:
+            self._pairing_dialog.hide()
+
+    def _close_lan_pairing(
+        self,
+    ) -> None:
+        self._pairing_pinned = False
+        self._pairing_hide_timer.stop()
+
+        if self._pairing_dialog is not None:
+            self._pairing_dialog.hide()
+
+    def _refresh_lan_pairing_address(
+        self,
+    ) -> None:
+        self._lan_host = preferred_private_ipv4()
+        self._lan_control_url = build_control_url(
+            self._lan_host,
+            self.settings.admin_port,
+            self._lan_token,
+        )
+        self._update_backend_status_button()
+
+        if self._pairing_dialog is not None:
+            self._pairing_dialog.update_control_url(self._lan_control_url)
+            self._pairing_dialog.show_near(self.backend_status_button)
 
     def _poll_lan_control_state(self) -> None:
         try:
@@ -1032,6 +1132,7 @@ class AdminMainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._lan_poll_timer.stop()
+        self._pairing_hide_timer.stop()
 
         if self._pairing_dialog is not None:
             self._pairing_dialog.close()

@@ -31,3 +31,35 @@ def test_pairing_dialog_displays_control_url(
 
     assert dialog.url_edit.text() == url
     assert not dialog.qr_label.pixmap().isNull()
+
+
+def test_pairing_dialog_refreshes_address_and_qr(
+    qtbot: QtBot,
+) -> None:
+    original = "http://192.168.1.20:8000/control?token=test-token"
+    updated = "http://192.168.1.21:8000/control?token=test-token"
+    dialog = LanPairingDialog(original)
+    qtbot.addWidget(dialog)
+
+    original_cache_key = dialog.qr_label.pixmap().cacheKey()
+    dialog.update_control_url(updated)
+
+    assert dialog.control_url == updated
+    assert dialog.url_edit.text() == updated
+    assert dialog.qr_label.pixmap().cacheKey() != original_cache_key
+    assert "已刷新" in dialog.hint_label.text()
+
+
+def test_pairing_dialog_close_emits_request(
+    qtbot: QtBot,
+) -> None:
+    dialog = LanPairingDialog("http://192.168.1.20:8000/control?token=test-token")
+    qtbot.addWidget(dialog)
+
+    with qtbot.waitSignal(
+        dialog.close_requested,
+        timeout=1_000,
+    ):
+        dialog.reject()
+
+    assert not dialog.isVisible()

@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 
 import segno
-from PySide6.QtCore import QByteArray, Qt, QUrl, Signal
+from PySide6.QtCore import QByteArray, QEvent, Qt, QUrl, Signal
 from PySide6.QtGui import (
     QDesktopServices,
     QEnterEvent,
@@ -31,10 +31,15 @@ class HoverPairingButton(QPushButton):
     """A status button that opens pairing details on hover or click."""
 
     hover_entered = Signal()
+    hover_left = Signal()
 
     def enterEvent(self, event: QEnterEvent) -> None:
         self.hover_entered.emit()
         super().enterEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        self.hover_left.emit()
+        super().leaveEvent(event)
 
 
 def qr_pixmap(
@@ -74,6 +79,11 @@ def qr_pixmap(
 class LanPairingDialog(QDialog):
     """Non-modal pairing card shown beside the backend status button."""
 
+    pointer_entered = Signal()
+    pointer_left = Signal()
+    close_requested = Signal()
+    refresh_requested = Signal()
+
     def __init__(
         self,
         control_url: str,
@@ -83,7 +93,7 @@ class LanPairingDialog(QDialog):
         self.control_url = control_url
         self.setWindowTitle("手机后台配对")
         self.setModal(False)
-        self.setMinimumWidth(330)
+        self.setMinimumWidth(350)
         self.setStyleSheet(
             """
             QDialog { background: white; }
@@ -97,9 +107,11 @@ class LanPairingDialog(QDialog):
 
         title = QLabel("局域网手机控制")
         title.setObjectName("pairingTitle")
-        hint = QLabel("手机与本机连接同一局域网后扫描二维码。")
-        hint.setObjectName("pairingHint")
-        hint.setWordWrap(True)
+        self.hint_label = QLabel(
+            "手机与本机连接同一局域网后扫描二维码。移开鼠标后卡片会自动收起；点击底部状态可固定。"
+        )
+        self.hint_label.setObjectName("pairingHint")
+        self.hint_label.setWordWrap(True)
 
         self.qr_label = QLabel()
         self.qr_label.setPixmap(qr_pixmap(control_url))
@@ -112,16 +124,20 @@ class LanPairingDialog(QDialog):
         open_button = QPushButton("本机打开")
         open_button.clicked.connect(self._open_url)
 
+        self.refresh_button = QPushButton("刷新IP/二维码")
+        self.refresh_button.clicked.connect(self._request_refresh)
+
         actions = QHBoxLayout()
         actions.addWidget(copy_button)
         actions.addWidget(open_button)
+        actions.addWidget(self.refresh_button)
 
         close_buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        close_buttons.rejected.connect(self.hide)
+        close_buttons.rejected.connect(self.reject)
 
         root = QVBoxLayout(self)
         root.addWidget(title)
-        root.addWidget(hint)
+        root.addWidget(self.hint_label)
         root.addWidget(
             self.qr_label,
             alignment=Qt.AlignmentFlag.AlignCenter,
@@ -130,6 +146,29 @@ class LanPairingDialog(QDialog):
         root.addLayout(actions)
         root.addWidget(close_buttons)
         self.adjustSize()
+
+    def update_control_url(
+        self,
+        control_url: str,
+    ) -> None:
+        """Refresh the displayed LAN address and QR code."""
+        self.control_url = control_url
+        self.url_edit.setText(control_url)
+        self.qr_label.setPixmap(qr_pixmap(control_url))
+        self.hint_label.setText("局域网地址和二维码已刷新。手机与本机连接同一局域网后扫描。")
+        self.adjustSize()
+
+    def enterEvent(self, event: QEnterEvent) -> None:
+        self.pointer_entered.emit()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        self.pointer_left.emit()
+        super().leaveEvent(event)
+
+    def reject(self) -> None:
+        self.close_requested.emit()
+        self.hide()
 
     def _copy_url(
         self,
@@ -144,6 +183,13 @@ class LanPairingDialog(QDialog):
     ) -> None:
         del checked
         QDesktopServices.openUrl(QUrl(self.control_url))
+
+    def _request_refresh(
+        self,
+        checked: bool = False,
+    ) -> None:
+        del checked
+        self.refresh_requested.emit()
 
     def show_near(
         self,

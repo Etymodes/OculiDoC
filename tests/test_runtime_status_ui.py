@@ -73,3 +73,53 @@ def test_main_window_polls_mobile_display_state(
 
     assert window._last_lan_revision == state.revision
     assert window._patient_window.placeholder_label.text() == "来自手机的患者端文字"
+
+
+def test_main_window_refreshes_lan_address(
+    qtbot: QtBot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window = AdminMainWindow(
+        Settings(
+            environment="test",
+            data_dir=tmp_path,
+            gaze_source="mock",
+        )
+    )
+    qtbot.addWidget(window)
+    window._ensure_pairing_dialog()
+
+    monkeypatch.setattr(
+        "oculidoc.ui.main_window.preferred_private_ipv4",
+        lambda: "192.168.50.25",
+    )
+    window._refresh_lan_pairing_address()
+
+    assert window._lan_host == "192.168.50.25"
+    assert window._lan_control_url.startswith("http://192.168.50.25:")
+    assert window._pairing_dialog is not None
+    assert window._pairing_dialog.url_edit.text() == window._lan_control_url
+
+
+def test_pairing_click_pins_and_second_click_closes(
+    qtbot: QtBot,
+    tmp_path,
+) -> None:
+    window = AdminMainWindow(
+        Settings(
+            environment="test",
+            data_dir=tmp_path,
+            gaze_source="mock",
+        )
+    )
+    qtbot.addWidget(window)
+
+    window._toggle_lan_pairing_pin()
+    assert window._pairing_pinned
+    assert window._pairing_dialog is not None
+    assert window._pairing_dialog.isVisible()
+
+    window._toggle_lan_pairing_pin()
+    assert not window._pairing_pinned
+    assert not window._pairing_dialog.isVisible()
