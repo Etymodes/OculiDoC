@@ -39,6 +39,7 @@ from oculidoc.experiments.task_runtime import (
 from oculidoc.infrastructure.database import (
     initialize_database,
 )
+from oculidoc.lan_control import PatientDisplayMode
 from oculidoc.modules.registry import DEFAULT_MODULES
 from oculidoc.ui.main_window import AdminMainWindow
 
@@ -372,12 +373,23 @@ def test_main_window_launches_patient_scoped_task(
     assert process.environment.value("OCULIDOC_SESSION_ID") == str(session_id)
     assert process.environment.value("OCULIDOC_SESSION_DIRECTORY") == str(launch.session_directory)
 
+    window._lan_state_store.set_display(
+        "准备",
+        mode=PatientDisplayMode.READY,
+        task_id=launch.module_id,
+    )
+    window._lan_state_store.set_display(
+        "运行中",
+        mode=PatientDisplayMode.RUNNING,
+        task_id=launch.module_id,
+    )
     write_completed_run(launch)
     process.finished.emit(0, None)
 
     completed = runtime.experiment_session_service.get_session(session_id)
     assert completed.status is (ExperimentSessionStatus.COMPLETED)
     assert session_id not in (window._gaze_processes)
+    assert window._lan_state_store.load().mode is PatientDisplayMode.RESULT
 
     window.close()
     runtime.dispose()

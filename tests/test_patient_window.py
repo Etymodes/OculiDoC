@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pytestqt.qtbot import QtBot
 
+from oculidoc.lan_control import LanControlState, PatientDisplayMode
 from oculidoc.ui.patient_window import (
     PatientDisplayWindow,
     patient_message_font_size,
@@ -33,3 +34,22 @@ def test_patient_window_updates_text_and_font(
 
     assert window.placeholder_label.text() == "请看向屏幕中央"
     assert window.placeholder_label.font().pixelSize() >= 72
+
+
+def test_patient_window_renders_shared_ready_state(qtbot: QtBot) -> None:
+    window = PatientDisplayWindow()
+    qtbot.addWidget(window)
+    state = LanControlState(
+        revision=3,
+        mode=PatientDisplayMode.READY,
+        text="追踪球即将开始\n3",
+        task_id="tracking_ball",
+        countdown_seconds=3,
+        updated_at_utc="2026-07-20T00:00:00+00:00",
+    )
+
+    window.apply_state(state)
+
+    assert window.current_state == state
+    assert window.state_label.text() == "准备 · 3 秒"
+    assert window.placeholder_label.text() == state.text

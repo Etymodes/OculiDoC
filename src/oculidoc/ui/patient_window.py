@@ -10,6 +10,30 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from oculidoc.lan_control import LanControlState, PatientDisplayMode
+
+_MODE_LABELS = {
+    PatientDisplayMode.CLOSED: "已关闭",
+    PatientDisplayMode.IDLE: "待机",
+    PatientDisplayMode.READY: "准备",
+    PatientDisplayMode.PREVIEW: "提示",
+    PatientDisplayMode.RUNNING: "任务进行中",
+    PatientDisplayMode.PAUSED: "已暂停",
+    PatientDisplayMode.RESULT: "任务结束",
+    PatientDisplayMode.ERROR: "异常",
+}
+
+_MODE_COLORS = {
+    PatientDisplayMode.CLOSED: "#5a7184",
+    PatientDisplayMode.IDLE: "#176b36",
+    PatientDisplayMode.READY: "#8a5a00",
+    PatientDisplayMode.PREVIEW: "#1565c0",
+    PatientDisplayMode.RUNNING: "#176b36",
+    PatientDisplayMode.PAUSED: "#8a5a00",
+    PatientDisplayMode.RESULT: "#176b36",
+    PatientDisplayMode.ERROR: "#b42318",
+}
+
 
 def patient_message_font_size(text: str) -> int:
     """Choose a large readable pixel size from the message length."""
@@ -75,11 +99,15 @@ class PatientDisplayWindow(QWidget):
         title = QLabel("OculiDoC 患者显示端")
         title.setObjectName("patientTitle")
 
+        self.state_label = QLabel()
+        self.state_label.setObjectName("patientState")
+
         emergency_button = QPushButton("紧急退出")
         emergency_button.setObjectName("emergencyExitButton")
         emergency_button.clicked.connect(self._emergency_exit)
 
         header.addWidget(title)
+        header.addWidget(self.state_label)
         header.addStretch(1)
         header.addWidget(emergency_button)
 
@@ -97,7 +125,23 @@ class PatientDisplayWindow(QWidget):
 
         root.addLayout(header)
         root.addWidget(display_frame, 1)
-        self.set_placeholder("等待管理员选择测试项目")
+        self.current_state = LanControlState.idle()
+        self.apply_state(self.current_state)
+
+    def apply_state(self, state: LanControlState) -> None:
+        """Render one shared patient-display state."""
+        self.current_state = state
+        label = _MODE_LABELS[state.mode]
+
+        if state.countdown_seconds is not None:
+            label += f" · {state.countdown_seconds} 秒"
+
+        self.state_label.setText(label)
+        self.state_label.setStyleSheet(
+            "font-family: 'Microsoft YaHei UI'; font-size: 20px; font-weight: 800; "
+            f"color: {_MODE_COLORS[state.mode]};"
+        )
+        self.set_placeholder(state.text)
 
     def set_placeholder(
         self,

@@ -34,6 +34,18 @@ def test_frozen_task_process_routes_through_executable() -> None:
     assert arguments == ["--task", "binary"]
 
 
+def test_direct_task_process_includes_config_revision() -> None:
+    program, arguments = gaze_task_process_command(
+        "tracking",
+        config_revision=7,
+        executable=Path("OculiDoC.exe"),
+        frozen=True,
+    )
+
+    assert program == "OculiDoC.exe"
+    assert arguments == ["--task", "tracking", "--direct", "--config-revision", "7"]
+
+
 def test_source_api_process_uses_python_module() -> None:
     program, arguments = local_api_process_command(
         executable=Path("python.exe"),
@@ -99,12 +111,12 @@ def test_dispatch_forwards_frozen_task_arguments(
         "main",
         lambda argv=None: received.append(list(argv) if argv is not None else None) or 23,
     )
-    assert main_module.dispatch(["--task", "tracking"]) == 23
-    assert received == [["tracking"]]
+    assert main_module.dispatch(["--task", "tracking", "--direct", "--config-revision", "4"]) == 23
+    assert received == [["tracking", "--direct", "--config-revision", "4"]]
 
 
 def test_dispatch_rejects_invalid_arguments() -> None:
     with pytest.raises(SystemExit, match="Unsupported OculiDoC arguments"):
         main_module.dispatch(["--unknown"])
-    with pytest.raises(SystemExit, match="requires exactly one"):
+    with pytest.raises(SystemExit, match="requires a task command"):
         main_module.dispatch(["--task"])

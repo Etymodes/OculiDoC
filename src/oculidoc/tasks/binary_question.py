@@ -17,9 +17,11 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFontComboBox,
     QFormLayout,
     QHBoxLayout,
@@ -1019,10 +1021,13 @@ class BinaryQuestionSetupDialog(QDialog):
         parent: QWidget | None = None,
         *,
         question_bank_path: str | Path | None = None,
+        config: BinaryQuestionConfig | None = None,
     ) -> None:
         super().__init__(parent)
+        initial = config or BinaryQuestionConfig(question="你现在感到舒服吗？")
+        self._randomization_seed = initial.randomization_seed
         self.setWindowTitle("左右二分问答设置")
-        self.resize(680, 560)
+        self.resize(680, 680)
 
         if question_bank_path is None:
             question_bank_path = Path.home() / ".oculidoc" / "data" / "common_questions.json"
@@ -1063,15 +1068,15 @@ class BinaryQuestionSetupDialog(QDialog):
             question_type_row.addWidget(button)
 
         question_type_row.addStretch(1)
-        self.question_type_buttons[BinaryQuestionType.INQUIRY].setChecked(True)
+        self.question_type_buttons[initial.question_type].setChecked(True)
         form.addRow("问题类型：", question_type_row)
 
-        self.question_edit = QLineEdit("你现在感到舒服吗？")
+        self.question_edit = QLineEdit(initial.question)
         self.question_edit.setObjectName("binaryQuestionEdit")
         form.addRow("问题：", self.question_edit)
 
-        self.option_1_edit = QLineEdit("是")
-        self.option_2_edit = QLineEdit("否")
+        self.option_1_edit = QLineEdit(initial.option_1)
+        self.option_2_edit = QLineEdit(initial.option_2)
         self.option_1_edit.setObjectName("binaryOption1Edit")
         self.option_2_edit.setObjectName("binaryOption2Edit")
         self.option_1_label = QLabel("选项1：")
@@ -1079,34 +1084,57 @@ class BinaryQuestionSetupDialog(QDialog):
         form.addRow(self.option_1_label, self.option_1_edit)
         form.addRow(self.option_2_label, self.option_2_edit)
 
+        self.correct_option_combo = QComboBox()
+        self.correct_option_combo.addItem("选项 1", "option_1")
+        self.correct_option_combo.addItem("选项 2", "option_2")
+        self.correct_option_combo.setCurrentIndex(
+            self.correct_option_combo.findData(initial.correct_option_id or "option_1")
+        )
+        form.addRow("正确选项：", self.correct_option_combo)
+
         self.question_font_combo = QFontComboBox()
-        self.question_font_combo.setCurrentFont(QFont("Microsoft YaHei UI"))
+        self.question_font_combo.setCurrentFont(QFont(initial.question_font_family))
+        self._question_font_family = initial.question_font_family
+        self.question_font_combo.currentFontChanged.connect(
+            lambda font: setattr(self, "_question_font_family", font.family())
+        )
         form.addRow("文字字体：", self.question_font_combo)
 
         self.question_font_size_spin = QSpinBox()
         self.question_font_size_spin.setRange(12, 120)
-        self.question_font_size_spin.setValue(48)
+        self.question_font_size_spin.setValue(initial.question_font_size_pt)
         self.question_font_size_spin.setSuffix(" pt")
         form.addRow("问题字号：", self.question_font_size_spin)
 
         self.option_font_size_spin = QSpinBox()
         self.option_font_size_spin.setRange(12, 120)
-        self.option_font_size_spin.setValue(44)
+        self.option_font_size_spin.setValue(initial.option_font_size_pt)
         self.option_font_size_spin.setSuffix(" pt")
         form.addRow("选项字号：", self.option_font_size_spin)
 
         self.dwell_spin = QSpinBox()
         self.dwell_spin.setRange(250, 10_000)
-        self.dwell_spin.setValue(1_200)
+        self.dwell_spin.setValue(initial.dwell_time_ms)
         self.dwell_spin.setSingleStep(100)
         self.dwell_spin.setSuffix(" ms")
         form.addRow("停留确认：", self.dwell_spin)
 
         self.duration_spin = QSpinBox()
         self.duration_spin.setRange(5, 600)
-        self.duration_spin.setValue(30)
+        self.duration_spin.setValue(initial.duration_seconds)
         self.duration_spin.setSuffix(" 秒")
         form.addRow("任务时长：", self.duration_spin)
+
+        self.neutral_zone_spin = QDoubleSpinBox()
+        self.neutral_zone_spin.setRange(0.0, 0.6)
+        self.neutral_zone_spin.setSingleStep(0.01)
+        self.neutral_zone_spin.setDecimals(2)
+        self.neutral_zone_spin.setValue(initial.neutral_zone_width)
+        form.addRow("中央中性区：", self.neutral_zone_spin)
+
+        self.randomize_sides_check = QCheckBox("每次呈现时随机交换左右位置")
+        self.randomize_sides_check.setChecked(initial.randomize_sides)
+        form.addRow("左右随机化：", self.randomize_sides_check)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
@@ -1143,12 +1171,9 @@ class BinaryQuestionSetupDialog(QDialog):
         self,
         *_args: object,
     ) -> None:
-        if self._current_question_type().is_scored:
-            self.option_1_label.setText("正确选项：")
-            self.option_2_label.setText("错误选项：")
-        else:
-            self.option_1_label.setText("选项1：")
-            self.option_2_label.setText("选项2：")
+        self.option_1_label.setText("选项1：")
+        self.option_2_label.setText("选项2：")
+        self.correct_option_combo.setEnabled(self._current_question_type().is_scored)
 
     def _reload_common_questions(
         self,
@@ -1218,6 +1243,9 @@ class BinaryQuestionSetupDialog(QDialog):
         self.question_edit.setText(template.question)
         self.option_1_edit.setText(template.option_1)
         self.option_2_edit.setText(template.option_2)
+        self.correct_option_combo.setCurrentIndex(
+            self.correct_option_combo.findData(template.correct_option_id or "option_1")
+        )
         self._refresh_common_question_actions()
 
     def _template_from_fields(
@@ -1231,7 +1259,9 @@ class BinaryQuestionSetupDialog(QDialog):
             "question": self.question_edit.text(),
             "option_1": self.option_1_edit.text(),
             "option_2": self.option_2_edit.text(),
-            "correct_option_id": ("option_1" if question_type.is_scored else None),
+            "correct_option_id": (
+                str(self.correct_option_combo.currentData()) if question_type.is_scored else None
+            ),
         }
 
         if template_id is None:
@@ -1319,11 +1349,15 @@ class BinaryQuestionSetupDialog(QDialog):
             option_1=self.option_1_edit.text(),
             option_2=self.option_2_edit.text(),
             question_type=question_type,
-            correct_option_id=("option_1" if question_type.is_scored else None),
+            correct_option_id=(
+                str(self.correct_option_combo.currentData()) if question_type.is_scored else None
+            ),
             dwell_time_ms=self.dwell_spin.value(),
             duration_seconds=self.duration_spin.value(),
-            question_font_family=(self.question_font_combo.currentFont().family()),
+            question_font_family=self._question_font_family,
             question_font_size_pt=(self.question_font_size_spin.value()),
             option_font_size_pt=self.option_font_size_spin.value(),
-            randomize_sides=True,
+            neutral_zone_width=self.neutral_zone_spin.value(),
+            randomize_sides=self.randomize_sides_check.isChecked(),
+            randomization_seed=self._randomization_seed,
         )

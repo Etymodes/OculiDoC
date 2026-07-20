@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
 from oculidoc.config import Settings
+from oculidoc.lan_control import DEFAULT_IDLE_TEXT
 from oculidoc.modules.registry import DEFAULT_MODULES
 from oculidoc.ui.main_window import AdminMainWindow
 from oculidoc.ui.patient_window import PatientDisplayWindow
@@ -29,4 +30,4 @@ def test_patient_window_builds(qtbot: QtBot) -> None:
     qtbot.addWidget(window)
 
     assert window.windowTitle() == "OculiDoC 患者显示端"
-    assert window.placeholder_label.text() == "等待管理员选择测试项目"
+    assert window.placeholder_label.text() == DEFAULT_IDLE_TEXT
