@@ -14,3 +14,5 @@ def test_required_modules_are_registered() -> None:
         "image_choice",
         "instruction_fixation",
     } <= identifiers
+    keyboard = next(module for module in DEFAULT_MODULES if module.module_id == "screen_keyboard")
+    assert keyboard.status == "available"

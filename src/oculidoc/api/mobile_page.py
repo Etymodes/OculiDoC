@@ -30,7 +30,7 @@ _PAGE = r"""<!doctype html>
     textarea { min-height: 100px; resize: vertical; }
     .check-label { display: flex; align-items: center; font-weight: 600; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
-    .grid.three { grid-template-columns: 1fr 1fr 1fr; }
+    .grid.four { grid-template-columns: 1fr 1fr 1fr 1fr; }
     button { border: 0; border-radius: 10px; padding: 13px 12px; font-size: 16px;
              font-weight: 700; background: #1565c0; color: white; }
     button.secondary { background: #edf4fb; color: #184e77; border: 1px solid #bfd3e4; }
@@ -40,7 +40,7 @@ _PAGE = r"""<!doctype html>
     .command-pending, .command-accepted { color: #8a5a00; }
     .command-completed { color: #176b36; }
     .command-rejected, .conflict { color: #b42318; }
-    @media (max-width: 560px) { .grid.three { grid-template-columns: 1fr; } }
+    @media (max-width: 680px) { .grid.four { grid-template-columns: 1fr 1fr; } }
   </style>
 </head>
 <body>
@@ -66,9 +66,10 @@ _PAGE = r"""<!doctype html>
       <button id="save-config" class="secondary">保存设置</button>
       <button id="start-task">保存并直接启动</button>
     </div>
-    <div class="grid three">
+    <div class="grid four">
       <button id="open-display" class="secondary">打开患者端</button>
       <button id="reload-config" class="secondary">重新读取设置</button>
+      <button id="replay-speech" class="secondary">重播语音</button>
       <button id="stop-task" class="danger">终止当前任务</button>
     </div>
     <pre id="command-status">尚未发送桌面命令。</pre>
@@ -129,6 +130,14 @@ const fields = {
     {name: "option_font_size_pt", label: "选项字号（pt）", type: "number", min: 12, max: 120, step: 1},
     {name: "neutral_zone_width", label: "中央中性区（0–0.6）", type: "number", min: 0, max: 0.6, step: 0.01},
     {name: "randomize_sides", label: "随机交换左右位置", type: "checkbox"}
+  ],
+  screen_keyboard: [
+    {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
+    {name: "duration_seconds", label: "任务时长（秒）", type: "number", min: 5, max: 3600, step: 1},
+    {name: "enable_tone_step", label: "启用声调选择步骤", type: "checkbox"},
+    {name: "output_font_size_pt", label: "上半屏输出字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "instruction_font_size_pt", label: "指示文字字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "option_font_size_pt", label: "下半屏选项字号（pt）", type: "number", min: 20, max: 120, step: 1}
   ]
 };
 
@@ -236,7 +245,7 @@ function collectConfig() {
       config[name] = input.value;
     }
   });
-  if (!["yes_no", "question_answer"].includes(config.question_type)) {
+  if ("question_type" in config && !["yes_no", "question_answer"].includes(config.question_type)) {
     config.correct_option_id = null;
   }
   return config;
@@ -357,6 +366,9 @@ document.getElementById("start-task").addEventListener("click", async () => {
 });
 document.getElementById("open-display").addEventListener("click", async () => {
   await submitDesktopCommand("open_patient_display");
+});
+document.getElementById("replay-speech").addEventListener("click", async () => {
+  await submitDesktopCommand("replay_speech");
 });
 document.getElementById("stop-task").addEventListener("click", async () => {
   await submitDesktopCommand("stop_task", document.getElementById("run-module").value);

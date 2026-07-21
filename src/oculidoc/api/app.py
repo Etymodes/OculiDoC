@@ -294,6 +294,16 @@ def create_api(
                 detail="open_patient_display does not accept module_id.",
             )
 
+        if (
+            request.command_type is LanCommandType.REPLAY_SPEECH
+            and module_id is not None
+            and module_id not in REMOTE_GAZE_MODULE_IDS
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="replay_speech only accepts a gaze task module.",
+            )
+
         payload: dict[str, object] = {}
 
         if module_id is not None:

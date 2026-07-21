@@ -30,7 +30,8 @@ DEFAULT_MODULES: tuple[ModuleDefinition, ...] = (
     ModuleDefinition(
         "screen_keyboard",
         "屏幕打字",
-        "通过停留选择进行文字输入和辅助沟通。",
+        "通过大字声母、韵母、韵尾和可选声调分步停留输入拼音。",
+        "available",
     ),
     ModuleDefinition(
         "binary_horizontal",

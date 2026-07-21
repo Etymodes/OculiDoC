@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Sequence
 
 from PySide6.QtCore import QTimer
+from PySide6.QtTextToSpeech import QTextToSpeech
 from PySide6.QtWidgets import (
     QDialog,
     QMessageBox,
@@ -18,6 +19,7 @@ from oculidoc.lan_control import (
     LanControlTransitionError,
     PatientDisplayMode,
 )
+from oculidoc.speech_replay import SpeechReplayStore
 from oculidoc.task_configs import (
     TaskConfigConflict,
     TaskConfigStore,
@@ -30,6 +32,10 @@ from oculidoc.tasks.binary_question import (
 )
 from oculidoc.tasks.gaze_stream import (
     GazeStreamWorker,
+)
+from oculidoc.tasks.screen_keyboard import (
+    ScreenKeyboardSetupDialog,
+    ScreenKeyboardTask,
 )
 from oculidoc.tasks.task_window import (
     TimedTaskWindow,
@@ -51,6 +57,7 @@ def main(
         choices=(
             "tracking",
             "binary",
+            "typing",
         ),
     )
     parser.add_argument("--direct", action="store_true")
@@ -63,7 +70,11 @@ def main(
     app = create_qt_application()
     settings = apply_saved_gaze_device_config(get_settings())
     allow_mouse_fallback = settings.gaze_source == "mock"
-    module_id = "tracking_ball" if args.task == "tracking" else "binary_horizontal"
+    module_id = {
+        "tracking": "tracking_ball",
+        "binary": "binary_horizontal",
+        "typing": "screen_keyboard",
+    }[args.task]
     config_store = TaskConfigStore(settings.data_dir / "runtime" / "task_configs.json")
     record = config_store.load(module_id)
     config = task_config_from_dict(module_id, record.config)
@@ -81,11 +92,18 @@ def main(
             return 0
 
         config = setup.build_config()
-    else:
+    elif args.task == "binary":
         setup = BinaryQuestionSetupDialog(
             question_bank_path=(settings.data_dir / "common_questions.json"),
             config=config,
         )
+
+        if setup.exec() != QDialog.DialogCode.Accepted:
+            return 0
+
+        config = setup.build_config()
+    else:
+        setup = ScreenKeyboardSetupDialog(config=config)
 
         if setup.exec() != QDialog.DialogCode.Accepted:
             return 0
@@ -114,12 +132,19 @@ def main(
         )
         title = "追踪球"
         duration_seconds = config.duration_seconds
-    else:
+    elif args.task == "binary":
         task = BinaryQuestionTask(
             config,
             allow_mouse_fallback=(allow_mouse_fallback),
         )
         title = "左右二分问答"
+        duration_seconds = config.duration_seconds
+    else:
+        task = ScreenKeyboardTask(
+            config,
+            allow_mouse_fallback=allow_mouse_fallback,
+        )
+        title = "屏幕打字"
         duration_seconds = config.duration_seconds
 
     window = TimedTaskWindow(
@@ -127,6 +152,23 @@ def main(
         duration_seconds=duration_seconds,
         title=title,
     )
+
+    speech = QTextToSpeech(window)
+    last_spoken_text = ""
+
+    def speak(text: str) -> None:
+        nonlocal last_spoken_text
+        normalized = text.strip()
+
+        if not normalized:
+            return
+
+        last_spoken_text = normalized
+        speech.stop()
+        speech.say(normalized)
+
+    if isinstance(task, ScreenKeyboardTask):
+        task.speech_requested.connect(speak)
 
     if isinstance(
         task,
@@ -162,6 +204,48 @@ def main(
     display_state_store = LanControlStateStore(
         settings.data_dir / "runtime" / "lan_control_state.json"
     )
+    speech_replay_store = SpeechReplayStore(settings.data_dir / "runtime" / "speech_replay.json")
+
+    try:
+        last_replay_revision = speech_replay_store.load().revision
+    except (OSError, KeyError, TypeError, ValueError):
+        last_replay_revision = 0
+
+    replay_timer = QTimer(window)
+    replay_timer.setInterval(250)
+
+    def poll_speech_replay() -> None:
+        nonlocal last_replay_revision
+
+        try:
+            request = speech_replay_store.load()
+        except (OSError, KeyError, TypeError, ValueError):
+            return
+
+        if request.revision <= last_replay_revision:
+            return
+
+        last_replay_revision = request.revision
+
+        if request.task_id == module_id and last_spoken_text:
+            speak(last_spoken_text)
+
+    replay_timer.timeout.connect(poll_speech_replay)
+    replay_timer.start()
+
+    if isinstance(task, ScreenKeyboardTask):
+
+        def sync_typing_text(text: str) -> None:
+            state = display_state_store.load()
+
+            if state.mode is PatientDisplayMode.RUNNING and state.task_id == module_id:
+                display_state_store.set_display(
+                    text,
+                    mode=PatientDisplayMode.RUNNING,
+                    task_id=module_id,
+                )
+
+        task.display_text_changed.connect(sync_typing_text)
     countdown_seconds = 0 if settings.environment == "test" else TASK_START_COUNTDOWN_SECONDS
     source_hint = "\n模拟模式" if settings.gaze_source == "mock" else ""
     display_state_store.set_display(
@@ -211,6 +295,11 @@ def main(
         worker.enable_sample_delivery()
         window.showFullScreen()
         window.start()
+
+        if args.task == "tracking":
+            speak("请保持注视标志物，并让视线跟随它移动。")
+        elif args.task == "binary":
+            speak(config.question)
 
     def begin_countdown(result: GazePreflightResult) -> None:
         if not result.passed:

@@ -16,10 +16,13 @@ def test_task_config_store_round_trip_and_preserves_modules(tmp_path: Path) -> N
     store = TaskConfigStore(path)
     tracking = store.load("tracking_ball")
     binary = store.load("binary_horizontal")
+    keyboard = store.load("screen_keyboard")
 
     assert tracking.revision == 0
     assert tracking.config["diameter_px"] == 300
     assert binary.config["question"] == "你现在感到舒服吗？"
+    assert keyboard.config["enable_tone_step"] is True
+    assert keyboard.config["output_font_size_pt"] == 48
 
     tracking_config = dict(tracking.config)
     tracking_config["diameter_px"] = 180
@@ -44,6 +47,16 @@ def test_task_config_store_round_trip_and_preserves_modules(tmp_path: Path) -> N
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == "1.0"
     assert set(payload["modules"]) == {"tracking_ball", "binary_horizontal"}
+
+
+def test_screen_keyboard_config_validates_tone_boolean(tmp_path: Path) -> None:
+    store = TaskConfigStore(tmp_path / "task_configs.json")
+    record = store.load("screen_keyboard")
+    invalid = dict(record.config)
+    invalid["enable_tone_step"] = "false"
+
+    with pytest.raises(TypeError, match="enable_tone_step"):
+        store.save("screen_keyboard", invalid, expected_revision=record.revision)
 
 
 def test_task_config_store_rejects_stale_revision(tmp_path: Path) -> None:

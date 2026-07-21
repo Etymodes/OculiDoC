@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-_TASK_COMMANDS = frozenset({"tracking", "binary"})
+_TASK_COMMANDS = frozenset({"tracking", "binary", "typing"})
 
 
 def is_frozen_application() -> bool:

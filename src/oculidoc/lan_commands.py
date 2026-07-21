@@ -17,6 +17,7 @@ REMOTE_GAZE_MODULE_IDS = frozenset(
     {
         "tracking_ball",
         "binary_horizontal",
+        "screen_keyboard",
     }
 )
 
@@ -25,6 +26,7 @@ class LanCommandType(StrEnum):
     OPEN_PATIENT_DISPLAY = "open_patient_display"
     START_TASK = "start_task"
     STOP_TASK = "stop_task"
+    REPLAY_SPEECH = "replay_speech"
 
 
 class LanCommandStatus(StrEnum):

@@ -31,6 +31,13 @@ Infrastructure Adapters
   - local API
 ```
 
+## 屏幕打字与语音
+
+- `ScreenKeyboardTask` 复用统一眼动采样、任务前预检、全屏计时和 `RecordedTaskRuntime`，不创建第二套任务运行时。
+- 拼音阶段状态只存在于任务进程；共享任务设置继续通过 `task_configs.json` 做版本校验和原子保存。
+- 最终文字与当前拼音通过现有 `LanControlStateStore` 的 RUNNING 状态同步，患者显示端和手机端不直接访问任务对象。
+- 自动播报由任务子进程调用 Qt 系统语音；手机端仅写入版本化 `speech_replay.json` 请求，任务进程轮询后重播最近一句，不开放公网语音接口。
+
 ## 依赖规则
 
 - UI 不直接读取 TCP socket；

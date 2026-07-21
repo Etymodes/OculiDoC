@@ -73,6 +73,7 @@ from oculidoc.process_launch import (
     gaze_task_process_command,
     local_api_process_command,
 )
+from oculidoc.speech_replay import SpeechReplayStore
 from oculidoc.task_configs import TaskConfigStore
 from oculidoc.ui.device_settings import DeviceSettingsDialog
 from oculidoc.ui.lan_pairing import (
@@ -137,6 +138,9 @@ class AdminMainWindow(QMainWindow):
             self.settings.data_dir.expanduser() / "runtime" / "lan_commands"
         ).resolve()
         self._lan_command_store = LanCommandStore(self._lan_command_directory)
+        self._speech_replay_store = SpeechReplayStore(
+            self.settings.data_dir.expanduser() / "runtime" / "speech_replay.json"
+        )
         self._task_config_store = TaskConfigStore(
             self.settings.data_dir.expanduser() / "runtime" / "task_configs.json"
         )
@@ -869,6 +873,9 @@ class AdminMainWindow(QMainWindow):
         if command.command_type is LanCommandType.STOP_TASK:
             return self._execute_remote_task_stop(command)
 
+        if command.command_type is LanCommandType.REPLAY_SPEECH:
+            return self._execute_remote_speech_replay(command)
+
         raise LanCommandRejected("未知桌面命令。")
 
     def _execute_remote_task_start(self, command: LanCommand) -> str:
@@ -942,6 +949,21 @@ class AdminMainWindow(QMainWindow):
 
         self._reset_patient_display()
         return f"已向 {len(matches)} 个任务进程发送终止命令。"
+
+    def _execute_remote_speech_replay(self, command: LanCommand) -> str:
+        module_id = command.module_id
+
+        if module_id is not None:
+            if module_id not in self._active_gaze_module_ids:
+                raise LanCommandRejected("指定任务当前没有运行。")
+            active_module = module_id
+        elif len(self._active_gaze_module_ids) == 1:
+            active_module = next(iter(self._active_gaze_module_ids))
+        else:
+            raise LanCommandRejected("当前没有可重播语音的运行中任务。")
+
+        request = self._speech_replay_store.request(active_module)
+        return f"已请求重播当前任务语音（版本 {request.revision}）。"
 
     def _open_patient_display(self, checked: bool = False) -> None:
         del checked
@@ -1043,6 +1065,7 @@ class AdminMainWindow(QMainWindow):
         if module.module_id in {
             "tracking_ball",
             "binary_horizontal",
+            "screen_keyboard",
         }:
             self._open_gaze_task_module(module)
             return
