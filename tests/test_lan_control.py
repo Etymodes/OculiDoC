@@ -243,6 +243,17 @@ def test_mobile_api_submits_desktop_commands(
     )
     assert vertical.status_code == 200
 
+    multiple = client.post(
+        "/api/v1/commands",
+        params=parameters,
+        json={
+            "command_type": "start_task",
+            "module_id": "multiple_choice",
+            "config_revision": 0,
+        },
+    )
+    assert multiple.status_code == 200
+
     replayed = client.post(
         "/api/v1/commands",
         params=parameters,
@@ -255,7 +266,7 @@ def test_mobile_api_submits_desktop_commands(
         params=parameters,
     )
     assert listed.status_code == 200
-    assert len(listed.json()) == 5
+    assert len(listed.json()) == 6
 
 
 def test_mobile_api_synchronizes_versioned_task_configs(tmp_path: Path) -> None:

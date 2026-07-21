@@ -34,6 +34,11 @@ from oculidoc.tasks.binary_question import (
 from oculidoc.tasks.gaze_stream import (
     GazeStreamWorker,
 )
+from oculidoc.tasks.multiple_choice import (
+    MultipleChoiceConfig,
+    MultipleChoiceSetupDialog,
+    MultipleChoiceTask,
+)
 from oculidoc.tasks.screen_keyboard import (
     ScreenKeyboardConfig,
     ScreenKeyboardSetupDialog,
@@ -62,6 +67,7 @@ def main(
             "binary",
             "binary-vertical",
             "typing",
+            "multiple-choice",
         ),
     )
     parser.add_argument("--direct", action="store_true")
@@ -79,10 +85,12 @@ def main(
         "binary": "binary_horizontal",
         "binary-vertical": "binary_vertical",
         "typing": "screen_keyboard",
+        "multiple-choice": "multiple_choice",
     }[args.task]
     config_store = TaskConfigStore(settings.data_dir / "runtime" / "task_configs.json")
     record = config_store.load(module_id)
     config = task_config_from_dict(module_id, record.config)
+    setup: QDialog
 
     if args.direct:
         if args.config_revision != record.revision:
@@ -114,11 +122,21 @@ def main(
             return 0
 
         config = setup.build_config()
-    else:
+    elif args.task == "typing":
         if not isinstance(config, ScreenKeyboardConfig):
             raise TypeError("Typing task configuration type mismatch.")
 
         setup = ScreenKeyboardSetupDialog(config=config)
+
+        if setup.exec() != QDialog.DialogCode.Accepted:
+            return 0
+
+        config = setup.build_config()
+    else:
+        if not isinstance(config, MultipleChoiceConfig):
+            raise TypeError("Multiple-choice task configuration type mismatch.")
+
+        setup = MultipleChoiceSetupDialog(config=config)
 
         if setup.exec() != QDialog.DialogCode.Accepted:
             return 0
@@ -141,6 +159,7 @@ def main(
             return 2
 
     question_to_speak = ""
+    task: TrackingBallTask | BinaryQuestionTask | ScreenKeyboardTask | MultipleChoiceTask
 
     if args.task == "tracking":
         if not isinstance(config, TrackingBallConfig):
@@ -165,7 +184,7 @@ def main(
         title = "上下二分问答" if vertical else "左右二分问答"
         duration_seconds = config.duration_seconds
         question_to_speak = config.question
-    else:
+    elif args.task == "typing":
         if not isinstance(config, ScreenKeyboardConfig):
             raise TypeError("Typing task configuration type mismatch.")
 
@@ -175,6 +194,17 @@ def main(
         )
         title = "屏幕打字"
         duration_seconds = config.duration_seconds
+    else:
+        if not isinstance(config, MultipleChoiceConfig):
+            raise TypeError("Multiple-choice task configuration type mismatch.")
+
+        task = MultipleChoiceTask(
+            config,
+            allow_mouse_fallback=allow_mouse_fallback,
+        )
+        title = "多选项问答"
+        duration_seconds = config.duration_seconds
+        question_to_speak = config.question
 
     window = TimedTaskWindow(
         task,
@@ -275,6 +305,23 @@ def main(
                 )
 
         task.display_text_changed.connect(sync_typing_text)
+
+    if isinstance(task, MultipleChoiceTask):
+        multiple_choice_task = task
+
+        def sync_multiple_choice_text(option_id: str, selected: bool) -> None:
+            del option_id, selected
+            state = display_state_store.load()
+
+            if state.mode is PatientDisplayMode.RUNNING and state.task_id == module_id:
+                display_state_store.set_display(
+                    multiple_choice_task.patient_display_text,
+                    mode=PatientDisplayMode.RUNNING,
+                    task_id=module_id,
+                )
+
+        multiple_choice_task.selection_changed.connect(sync_multiple_choice_text)
+
     countdown_seconds = 0 if settings.environment == "test" else TASK_START_COUNTDOWN_SECONDS
     source_hint = "\n模拟模式" if settings.gaze_source == "mock" else ""
     display_state_store.set_display(
@@ -327,7 +374,7 @@ def main(
 
         if args.task == "tracking":
             speak("请保持注视标志物，并让视线跟随它移动。")
-        elif args.task in {"binary", "binary-vertical"}:
+        elif args.task in {"binary", "binary-vertical", "multiple-choice"}:
             speak(question_to_speak)
 
     def begin_countdown(result: GazePreflightResult) -> None:

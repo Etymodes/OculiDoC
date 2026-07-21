@@ -134,6 +134,22 @@ const fields = {
   ],
   binary_horizontal: binaryFields,
   binary_vertical: binaryFields,
+  multiple_choice: [
+    {name: "question", label: "问题文字", type: "textarea"},
+    {name: "option_count", label: "选项数量", type: "number", min: 2, max: 6, step: 1},
+    {name: "option_1", label: "选项 1", type: "text"},
+    {name: "option_2", label: "选项 2", type: "text"},
+    {name: "option_3", label: "选项 3", type: "text"},
+    {name: "option_4", label: "选项 4", type: "text"},
+    {name: "option_5", label: "选项 5", type: "text"},
+    {name: "option_6", label: "选项 6", type: "text"},
+    {name: "layout", label: "排列方式", type: "select", options: [["grid", "自动宫格（2×2 / 2×3）"], ["ring", "环形排列"]]},
+    {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
+    {name: "duration_seconds", label: "最长任务时长（秒）", type: "number", min: 5, max: 3600, step: 1},
+    {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "option_font_size_pt", label: "选项字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "randomize_positions", label: "每次呈现随机交换选项位置", type: "checkbox"}
+  ],
   screen_keyboard: [
     {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
     {name: "duration_seconds", label: "任务时长（秒）", type: "number", min: 5, max: 3600, step: 1},

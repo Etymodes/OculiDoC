@@ -253,7 +253,24 @@ def format_task_result_lines(
         if completion_status is not None:
             lines.append(f"完成状态：{completion_status}")
 
-        is_binary = any(
+        is_multiple_choice = task_kind == "multiple_choice" or "selected_answers" in result
+
+        if is_multiple_choice:
+            selected_answers = result.get("selected_answers")
+            answer_text = (
+                "、".join(str(value) for value in selected_answers)
+                if isinstance(selected_answers, list) and selected_answers
+                else "未选择"
+            )
+            lines.append(f"患者选择：{answer_text}")
+            lines.append("评分结果：不评分")
+            lines.append(
+                "首次选择反应时间："
+                + milliseconds_text(result.get("first_selection_reaction_time_ms"))
+            )
+            lines.append(f"选择/取消次数：{result.get('toggle_count', 0)}")
+
+        is_binary = not is_multiple_choice and any(
             key in result
             for key in (
                 "question",

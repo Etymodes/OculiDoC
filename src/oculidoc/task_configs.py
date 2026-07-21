@@ -13,7 +13,13 @@ from typing import Any
 from oculidoc.lan_control import utc_now_text
 
 TASK_CONFIG_MODULE_IDS = frozenset(
-    {"tracking_ball", "binary_horizontal", "binary_vertical", "screen_keyboard"}
+    {
+        "tracking_ball",
+        "binary_horizontal",
+        "binary_vertical",
+        "screen_keyboard",
+        "multiple_choice",
+    }
 )
 
 
@@ -32,6 +38,11 @@ def _config_type(module_id: str) -> Any:
         from oculidoc.tasks.screen_keyboard import ScreenKeyboardConfig
 
         return ScreenKeyboardConfig
+
+    if module_id == "multiple_choice":
+        from oculidoc.tasks.multiple_choice import MultipleChoiceConfig
+
+        return MultipleChoiceConfig
 
     raise KeyError(f"Unsupported task configuration module: {module_id}")
 
@@ -57,6 +68,7 @@ def task_config_from_dict(module_id: str, value: object) -> object:
     for name in {
         "show_gaze_cursor",
         "randomize_sides",
+        "randomize_positions",
         "enable_tone_step",
     } & normalized.keys():
         if not isinstance(normalized[name], bool):

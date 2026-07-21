@@ -1067,6 +1067,7 @@ class AdminMainWindow(QMainWindow):
             "binary_horizontal",
             "binary_vertical",
             "screen_keyboard",
+            "multiple_choice",
         }:
             self._open_gaze_task_module(module)
             return
@@ -1426,7 +1427,7 @@ class AdminMainWindow(QMainWindow):
         if process is None or launch is None or self.experiment_session_service is None:
             return
 
-        raw_output = bytes(process.readAllStandardOutput())
+        raw_output = bytes(process.readAllStandardOutput())  # type: ignore[call-overload]
         process_output = raw_output.decode(
             "utf-8",
             errors="replace",

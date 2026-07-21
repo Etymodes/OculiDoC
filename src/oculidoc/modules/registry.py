@@ -48,7 +48,8 @@ DEFAULT_MODULES: tuple[ModuleDefinition, ...] = (
     ModuleDefinition(
         "multiple_choice",
         "多选项问答",
-        "显示多个文字选项并保存回答、反应时间和评分。",
+        "显示 2–6 个文字选项，支持多选、再次选择取消和手动结束。",
+        "available",
     ),
     ModuleDefinition(
         "image_choice",
