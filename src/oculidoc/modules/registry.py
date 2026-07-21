@@ -43,6 +43,7 @@ DEFAULT_MODULES: tuple[ModuleDefinition, ...] = (
         "binary_vertical",
         "上下二分问答",
         "上下排列两个答案，支持停留确认和评分。",
+        "available",
     ),
     ModuleDefinition(
         "multiple_choice",

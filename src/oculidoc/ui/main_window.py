@@ -1065,6 +1065,7 @@ class AdminMainWindow(QMainWindow):
         if module.module_id in {
             "tracking_ball",
             "binary_horizontal",
+            "binary_vertical",
             "screen_keyboard",
         }:
             self._open_gaze_task_module(module)

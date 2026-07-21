@@ -65,4 +65,5 @@ def test_mobile_page_contains_desktop_commands() -> None:
     assert "start_task" in html
     assert "stop_task" in html
     assert "replay_speech" in html
+    assert "binary_vertical" in html
     assert "启用声调选择步骤" in html

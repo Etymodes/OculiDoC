@@ -12,7 +12,9 @@ from typing import Any
 
 from oculidoc.lan_control import utc_now_text
 
-TASK_CONFIG_MODULE_IDS = frozenset({"tracking_ball", "binary_horizontal", "screen_keyboard"})
+TASK_CONFIG_MODULE_IDS = frozenset(
+    {"tracking_ball", "binary_horizontal", "binary_vertical", "screen_keyboard"}
+)
 
 
 def _config_type(module_id: str) -> Any:
@@ -21,7 +23,7 @@ def _config_type(module_id: str) -> Any:
 
         return TrackingBallConfig
 
-    if module_id == "binary_horizontal":
+    if module_id in {"binary_horizontal", "binary_vertical"}:
         from oculidoc.tasks.binary_question import BinaryQuestionConfig
 
         return BinaryQuestionConfig
@@ -71,7 +73,7 @@ def default_task_config(module_id: str) -> object:
     """Return the existing desktop defaults for one supported module."""
     config_type = _config_type(module_id)
 
-    if module_id == "binary_horizontal":
+    if module_id in {"binary_horizontal", "binary_vertical"}:
         return config_type(question="你现在感到舒服吗？")
 
     return config_type()

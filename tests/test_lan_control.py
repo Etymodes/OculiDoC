@@ -232,6 +232,17 @@ def test_mobile_api_submits_desktop_commands(
     )
     assert keyboard.status_code == 200
 
+    vertical = client.post(
+        "/api/v1/commands",
+        params=parameters,
+        json={
+            "command_type": "start_task",
+            "module_id": "binary_vertical",
+            "config_revision": 0,
+        },
+    )
+    assert vertical.status_code == 200
+
     replayed = client.post(
         "/api/v1/commands",
         params=parameters,
@@ -244,7 +255,7 @@ def test_mobile_api_submits_desktop_commands(
         params=parameters,
     )
     assert listed.status_code == 200
-    assert len(listed.json()) == 4
+    assert len(listed.json()) == 5
 
 
 def test_mobile_api_synchronizes_versioned_task_configs(tmp_path: Path) -> None:

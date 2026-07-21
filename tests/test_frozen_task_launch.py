@@ -45,6 +45,17 @@ def test_typing_task_process_is_supported() -> None:
     assert arguments == ["--task", "typing"]
 
 
+def test_vertical_binary_process_is_supported() -> None:
+    program, arguments = gaze_task_process_command(
+        "binary-vertical",
+        executable=Path("OculiDoC.exe"),
+        frozen=True,
+    )
+
+    assert program == "OculiDoC.exe"
+    assert arguments == ["--task", "binary-vertical"]
+
+
 def test_direct_task_process_includes_config_revision() -> None:
     program, arguments = gaze_task_process_command(
         "tracking",

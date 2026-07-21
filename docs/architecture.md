@@ -38,6 +38,13 @@ Infrastructure Adapters
 - 最终文字与当前拼音通过现有 `LanControlStateStore` 的 RUNNING 状态同步，患者显示端和手机端不直接访问任务对象。
 - 自动播报由任务子进程调用 Qt 系统语音；手机端仅写入版本化 `speech_replay.json` 请求，任务进程轮询后重播最近一句，不开放公网语音接口。
 
+## 横向与纵向二分问答
+
+- `BinaryQuestionTask` 通过 `layout=horizontal/vertical` 复用同一套问题、停留、评分和记录逻辑，不维护两份任务代码。
+- 横向任务使用 `gaze_x_normalized` 与左右 AOI；纵向任务使用 `gaze_y_normalized` 与上下 AOI。
+- `binary_horizontal` 与 `binary_vertical` 使用独立配置修订号和患者会话，但共享问题库与配置模型，便于横纵协议比较。
+- 布局方向、显示位置、逻辑选项映射和 AOI 都写入结构化记录；旧版 `selected_side` 字段继续保留兼容，同时新增 `selected_position`。
+
 ## 依赖规则
 
 - UI 不直接读取 TCP socket；

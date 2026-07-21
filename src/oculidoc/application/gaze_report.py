@@ -387,8 +387,8 @@ def _task_result_rows(
                     _display_value(result.get("selected_option_id")),
                 ),
                 (
-                    "显示侧",
-                    _display_value(result.get("selected_side")),
+                    "显示位置",
+                    _display_value(result.get("selected_position", result.get("selected_side"))),
                 ),
                 (
                     "评分结果",

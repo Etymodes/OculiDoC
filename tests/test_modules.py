@@ -15,4 +15,6 @@ def test_required_modules_are_registered() -> None:
         "instruction_fixation",
     } <= identifiers
     keyboard = next(module for module in DEFAULT_MODULES if module.module_id == "screen_keyboard")
+    vertical = next(module for module in DEFAULT_MODULES if module.module_id == "binary_vertical")
     assert keyboard.status == "available"
+    assert vertical.status == "available"

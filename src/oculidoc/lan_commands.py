@@ -17,6 +17,7 @@ REMOTE_GAZE_MODULE_IDS = frozenset(
     {
         "tracking_ball",
         "binary_horizontal",
+        "binary_vertical",
         "screen_keyboard",
     }
 )

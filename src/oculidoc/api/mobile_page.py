@@ -100,6 +100,21 @@ const query = "?token=" + encodeURIComponent(token);
 let currentRecord = null;
 let formDirty = false;
 
+const binaryFields = [
+  {name: "question_type", label: "问题类型", type: "select", options: [["yes_no", "是否题"], ["question_answer", "问答题"], ["inquiry", "询问题"], ["other", "其他"]]},
+  {name: "question", label: "问题文本", type: "textarea"},
+  {name: "option_1", label: "选项 1", type: "text"},
+  {name: "option_2", label: "选项 2", type: "text"},
+  {name: "correct_option_id", label: "正确选项", type: "select", options: [["option_1", "选项 1"], ["option_2", "选项 2"]]},
+  {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
+  {name: "duration_seconds", label: "任务时长（秒）", type: "number", min: 5, max: 600, step: 1},
+  {name: "question_font_family", label: "字体", type: "text"},
+  {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 12, max: 120, step: 1},
+  {name: "option_font_size_pt", label: "选项字号（pt）", type: "number", min: 12, max: 120, step: 1},
+  {name: "neutral_zone_width", label: "中央中性区（0–0.6）", type: "number", min: 0, max: 0.6, step: 0.01},
+  {name: "randomize_sides", label: "随机交换选项位置", type: "checkbox"}
+];
+
 const fields = {
   tracking_ball: [
     {name: "shape", label: "目标形状", type: "select", options: [["circle", "圆形"], ["square", "方形"], ["diamond", "菱形"], ["star", "星形"]]},
@@ -117,20 +132,8 @@ const fields = {
     {name: "dwell_outline_color", label: "目标轮廓颜色", type: "color"},
     {name: "show_gaze_cursor", label: "显示实时视线光标", type: "checkbox"}
   ],
-  binary_horizontal: [
-    {name: "question_type", label: "问题类型", type: "select", options: [["yes_no", "是否题"], ["question_answer", "问答题"], ["inquiry", "询问题"], ["other", "其他"]]},
-    {name: "question", label: "问题文本", type: "textarea"},
-    {name: "option_1", label: "选项 1", type: "text"},
-    {name: "option_2", label: "选项 2", type: "text"},
-    {name: "correct_option_id", label: "正确选项", type: "select", options: [["option_1", "选项 1"], ["option_2", "选项 2"]]},
-    {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
-    {name: "duration_seconds", label: "任务时长（秒）", type: "number", min: 5, max: 600, step: 1},
-    {name: "question_font_family", label: "字体", type: "text"},
-    {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 12, max: 120, step: 1},
-    {name: "option_font_size_pt", label: "选项字号（pt）", type: "number", min: 12, max: 120, step: 1},
-    {name: "neutral_zone_width", label: "中央中性区（0–0.6）", type: "number", min: 0, max: 0.6, step: 0.01},
-    {name: "randomize_sides", label: "随机交换左右位置", type: "checkbox"}
-  ],
+  binary_horizontal: binaryFields,
+  binary_vertical: binaryFields,
   screen_keyboard: [
     {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
     {name: "duration_seconds", label: "任务时长（秒）", type: "number", min: 5, max: 3600, step: 1},

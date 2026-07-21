@@ -1,4 +1,4 @@
-"""Horizontal two-option gaze-question task."""
+"""Horizontal or vertical two-option gaze-question task."""
 
 from __future__ import annotations
 
@@ -44,6 +44,8 @@ from oculidoc.tasks.question_bank import (
     CommonQuestionStore,
     CommonQuestionTemplate,
 )
+
+BINARY_LAYOUTS = frozenset({"horizontal", "vertical"})
 
 
 @dataclass(
@@ -230,7 +232,7 @@ class BinaryQuestionConfig:
 
 
 class BinaryQuestionTask(QWidget):
-    """Select one of two randomized options by gaze dwell."""
+    """Select one of two randomized horizontal or vertical options by gaze dwell."""
 
     answered = Signal(str, str)
 
@@ -239,10 +241,20 @@ class BinaryQuestionTask(QWidget):
         config: BinaryQuestionConfig,
         *,
         allow_mouse_fallback: bool = True,
+        layout: str = "horizontal",
     ) -> None:
         super().__init__()
+        normalized_layout = layout.strip().lower()
+
+        if normalized_layout not in BINARY_LAYOUTS:
+            raise ValueError("layout must be horizontal or vertical.")
+
         self.config = config
+        self.layout_orientation = normalized_layout
         self.allow_mouse_fallback = allow_mouse_fallback
+        self._position_names = (
+            ("top", "bottom") if self.layout_orientation == "vertical" else ("left", "right")
+        )
         self.randomization_seed = (
             config.randomization_seed
             if config.randomization_seed is not None
@@ -253,10 +265,7 @@ class BinaryQuestionTask(QWidget):
         if config.randomize_sides:
             random.Random(self.randomization_seed).shuffle(option_order)
 
-        self._option_by_side = {
-            "left": option_order[0],
-            "right": option_order[1],
-        }
+        self._option_by_side = dict(zip(self._position_names, option_order, strict=True))
         self._active_side: str | None = None
         self._dwell_ms = 0.0
         self._last_timestamp_ns: int | None = None
@@ -268,7 +277,8 @@ class BinaryQuestionTask(QWidget):
         self._selection_method: str | None = None
         self._final_event_recorded = False
 
-        self.setMinimumSize(800, 520)
+        button_minimum_height = 260 if self.layout_orientation == "vertical" else 620
+        self.setMinimumSize(800, 720 if self.layout_orientation == "vertical" else 520)
         self.setStyleSheet(
             """
             QWidget {
@@ -281,7 +291,6 @@ class BinaryQuestionTask(QWidget):
                 padding: 24px;
             }
             QPushButton#answerButton {
-                min-height: 620px;
                 border: 8px solid #d9e7f2;
                 border-radius: 24px;
                 background: #173957;
@@ -325,8 +334,13 @@ class BinaryQuestionTask(QWidget):
             "font-weight: 700;"
         )
 
-        self.left_button = QPushButton(self._answer_for_side("left"))
-        self.right_button = QPushButton(self._answer_for_side("right"))
+        first_position, second_position = self._position_names
+        self.left_button = QPushButton(self._answer_for_side(first_position))
+        self.right_button = QPushButton(self._answer_for_side(second_position))
+        self._button_by_side = {
+            first_position: self.left_button,
+            second_position: self.right_button,
+        }
 
         option_font = QFont(config.question_font_family)
         option_font.setPointSize(config.option_font_size_pt)
@@ -338,12 +352,12 @@ class BinaryQuestionTask(QWidget):
         ):
             button.setObjectName("answerButton")
             button.setProperty("active", False)
-            button.setMinimumHeight(620)
+            button.setMinimumHeight(button_minimum_height)
             button.setFont(option_font)
             button.setStyleSheet(f"font-size: {config.option_font_size_pt}pt;")
 
-        self.left_button.clicked.connect(lambda: self._commit("left"))
-        self.right_button.clicked.connect(lambda: self._commit("right"))
+        self.left_button.clicked.connect(lambda: self._commit(first_position))
+        self.right_button.clicked.connect(lambda: self._commit(second_position))
 
         self.left_progress = QProgressBar()
         self.right_progress = QProgressBar()
@@ -376,7 +390,7 @@ class BinaryQuestionTask(QWidget):
                 )
                 button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        answers = QHBoxLayout()
+        answers = QVBoxLayout() if self.layout_orientation == "vertical" else QHBoxLayout()
         answers.setSpacing(6)
         answers.addLayout(left_layout, 1)
         answers.addLayout(right_layout, 1)
@@ -397,7 +411,7 @@ class BinaryQuestionTask(QWidget):
     def displayed_options(
         self,
     ) -> dict[str, str]:
-        return {side: self._answer_for_side(side) for side in ("left", "right")}
+        return {position: self._answer_for_side(position) for position in self._position_names}
 
     @property
     def displayed_correct_side(
@@ -435,6 +449,15 @@ class BinaryQuestionTask(QWidget):
     ) -> str:
         return self._answer_for_option(self._option_by_side[side])
 
+    def _layout_payload(self) -> dict[str, object]:
+        payload: dict[str, object] = {"layout": self.layout_orientation}
+
+        for position in self._position_names:
+            payload[f"{position}_option_id"] = self._option_by_side[position]
+            payload[f"{position}_answer"] = self._answer_for_side(position)
+
+        return payload
+
     @property
     def selected_option_id(
         self,
@@ -459,6 +482,8 @@ class BinaryQuestionTask(QWidget):
         return {
             "question_id": ("binary-question-1"),
             "side": side,
+            "position": side,
+            "layout": self.layout_orientation,
             "logical_option_id": (option_id),
             "selected_option_id": (option_id),
             "answer": (self._answer_for_option(option_id)),
@@ -516,11 +541,9 @@ class BinaryQuestionTask(QWidget):
                 "option_1": (self.config.option_1),
                 "option_2": (self.config.option_2),
                 "correct_option_id": (self.config.correct_option_id),
-                "left_option_id": (self._option_by_side["left"]),
-                "right_option_id": (self._option_by_side["right"]),
-                "left_answer": (self._answer_for_side("left")),
-                "right_answer": (self._answer_for_side("right")),
+                **self._layout_payload(),
                 "displayed_correct_side": (self.displayed_correct_side),
+                "displayed_correct_position": (self.displayed_correct_side),
                 "randomization_seed": (self.randomization_seed),
                 "configured_dwell_ms": (self.config.dwell_time_ms),
             },
@@ -582,11 +605,13 @@ class BinaryQuestionTask(QWidget):
             "question_type": (self.config.question_type.value),
             "selected_option_id": (selected_option_id),
             "selected_side": (selected_side),
+            "selected_position": (selected_side),
             "selected_answer": (selected_answer),
             "is_scored": (self.config.is_scored),
             "correct_option_id": (self.config.correct_option_id),
             "correct": correct,
             "displayed_correct_side": (self.displayed_correct_side),
+            "displayed_correct_position": (self.displayed_correct_side),
             "reaction_time_ms": (reaction_time_ms),
             "confirmation_dwell_ms": (self._confirmation_dwell_ms),
             "configured_dwell_ms": (self.config.dwell_time_ms),
@@ -594,10 +619,7 @@ class BinaryQuestionTask(QWidget):
             "completion_status": (completion_status),
             "completion_reason": (reason_text),
             "randomization_seed": (self.randomization_seed),
-            "left_option_id": (self._option_by_side["left"]),
-            "right_option_id": (self._option_by_side["right"]),
-            "left_answer": (self._answer_for_side("left")),
-            "right_answer": (self._answer_for_side("right")),
+            **self._layout_payload(),
         }
 
         if not self._final_event_recorded:
@@ -640,15 +662,28 @@ class BinaryQuestionTask(QWidget):
 
     def _side_for_gaze(
         self,
-        gaze_x: float,
+        gaze_axis: float,
     ) -> str | None:
         half_neutral = self.config.neutral_zone_width / 2.0
+        first_position, second_position = self._position_names
+        boundary = 0.5
 
-        if gaze_x < 0.5 - half_neutral:
-            return "left"
+        if self.layout_orientation == "vertical" and self.isVisible():
+            first_bounds = self._button_bounds_normalized(
+                self._button_by_side[first_position],
+                side=first_position,
+            )
+            second_bounds = self._button_bounds_normalized(
+                self._button_by_side[second_position],
+                side=second_position,
+            )
+            boundary = (first_bounds[3] + second_bounds[1]) / 2.0
 
-        if gaze_x > 0.5 + half_neutral:
-            return "right"
+        if gaze_axis < boundary - half_neutral:
+            return first_position
+
+        if gaze_axis > boundary + half_neutral:
+            return second_position
 
         return None
 
@@ -683,7 +718,7 @@ class BinaryQuestionTask(QWidget):
             ),
         )
 
-        if right > left and bottom > top:
+        if self.isVisible() and right > left and bottom > top:
             return (
                 left,
                 top,
@@ -693,7 +728,25 @@ class BinaryQuestionTask(QWidget):
 
         half_neutral = self.config.neutral_zone_width / 2.0
 
-        if side == "left":
+        first_position, _ = self._position_names
+
+        if self.layout_orientation == "vertical":
+            if side == first_position:
+                return (
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.5 - half_neutral,
+                )
+
+            return (
+                0.0,
+                0.5 + half_neutral,
+                1.0,
+                1.0,
+            )
+
+        if side == first_position:
             return (
                 0.0,
                 0.0,
@@ -729,10 +782,7 @@ class BinaryQuestionTask(QWidget):
 
         aois: list[dict[str, object]] = []
 
-        for side, button in (
-            ("left", self.left_button),
-            ("right", self.right_button),
-        ):
+        for side, button in self._button_by_side.items():
             option_id = self._option_by_side[side]
             answer = self._answer_for_option(option_id)
             bounds = self._button_bounds_normalized(
@@ -750,6 +800,8 @@ class BinaryQuestionTask(QWidget):
                     "label": answer,
                     "metadata": {
                         "side": side,
+                        "position": side,
+                        "layout": self.layout_orientation,
                         "answer": answer,
                         "logical_option_id": option_id,
                         "is_scored": self.config.is_scored,
@@ -759,13 +811,19 @@ class BinaryQuestionTask(QWidget):
 
         sample_side: str | None = None
 
-        if sample.gaze_valid and sample.gaze_x_normalized is not None:
+        sample_axis = (
+            sample.gaze_y_normalized
+            if self.layout_orientation == "vertical"
+            else sample.gaze_x_normalized
+        )
+
+        if sample.gaze_valid and sample_axis is not None:
             sample_side = self._side_for_gaze(
                 max(
                     0.0,
                     min(
                         1.0,
-                        float(sample.gaze_x_normalized),
+                        float(sample_axis),
                     ),
                 )
             )
@@ -787,14 +845,11 @@ class BinaryQuestionTask(QWidget):
                 "option_2": self.config.option_2,
                 "is_scored": self.config.is_scored,
                 "correct_option_id": correct_option,
-                "left_option_id": self._option_by_side["left"],
-                "right_option_id": self._option_by_side["right"],
-                "left_answer": self._answer_for_side("left"),
-                "right_answer": self._answer_for_side("right"),
+                **self._layout_payload(),
                 "correct_side": self.displayed_correct_side,
+                "correct_position": self.displayed_correct_side,
                 "randomize_sides": self.config.randomize_sides,
                 "randomization_seed": self.randomization_seed,
-                "layout": "horizontal",
             },
         }
 
@@ -823,14 +878,29 @@ class BinaryQuestionTask(QWidget):
             )
             return
 
-        gaze_x = max(
+        gaze_axis = (
+            sample.gaze_y_normalized
+            if self.layout_orientation == "vertical"
+            else sample.gaze_x_normalized
+        )
+
+        if gaze_axis is None:
+            self.advance_dwell(
+                None,
+                elapsed_ms,
+                monotonic_timestamp_ns=(timestamp_ns),
+                interruption_reason=("invalid_gaze"),
+            )
+            return
+
+        normalized_axis = max(
             0.0,
             min(
                 1.0,
-                float(sample.gaze_x_normalized),
+                float(gaze_axis),
             ),
         )
-        side = self._side_for_gaze(gaze_x)
+        side = self._side_for_gaze(normalized_axis)
         self.advance_dwell(
             side,
             elapsed_ms,
@@ -851,12 +921,9 @@ class BinaryQuestionTask(QWidget):
         if self._result is not None:
             return
 
-        if side not in {
-            None,
-            "left",
-            "right",
-        }:
-            raise ValueError("side must be left, right, or None.")
+        if side is not None and side not in self._position_names:
+            positions = ", ".join(self._position_names)
+            raise ValueError(f"side must be {positions}, or None.")
 
         if elapsed_ms < 0:
             raise ValueError("elapsed_ms cannot be negative.")
@@ -927,8 +994,9 @@ class BinaryQuestionTask(QWidget):
             )
 
     def _refresh_progress(self) -> None:
-        left_value = int(self._dwell_ms) if self._active_side == "left" else 0
-        right_value = int(self._dwell_ms) if self._active_side == "right" else 0
+        first_position, second_position = self._position_names
+        left_value = int(self._dwell_ms) if self._active_side == first_position else 0
+        right_value = int(self._dwell_ms) if self._active_side == second_position else 0
 
         self.left_progress.setValue(
             min(
@@ -944,13 +1012,14 @@ class BinaryQuestionTask(QWidget):
         )
 
     def _refresh_active_side(self) -> None:
+        first_position, second_position = self._position_names
         self.left_button.setProperty(
             "active",
-            self._active_side == "left",
+            self._active_side == first_position,
         )
         self.right_button.setProperty(
             "active",
-            self._active_side == "right",
+            self._active_side == second_position,
         )
 
         for button in (
@@ -1022,11 +1091,20 @@ class BinaryQuestionSetupDialog(QDialog):
         *,
         question_bank_path: str | Path | None = None,
         config: BinaryQuestionConfig | None = None,
+        layout: str = "horizontal",
     ) -> None:
         super().__init__(parent)
+        normalized_layout = layout.strip().lower()
+
+        if normalized_layout not in BINARY_LAYOUTS:
+            raise ValueError("layout must be horizontal or vertical.")
+
+        self.layout_orientation = normalized_layout
         initial = config or BinaryQuestionConfig(question="你现在感到舒服吗？")
         self._randomization_seed = initial.randomization_seed
-        self.setWindowTitle("左右二分问答设置")
+        self.setWindowTitle(
+            "上下二分问答设置" if self.layout_orientation == "vertical" else "左右二分问答设置"
+        )
         self.resize(680, 680)
 
         if question_bank_path is None:
@@ -1132,9 +1210,10 @@ class BinaryQuestionSetupDialog(QDialog):
         self.neutral_zone_spin.setValue(initial.neutral_zone_width)
         form.addRow("中央中性区：", self.neutral_zone_spin)
 
-        self.randomize_sides_check = QCheckBox("每次呈现时随机交换左右位置")
+        position_label = "上下" if self.layout_orientation == "vertical" else "左右"
+        self.randomize_sides_check = QCheckBox(f"每次呈现时随机交换{position_label}位置")
         self.randomize_sides_check.setChecked(initial.randomize_sides)
-        form.addRow("左右随机化：", self.randomize_sides_check)
+        form.addRow(f"{position_label}随机化：", self.randomize_sides_check)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel

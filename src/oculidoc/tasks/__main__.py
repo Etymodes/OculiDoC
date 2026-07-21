@@ -27,6 +27,7 @@ from oculidoc.task_configs import (
     task_config_to_dict,
 )
 from oculidoc.tasks.binary_question import (
+    BinaryQuestionConfig,
     BinaryQuestionSetupDialog,
     BinaryQuestionTask,
 )
@@ -34,6 +35,7 @@ from oculidoc.tasks.gaze_stream import (
     GazeStreamWorker,
 )
 from oculidoc.tasks.screen_keyboard import (
+    ScreenKeyboardConfig,
     ScreenKeyboardSetupDialog,
     ScreenKeyboardTask,
 )
@@ -41,6 +43,7 @@ from oculidoc.tasks.task_window import (
     TimedTaskWindow,
 )
 from oculidoc.tasks.tracking_ball import (
+    TrackingBallConfig,
     TrackingBallSetupDialog,
     TrackingBallTask,
 )
@@ -57,6 +60,7 @@ def main(
         choices=(
             "tracking",
             "binary",
+            "binary-vertical",
             "typing",
         ),
     )
@@ -73,6 +77,7 @@ def main(
     module_id = {
         "tracking": "tracking_ball",
         "binary": "binary_horizontal",
+        "binary-vertical": "binary_vertical",
         "typing": "screen_keyboard",
     }[args.task]
     config_store = TaskConfigStore(settings.data_dir / "runtime" / "task_configs.json")
@@ -86,16 +91,23 @@ def main(
                 f"requested {args.config_revision}, current {record.revision}."
             )
     elif args.task == "tracking":
+        if not isinstance(config, TrackingBallConfig):
+            raise TypeError("Tracking task configuration type mismatch.")
+
         setup = TrackingBallSetupDialog(config=config)
 
         if setup.exec() != QDialog.DialogCode.Accepted:
             return 0
 
         config = setup.build_config()
-    elif args.task == "binary":
+    elif args.task in {"binary", "binary-vertical"}:
+        if not isinstance(config, BinaryQuestionConfig):
+            raise TypeError("Binary task configuration type mismatch.")
+
         setup = BinaryQuestionSetupDialog(
             question_bank_path=(settings.data_dir / "common_questions.json"),
             config=config,
+            layout=("vertical" if args.task == "binary-vertical" else "horizontal"),
         )
 
         if setup.exec() != QDialog.DialogCode.Accepted:
@@ -103,6 +115,9 @@ def main(
 
         config = setup.build_config()
     else:
+        if not isinstance(config, ScreenKeyboardConfig):
+            raise TypeError("Typing task configuration type mismatch.")
+
         setup = ScreenKeyboardSetupDialog(config=config)
 
         if setup.exec() != QDialog.DialogCode.Accepted:
@@ -125,21 +140,35 @@ def main(
             )
             return 2
 
+    question_to_speak = ""
+
     if args.task == "tracking":
+        if not isinstance(config, TrackingBallConfig):
+            raise TypeError("Tracking task configuration type mismatch.")
+
         task = TrackingBallTask(
             config,
             allow_mouse_fallback=(allow_mouse_fallback),
         )
         title = "追踪球"
         duration_seconds = config.duration_seconds
-    elif args.task == "binary":
+    elif args.task in {"binary", "binary-vertical"}:
+        if not isinstance(config, BinaryQuestionConfig):
+            raise TypeError("Binary task configuration type mismatch.")
+
+        vertical = args.task == "binary-vertical"
         task = BinaryQuestionTask(
             config,
             allow_mouse_fallback=(allow_mouse_fallback),
+            layout=("vertical" if vertical else "horizontal"),
         )
-        title = "左右二分问答"
+        title = "上下二分问答" if vertical else "左右二分问答"
         duration_seconds = config.duration_seconds
+        question_to_speak = config.question
     else:
+        if not isinstance(config, ScreenKeyboardConfig):
+            raise TypeError("Typing task configuration type mismatch.")
+
         task = ScreenKeyboardTask(
             config,
             allow_mouse_fallback=allow_mouse_fallback,
@@ -298,8 +327,8 @@ def main(
 
         if args.task == "tracking":
             speak("请保持注视标志物，并让视线跟随它移动。")
-        elif args.task == "binary":
-            speak(config.question)
+        elif args.task in {"binary", "binary-vertical"}:
+            speak(question_to_speak)
 
     def begin_countdown(result: GazePreflightResult) -> None:
         if not result.passed:

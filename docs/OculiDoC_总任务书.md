@@ -11,7 +11,7 @@
 
 OculiDoC 是面向意识障碍患者的眼动评估、交互、沟通与训练平台，采用“管理员控制端 + 患者显示端 + 本地局域网移动控制端 + 真实眼动设备 + 结构化实验记录”的多端架构。
 
-项目当前已经完成真实 Tobii Eye Tracker 5 原生 Stream Engine 采样、追踪球与左右二分问答、患者与实验会话持久化、Windows 打包及工程验收；下一阶段的重点是把真实设备状态、局域网控制、患者显示端状态机和剩余实验模块补齐为可运行 demo，再逐轮完善。
+项目当前已经完成真实 Tobii Eye Tracker 5 原生 Stream Engine 采样、追踪球、左右/上下二分问答、屏幕打字、患者与实验会话持久化、Windows 打包及工程验收；下一阶段的重点是继续补齐剩余实验模块 demo，再逐轮完善。
 
 ---
 
@@ -458,13 +458,14 @@ Add Tobii device settings and preflight
 
 ### M3D12B 上下二分问答 demo
 
-状态：下一里程碑。
+状态：已完成第一轮 demo。
 
-- 复用左右二分问答。
-- 布局改为上下。
-- 共享问题库、计时、停留和评分。
-- 记录上下 AOI。
-- 允许横向和纵向协议比较。
+- 复用左右二分问答的同一个任务类，不复制第二套问答、评分或记录实现。
+- 纵向布局显示顶部和底部两个大字选项，以视线纵坐标和中央水平中性区判定停留。
+- 共享问题库、字体、任务时长、停留阈值、随机化、评分和自动语音播报。
+- 左右与上下任务分别保存版本化配置，均支持电脑端设置、手机端保存后直接启动和语音重播。
+- 保存 `horizontal` / `vertical` 布局方向、顶部/底部选项映射、选择位置、上下 AOI、反应时间与评分结果，可用于横纵协议比较。
+- 后续轮次再做横纵协议的成组模板、顺序平衡与统计对照；本轮只完成可运行 demo。
 
 ### M3D12C 多选项问答 demo
 
@@ -795,24 +796,24 @@ M3D12F 统一实验模板 demo
 
 ## 12. 当前立即行动
 
-当前下一提交应聚焦 M3D11A，不把 QR、后台、患者状态总线和全部新任务一次塞入同一提交。
+当前下一提交应聚焦 M3D12C 多选项问答 demo，不在同一提交中提前加入图片库和随指令注视。
 
 建议提交：
 
 ```text
-Improve question setup and runtime status
+Add configurable multi-option gaze task
 ```
 
 预期修改：
 
 ```text
+src/oculidoc/tasks/multiple_choice.py
 src/oculidoc/ui/main_window.py
-src/oculidoc/tasks/binary_question.py
-src/oculidoc/tasks/question_bank.py
-tests/test_task_settings_upgrade.py
-tests/test_main_window.py 或新增聚焦测试
+src/oculidoc/modules/registry.py
+src/oculidoc/task_configs.py
+tests/test_multiple_choice.py
 README.md
 docs/OculiDoC_总任务书.md
 ```
 
-M3D11A 完成后立即进入 M3D11B，先做可扫描、可打开、可投文字到患者显示端的最小 LAN demo。
+M3D12C 完成后立即进入 M3D12D，接入统一尺寸的分类图片备选库与图片问答。
