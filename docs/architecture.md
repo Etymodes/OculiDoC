@@ -70,6 +70,12 @@ Infrastructure Adapters
 - 导入保留原患者、会话和清单标识；患者编号已存在时整名跳过其会话和文件，避免重复实验。系统生成的 `session.json` 由导入后的会话模型重新写入。
 - CSV 是受控迁移包而不是 Git 工件；其中可能包含 Parquet、图像、视频和患者敏感信息。
 
+## 实验记录人工维护
+
+- 人工状态纠正只接受 `completed`、`aborted`、`failed` 三种终态；未知的实际结束时间保持为空，避免制造虚假实验时长。
+- 主窗口把仍由当前进程持有的任务会话告知历史页，活动会话不可人工修改或删除。
+- 删除以会话为聚合边界：先把专属目录原子移动到 `deleted_sessions/`，再在同一 SQLite 事务中删除文件清单与会话；数据库失败时目录回滚原位。
+
 ## 眼动传感器自动检测
 
 - `AutoDetectEyeTrackerDevice` 复用现有 `EyeTrackerDevice` 协议，依次尝试 Stream Engine、通用 TCP NDJSON 桥接，以及已配置帮助程序的医院桥接。

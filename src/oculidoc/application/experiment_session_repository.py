@@ -32,6 +32,11 @@ class ExperimentSessionRepository(Protocol):
         session: ExperimentSession,
     ) -> ExperimentSession: ...
 
+    def delete(
+        self,
+        session_id: UUID,
+    ) -> None: ...
+
 
 class SessionArtifactRepository(Protocol):
     """Storage operations for session file manifests."""

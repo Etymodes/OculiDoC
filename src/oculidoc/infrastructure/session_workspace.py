@@ -124,3 +124,40 @@ class FileSystemSessionWorkspace:
                 temporary_path.unlink()
 
         return metadata_path
+
+    def archive_for_deletion(
+        self,
+        session: ExperimentSession,
+    ) -> Path | None:
+        """Move session files to a recoverable application-local archive."""
+        session_directory = self.resolve_session_directory(session)
+
+        if not session_directory.exists():
+            return None
+
+        if session_directory.name != str(session.session_id):
+            raise ValueError("Refusing to archive a non-exclusive session directory.")
+
+        archive_root = (
+            self.root_directory / "deleted_sessions" / str(session.patient_id)
+        ).resolve()
+        archive_root.relative_to(self.root_directory)
+        archive_root.mkdir(parents=True, exist_ok=True)
+        archived_directory = archive_root / f"{session.session_id}_{uuid4().hex}"
+        session_directory.replace(archived_directory)
+        return archived_directory
+
+    def restore_archived(
+        self,
+        session: ExperimentSession,
+        archived_directory: Path,
+    ) -> Path:
+        """Put archived files back after a failed database deletion."""
+        destination = self.resolve_session_directory(session)
+
+        if destination.exists():
+            raise FileExistsError(f"Session directory already exists: {destination}")
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        archived_directory.replace(destination)
+        return destination

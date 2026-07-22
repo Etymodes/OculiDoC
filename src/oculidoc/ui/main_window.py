@@ -574,8 +574,16 @@ class AdminMainWindow(QMainWindow):
             self.experiment_session_service,
             self.current_patient,
             self,
+            is_session_active=self._is_gaze_session_active,
         )
         dialog.exec()
+
+    def _is_gaze_session_active(
+        self,
+        session_id: UUID,
+    ) -> bool:
+        """Return whether this window still owns a live task process."""
+        return session_id in self._gaze_launches
 
     def _build_module_area(self) -> QScrollArea:
         scroll = QScrollArea()

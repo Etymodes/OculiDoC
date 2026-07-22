@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from uuid import UUID
 
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -53,6 +55,12 @@ _STATUS_LABELS = {
     ExperimentSessionStatus.FAILED: "失败",
 }
 
+_CORRECTABLE_STATUSES = (
+    ExperimentSessionStatus.COMPLETED,
+    ExperimentSessionStatus.ABORTED,
+    ExperimentSessionStatus.FAILED,
+)
+
 
 def _format_duration(
     seconds: float | None,
@@ -92,11 +100,14 @@ class PatientSessionHistoryDialog(QDialog):
         service: ExperimentSessionService,
         patient: Patient,
         parent: QWidget | None = None,
+        *,
+        is_session_active: Callable[[UUID], bool] | None = None,
     ) -> None:
         super().__init__(parent)
 
         self.service = service
         self.patient = patient
+        self._is_session_active = is_session_active or (lambda _session_id: False)
         self._entries: dict[
             UUID,
             SessionHistoryEntry,
@@ -199,6 +210,17 @@ class PatientSessionHistoryDialog(QDialog):
         self.export_button.setObjectName("exportSessionZipButton")
         self.export_button.clicked.connect(self._export_zip)
 
+        self.status_button = QPushButton("修改状态")
+        self.status_button.setObjectName("correctSessionStatusButton")
+        self.status_button.setToolTip("将异常遗留记录人工收口为终态")
+        self.status_button.clicked.connect(self._correct_status)
+
+        self.delete_button = QPushButton("删除记录")
+        self.delete_button.setObjectName("deleteSessionRecordButton")
+        self.delete_button.setToolTip("从患者历史中移除，并把实验文件移入恢复区")
+        self.delete_button.setStyleSheet("color: #b42318;")
+        self.delete_button.clicked.connect(self._delete_record)
+
         close_button = QPushButton("关闭")
         close_button.clicked.connect(self.accept)
 
@@ -208,6 +230,8 @@ class PatientSessionHistoryDialog(QDialog):
         actions.addWidget(self.report_button)
         actions.addWidget(self.trend_button)
         actions.addWidget(self.export_button)
+        actions.addWidget(self.status_button)
+        actions.addWidget(self.delete_button)
         actions.addStretch(1)
         actions.addWidget(close_button)
 
@@ -352,6 +376,183 @@ class PatientSessionHistoryDialog(QDialog):
             )
 
         return entry
+
+    def _require_inactive_entry(
+        self,
+        action: str,
+    ) -> SessionHistoryEntry | None:
+        entry = self._require_entry()
+
+        if entry is None:
+            return None
+
+        if self._is_session_active(entry.session_id):
+            QMessageBox.information(
+                self,
+                "任务仍在运行",
+                f"不能{action}正在运行的任务。请先关闭任务窗口，再刷新实验记录。",
+            )
+            return None
+
+        return entry
+
+    def _correct_status(
+        self,
+        checked: bool = False,
+    ) -> None:
+        """Manually close or correct one stale session record."""
+        del checked
+        entry = self._require_inactive_entry("修改")
+
+        if entry is None:
+            return
+
+        labels = [_STATUS_LABELS[status] for status in _CORRECTABLE_STATUSES]
+        current_index = (
+            _CORRECTABLE_STATUSES.index(entry.status)
+            if entry.status in _CORRECTABLE_STATUSES
+            else 1
+        )
+        selected_label, accepted = QInputDialog.getItem(
+            self,
+            "修改实验状态",
+            "请选择正确的终态：",
+            labels,
+            current_index,
+            False,
+        )
+
+        if not accepted:
+            return
+
+        target_status = next(
+            status
+            for status in _CORRECTABLE_STATUSES
+            if _STATUS_LABELS[status] == selected_label
+        )
+        reason: str | None = None
+
+        if target_status in {
+            ExperimentSessionStatus.ABORTED,
+            ExperimentSessionStatus.FAILED,
+        }:
+            default_reason = entry.failure_reason or (
+                "程序异常退出后由管理员手动标记为已取消。"
+                if target_status is ExperimentSessionStatus.ABORTED
+                else "程序异常退出后由管理员手动标记为失败。"
+            )
+            reason, accepted = QInputDialog.getMultiLineText(
+                self,
+                "填写修改原因",
+                "原因将显示在实验记录详情中：",
+                default_reason,
+            )
+
+            if not accepted:
+                return
+
+            reason = reason.strip()
+
+            if target_status is ExperimentSessionStatus.FAILED and not reason:
+                QMessageBox.warning(
+                    self,
+                    "缺少失败原因",
+                    "标记为失败时必须填写原因。",
+                )
+                return
+
+        answer = QMessageBox.question(
+            self,
+            "确认修改状态",
+            "\n".join(
+                [
+                    f"任务：{_MODULE_TITLES.get(entry.module_id, entry.module_id)}",
+                    f"当前状态：{_STATUS_LABELS[entry.status]}",
+                    f"修改为：{_STATUS_LABELS[target_status]}",
+                    "",
+                    "此操作会同步更新数据库和 session.json。",
+                ]
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self.service.correct_session_status(
+                entry.session_id,
+                target_status,
+                reason,
+            )
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "状态修改失败",
+                str(error),
+            )
+            return
+
+        self.refresh_sessions()
+        QMessageBox.information(
+            self,
+            "状态已修改",
+            f"实验记录已改为“{_STATUS_LABELS[target_status]}”。",
+        )
+
+    def _delete_record(
+        self,
+        checked: bool = False,
+    ) -> None:
+        """Remove one record and retain its files in the recovery area."""
+        del checked
+        entry = self._require_inactive_entry("删除")
+
+        if entry is None:
+            return
+
+        answer = QMessageBox.warning(
+            self,
+            "确认删除实验记录",
+            "\n".join(
+                [
+                    f"任务：{_MODULE_TITLES.get(entry.module_id, entry.module_id)}",
+                    f"状态：{_STATUS_LABELS[entry.status]}",
+                    f"会话 ID：{entry.session_id}",
+                    "",
+                    "记录及文件清单将从患者历史中删除。",
+                    "实验文件会移入 OculiDoC 恢复区，不会立即永久销毁。",
+                ]
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            archived_directory = self.service.delete_session(entry.session_id)
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "删除失败",
+                str(error),
+            )
+            return
+
+        self.refresh_sessions()
+        recovery_text = (
+            f"\n实验文件恢复位置：\n{archived_directory}"
+            if archived_directory is not None
+            else "\n该记录没有可移动的会话目录。"
+        )
+        QMessageBox.information(
+            self,
+            "记录已删除",
+            "实验记录已从患者历史中移除。" + recovery_text,
+        )
 
     def _open_directory(
         self,

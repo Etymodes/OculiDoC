@@ -29,3 +29,18 @@ class SessionWorkspace(Protocol):
     ) -> Path:
         """Atomically write and return session.json."""
         ...
+
+    def archive_for_deletion(
+        self,
+        session: ExperimentSession,
+    ) -> Path | None:
+        """Move a session directory into the application recovery area."""
+        ...
+
+    def restore_archived(
+        self,
+        session: ExperimentSession,
+        archived_directory: Path,
+    ) -> Path:
+        """Restore a directory when deleting its database record fails."""
+        ...
