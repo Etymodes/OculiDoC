@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 from PySide6.QtWidgets import QInputDialog, QMessageBox
 from pytest import MonkeyPatch
@@ -122,6 +123,8 @@ def test_history_dialog_lists_and_filters(
     assert dialog.table.item(0, 4).text() == "25"
     assert dialog.table.item(0, 5).text() == "80.0%"
     assert "target" in (dialog.detail_label.text())
+    assert cast(Any, patient).display_label in dialog.detail_label.text()
+    assert str(cast(Any, patient).patient_id) not in dialog.detail_label.text()
 
     dialog.close()
     runtime.dispose()

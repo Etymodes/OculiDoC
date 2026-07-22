@@ -75,6 +75,7 @@ class CameraPreviewWindow(QMainWindow):
         self,
         *,
         patient_key: str = UNASSIGNED_PATIENT_KEY,
+        patient_display_label: str | None = None,
         dataset_directory: str | Path | None = None,
     ) -> None:
         super().__init__()
@@ -84,6 +85,9 @@ class CameraPreviewWindow(QMainWindow):
 
         self._controller = CameraPreviewController()
         self._patient_key = normalize_patient_key(patient_key)
+        self._patient_display_label = (
+            patient_display_label.strip() if patient_display_label else self._patient_key
+        )
         self._dataset_directory = (
             eye_observation_dataset_directory(self._patient_key)
             if dataset_directory is None
@@ -95,7 +99,9 @@ class CameraPreviewWindow(QMainWindow):
         )
         self._closed_emitted = False
 
-        self.setWindowTitle(f"OculiDoC Camera and Eye Workbench — {self._patient_key}")
+        self.setWindowTitle(
+            f"OculiDoC Camera and Eye Workbench — {self._patient_display_label}"
+        )
         self._frame_save_guard = FrameSaveGuard()
         self._timer = QTimer(self)
         self._timer.setInterval(33)
@@ -258,7 +264,7 @@ class CameraPreviewWindow(QMainWindow):
         self.snapshot_button.clicked.connect(self._save_snapshot)
         snapshot_layout.addWidget(self.snapshot_button)
 
-        self.patient_status = QLabel(f"患者档案：{self._patient_key}")
+        self.patient_status = QLabel(f"患者档案：{self._patient_display_label}")
         self.patient_status.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         snapshot_layout.addWidget(self.patient_status)
 
@@ -787,9 +793,8 @@ class CameraPreviewWindow(QMainWindow):
 
         self.statusBar().showMessage(
             f"已保存患者档案 "
-            f"{self._patient_key} 的样本 "
-            f"{sample_paths.index:04d}；"
-            f"目录：{dataset_directory}"
+            f"{self._patient_display_label} 的样本 "
+            f"{sample_paths.index:04d}"
         )
 
     def _stop_preview(self) -> None:

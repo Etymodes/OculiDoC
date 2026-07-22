@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -155,6 +156,8 @@ def test_tracking_report_generates_heatmap_and_error(
     payload = json.loads(artifacts.report_json_path.read_text(encoding="utf-8"))
     metrics = payload["metrics"]
 
+    assert payload["patient_name"] == "Report"
+    assert payload["patient_display_label"] == "Report患者（DOC-REPORT-tracking_ball）"
     assert metrics["sample_count"] == 3
     assert metrics["valid_sample_count"] == 2
     assert metrics["valid_sample_ratio"] == 2 / 3
@@ -165,6 +168,9 @@ def test_tracking_report_generates_heatmap_and_error(
 
     html_text = artifacts.html_path.read_text(encoding="utf-8")
     assert "tracking_error_timeline.png" in html_text
+    assert "Report患者（DOC-REPORT-tracking_ball）" in html_text
+    assert str(cast(Any, launch).patient_id) not in html_text
+    assert html_text.count("简要分析") >= 5
 
     registered_paths = {
         artifact.relative_path

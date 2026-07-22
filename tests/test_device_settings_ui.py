@@ -85,6 +85,43 @@ def test_device_settings_dialog_wires_stream_engine_discovery(
     assert dialog.dll_path_edit.text() == str(dll_path)
 
 
+def test_device_settings_dialog_exposes_legacy_sampling_paths(
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    gaze_json = tmp_path / "gaze-json"
+    gaze_json.mkdir()
+    player = tmp_path / "HPFMediaPlayer.exe"
+    eye_position = tmp_path / "EyePosition.exe"
+    just_need_root = tmp_path / "JustNeedToSee"
+    just_need_root.mkdir()
+    (just_need_root / "tobii_stream_engine.dll").write_bytes(b"test")
+    settings = Settings(
+        environment="test",
+        data_dir=tmp_path,
+        gaze_source="gaze_collect_legacy",
+        gaze_collect_json_root=gaze_json,
+        gaze_collect_player_executable=player,
+        eye_position_executable=eye_position,
+        just_need_to_see_root=just_need_root,
+    )
+    dialog = DeviceSettingsDialog(settings, GazeDeviceConfigStore.for_settings(settings))
+    qtbot.addWidget(dialog)
+
+    assert dialog.source_combo.currentData() == "gaze_collect_legacy"
+    assert dialog.gaze_collect_json_edit.isEnabled() is True
+    assert dialog.just_need_to_see_root_edit.isEnabled() is False
+    assert dialog.build_config().gaze_collect_json_root == gaze_json
+
+    dialog.source_combo.setCurrentIndex(
+        dialog.source_combo.findData("just_need_to_see_bundle")
+    )
+
+    assert dialog.gaze_collect_json_edit.isEnabled() is False
+    assert dialog.just_need_to_see_root_edit.isEnabled() is True
+    assert dialog.build_config().just_need_to_see_root == just_need_root
+
+
 def test_find_tobii_experience_start_menu_shortcut(
     tmp_path: Path,
     monkeypatch,

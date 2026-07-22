@@ -29,6 +29,9 @@ from oculidoc.domain.experiment_session import (
     ExperimentSessionStatus,
     SessionArtifactKind,
 )
+from oculidoc.modules.registry import DEFAULT_MODULES
+
+_MODULE_TITLES = {module.module_id: module.title for module in DEFAULT_MODULES}
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,10 +331,6 @@ def _task_result_rows(
     end_reason = task_record.get("end_reason")
     rows.extend(
         (
-            (
-                "运行 ID",
-                _display_value(task_record.get("run_id")),
-            ),
             (
                 "任务类型",
                 _display_value(task_kind),
@@ -641,7 +640,15 @@ def _task_result_sections(
     task_results: list[dict[str, object]],
 ) -> str:
     if not task_results:
-        return "<section><h2>结构化任务结果</h2><p>没有可读取的 task_result.json。</p></section>"
+        return (
+            "<section><h2>结构化任务结果</h2>"
+            "<p>没有可读取的 task_result.json。</p>"
+            + _analysis_html(
+                "本次缺少结构化任务结果，只能查看眼动采样图，"
+                "不能解释具体回答或任务完成情况。"
+            )
+            + "</section>"
+        )
 
     cards: list[str] = []
 
@@ -657,6 +664,7 @@ def _task_result_sections(
             '<article class="task-result">'
             f"<h3>任务结果 {index}</h3>"
             f"<table>{table_rows}</table>"
+            f"{_analysis_html(_task_result_analysis(task_record))}"
             "</article>"
         )
 
@@ -901,6 +909,8 @@ def _screen_heatmap(
     output_path: Path,
     target_trajectory: list[tuple[float, float, float]] | None = None,
     tracking_series: list[tuple[float, float, float, float, float, float]] | None = None,
+    *,
+    connect_trajectories: bool = True,
 ) -> None:
     figure, axis = plt.subplots(figsize=(10, 6))
 
@@ -952,7 +962,19 @@ def _screen_heatmap(
             va="center",
         )
 
-    if target_trajectory:
+    if target_trajectory and not connect_trajectories:
+        target_step = max(1, int(np.ceil(len(target_trajectory) / 4_000)))
+        plotted_target = target_trajectory[::target_step]
+        axis.scatter(
+            [sample[1] for sample in plotted_target],
+            [sample[2] for sample in plotted_target],
+            color="#00b7ff",
+            s=7,
+            alpha=0.18,
+            label="Target positions",
+            zorder=4,
+        )
+    elif target_trajectory:
         target_step = max(1, int(np.ceil(len(target_trajectory) / 2_000)))
         plotted_target = target_trajectory[::target_step]
         target_x = [sample[1] for sample in plotted_target]
@@ -983,7 +1005,7 @@ def _screen_heatmap(
             zorder=6,
         )
 
-    if tracking_series:
+    if tracking_series and connect_trajectories:
         gaze_step = max(1, int(np.ceil(len(tracking_series) / 2_000)))
         plotted_gaze = tracking_series[::gaze_step]
         gaze_x = [sample[1] for sample in plotted_gaze]
@@ -1014,14 +1036,16 @@ def _screen_heatmap(
             zorder=6,
         )
 
-    if target_trajectory or tracking_series:
+    if target_trajectory or (tracking_series and connect_trajectories):
         axis.legend(loc="upper right")
 
-    axis.set_title(
-        "Screen-space gaze density with target/gaze trajectories"
-        if target_trajectory or tracking_series
-        else "Screen-space gaze density"
-    )
+    if not connect_trajectories and target_trajectory:
+        title = "Combined gaze density with target positions"
+    elif target_trajectory or tracking_series:
+        title = "Screen-space gaze density with target/gaze trajectories"
+    else:
+        title = "Screen-space gaze density"
+    axis.set_title(title)
     axis.set_xlabel("Normalized screen X")
     axis.set_ylabel("Normalized screen Y")
     axis.set_xlim(0.0, 1.0)
@@ -1213,11 +1237,101 @@ def _metric_rows(
     )
 
 
+def _analysis_html(text: str) -> str:
+    return f'<p class="analysis"><strong>简要分析：</strong>{html.escape(text)}</p>'
+
+
+def _quality_analysis(metrics: dict[str, object]) -> str:
+    sample_count = int(_finite_float(metrics.get("sample_count")) or 0.0)
+    valid_count = int(_finite_float(metrics.get("valid_sample_count")) or 0.0)
+    valid_ratio = _finite_float(metrics.get("valid_sample_ratio")) or 0.0
+    if sample_count == 0:
+        return "本次没有可读取的眼动样本，不能解释患者表现。"
+    if valid_ratio < 0.35:
+        quality = "有效率偏低，本次图表更容易受遮挡、头位、校准或疲劳影响"
+    elif valid_ratio < 0.60:
+        quality = "有效率中等，主要趋势可以参考，但细小差异应谨慎解释"
+    else:
+        quality = "多数样本有效，数据完整性相对较好"
+    return (
+        f"共记录 {sample_count} 个样本，其中 {valid_count} 个有效"
+        f"（{valid_ratio:.1%}）；{quality}。"
+    )
+
+
+def _task_result_analysis(task_record: dict[str, object]) -> str:
+    if task_record.get("load_error") is not None:
+        return "该任务结果文件无法完整读取，请先检查原始文件，暂不作行为解释。"
+    value = task_record.get("result")
+    result = value if isinstance(value, dict) else {}
+    status = str(result.get("completion_status") or task_record.get("end_reason") or "未知")
+    questions = result.get("questions")
+    if isinstance(questions, list):
+        completed = int(result.get("completed_question_count") or 0)
+        skipped = int(result.get("skipped_question_count") or 0)
+        correct = result.get("correct_count")
+        scored = f"，其中记录答对 {correct} 题" if isinstance(correct, int) else ""
+        return (
+            f"本轮状态为“{status}”，共完成 {completed}/{len(questions)} 题，跳过 {skipped} 题"
+            f"{scored}。跳题和未作答不应直接理解为患者没有意识。"
+        )
+    selected = result.get("selected_answer") or result.get("selected_answers")
+    if selected:
+        return (
+            f"本轮状态为“{status}”，系统记录了患者选择：{selected}。"
+            "应结合重复测试判断选择是否稳定。"
+        )
+    return f"本轮状态为“{status}”。本区只复述任务记录，不单独判断意识水平或临床改善。"
+
+
+def _heatmap_analysis(metrics: dict[str, object]) -> str:
+    centroid = metrics.get("gaze_centroid_normalized")
+    if not isinstance(centroid, dict):
+        return "没有足够的有效视线点形成稳定热区；优先检查摆位、遮挡、校准和患者状态。"
+    x = float(centroid.get("x") or 0.0)
+    y = float(centroid.get("y") or 0.0)
+    return (
+        f"视线停留重心约在屏幕横向 {x:.0%}、纵向 {y:.0%} 处。"
+        "颜色越集中表示该区域累计停留越多；蓝色为任务目标，橙色为实际视线，二者越接近表示追踪越贴合。"
+    )
+
+
+def _aoi_analysis(metrics: dict[str, object]) -> str:
+    value = metrics.get("dwell_by_role_ms")
+    if not isinstance(value, dict) or not value:
+        return "未记录到可汇总的选项或目标区域停留，不能比较患者更关注哪个区域。"
+    role, duration = max(value.items(), key=lambda item: float(item[1]))
+    labels = {
+        "correct_option": "正确选项",
+        "incorrect_option": "其他选项",
+        "non_option": "非选项区域",
+        "target": "目标区域",
+        "distractor": "干扰区域",
+    }
+    return (
+        f"累计停留最多的是“{labels.get(str(role), str(role))}”，"
+        f"约 {float(duration) / 1000:.1f} 秒。"
+        "停留较多表示视线更常落在该区域，但不一定等同于主动选择。"
+    )
+
+
+def _tracking_analysis(metrics: dict[str, object]) -> str:
+    value = metrics.get("tracking")
+    if not isinstance(value, dict):
+        return "本次没有同时具备目标位置和有效视线的样本，因此不能计算目标—视线误差。"
+    rmse = float(value.get("rmse_normalized") or 0.0)
+    hit_ratio = float(value.get("target_hit_ratio") or 0.0)
+    return (
+        f"目标区域命中率为 {hit_ratio:.1%}，归一化 RMSE 为 {rmse:.3f}。"
+        "命中率越高、误差越低通常表示视线更贴近任务目标；仍需结合有效率和重复测试。"
+    )
+
+
 def _html_document(
     *,
-    patient_id: UUID,
-    session_id: UUID,
+    patient_label: str,
     module_id: str,
+    record_time: str,
     generated_at: str,
     metrics: dict[str, object],
     task_results: list[dict[str, object]],
@@ -1226,16 +1340,22 @@ def _html_document(
 ) -> str:
     task_result_html = _task_result_sections(task_results)
     tracking_image = (
-        "<section><h2>Tracking error distribution</h2>"
+        "<section><h2>目标—视线误差分布</h2>"
         '<img src="tracking_error.png" '
-        'alt="Tracking error"></section>'
+        'alt="Tracking error">'
+        f"{_analysis_html(_tracking_analysis(metrics))}</section>"
         if has_tracking_plot
         else ""
     )
     tracking_timeline = (
-        "<section><h2>Gaze-target error over time</h2>"
+        "<section><h2>目标—视线误差随时间变化</h2>"
         '<img src="tracking_error_timeline.png" '
-        'alt="Gaze-target error over time"></section>'
+        'alt="Gaze-target error over time">'
+        + _analysis_html(
+            "散点表示每个有效采样的目标—视线距离，橙线表示约 1 秒平均趋势；"
+            "曲线持续较低说明这一时段跟随更贴近，突然升高可能对应脱靶、眨眼或头位变化。"
+        )
+        + "</section>"
         if has_tracking_timeline
         else ""
     )
@@ -1271,29 +1391,39 @@ th, td {{
     color: #7a4e00;
     background: #fff7df;
 }}
+.analysis {{
+    margin-top: 14px;
+    padding: 12px 14px;
+    border-left: 4px solid #2e7d9a;
+    background: #eef8fb;
+    line-height: 1.7;
+}}
 code {{ word-break: break-all; }}
 </style>
 </head>
 <body>
 <header>
 <h1>OculiDoC 眼动结果报告</h1>
-<p>患者 ID：<code>{html.escape(str(patient_id))}</code></p>
-<p>会话 ID：<code>{html.escape(str(session_id))}</code></p>
-<p>任务：{html.escape(module_id)}</p>
+<p>患者：{html.escape(patient_label)}</p>
+<p>任务：{html.escape(_MODULE_TITLES.get(module_id, module_id))}</p>
+<p>记录时间：{html.escape(record_time)}</p>
 <p>生成时间：{html.escape(generated_at)}</p>
 </header>
 <section>
 <h2>核心指标</h2>
 <table>{_metric_rows(metrics)}</table>
+{_analysis_html(_quality_analysis(metrics))}
 </section>
 {task_result_html}
 <section>
 <h2>屏幕空间热图</h2>
 <img src="screen_heatmap.png" alt="Screen heatmap">
+{_analysis_html(_heatmap_analysis(metrics))}
 </section>
 <section>
 <h2>语义 AOI 汇总</h2>
 <img src="semantic_aoi.png" alt="Semantic AOI dwell">
+{_analysis_html(_aoi_analysis(metrics))}
 </section>
 {tracking_image}
 {tracking_timeline}
@@ -1315,6 +1445,7 @@ def generate_gaze_session_report(
     """Generate and register a report for one completed session."""
 
     session = service.get_session(session_id)
+    patient = service.get_patient(session.patient_id)
 
     if session.status is not ExperimentSessionStatus.COMPLETED:
         raise ValueError("Only completed sessions can generate reports.")
@@ -1391,6 +1522,9 @@ def generate_gaze_session_report(
         "task_results": task_results,
         "generated_at_utc": (generated_at_text),
         "patient_id": str(session.patient_id),
+        "patient_name": patient.family_name,
+        "patient_code": patient.patient_code,
+        "patient_display_label": patient.display_label,
         "session_id": str(session.session_id),
         "module_id": session.module_id,
         "metrics": metrics,
@@ -1405,9 +1539,9 @@ def generate_gaze_session_report(
     _atomic_write_text(
         html_path,
         _html_document(
-            patient_id=(session.patient_id),
-            session_id=(session.session_id),
+            patient_label=patient.display_label,
             module_id=(session.module_id),
+            record_time=session.created_at.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
             generated_at=(generated_at_text),
             metrics=metrics,
             task_results=task_results,

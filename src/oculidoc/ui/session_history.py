@@ -201,9 +201,9 @@ class PatientSessionHistoryDialog(QDialog):
         self.report_button.setObjectName("generateGazeReportButton")
         self.report_button.clicked.connect(self._generate_report)
 
-        self.trend_button = QPushButton("患者趋势")
+        self.trend_button = QPushButton("一键综合报告")
         self.trend_button.setObjectName("generatePatientTrendReportButton")
-        self.trend_button.setToolTip("汇总该患者历次同类任务结果与数据质量")
+        self.trend_button.setToolTip("汇总该患者全部任务、综合热力图与纵向变化")
         self.trend_button.clicked.connect(self._generate_trend_report)
 
         self.export_button = QPushButton("导出 ZIP")
@@ -345,10 +345,11 @@ class PatientSessionHistoryDialog(QDialog):
         )
 
         details = [
-            f"会话 ID：{entry.session_id}",
+            f"患者：{self.patient.display_label}",
+            f"记录时间：{entry.created_at.astimezone().strftime('%Y-%m-%d %H:%M:%S')}",
             (f"任务：{_MODULE_TITLES.get(entry.module_id, entry.module_id)}"),
             (f"状态：{_STATUS_LABELS[entry.status]}"),
-            f"目录：{entry.session_directory}",
+            f"实验文件：已保存 {entry.artifact_count} 个（点击“打开目录”查看）",
             f"AOI 停留：{dwell_text}",
         ]
 
@@ -519,7 +520,7 @@ class PatientSessionHistoryDialog(QDialog):
                 [
                     f"任务：{_MODULE_TITLES.get(entry.module_id, entry.module_id)}",
                     f"状态：{_STATUS_LABELS[entry.status]}",
-                    f"会话 ID：{entry.session_id}",
+                    f"记录时间：{entry.created_at.astimezone().strftime('%Y-%m-%d %H:%M:%S')}",
                     "",
                     "记录及文件清单将从患者历史中删除。",
                     "实验文件会移入 OculiDoC 恢复区，不会立即永久销毁。",
@@ -671,7 +672,7 @@ class PatientSessionHistoryDialog(QDialog):
         self,
         checked: bool = False,
     ) -> None:
-        "Generate and open the patient's longitudinal report."
+        "Generate and open the patient's comprehensive report."
 
         del checked
         entry = self._require_entry()
@@ -687,7 +688,7 @@ class PatientSessionHistoryDialog(QDialog):
         except Exception as error:
             QMessageBox.critical(
                 self,
-                "趋势报告生成失败",
+                "综合报告生成失败",
                 str(error),
             )
             return
@@ -697,7 +698,7 @@ class PatientSessionHistoryDialog(QDialog):
         if not opened:
             QMessageBox.information(
                 self,
-                "趋势报告已生成",
+                "综合报告已生成",
                 str(report.html_path),
             )
 

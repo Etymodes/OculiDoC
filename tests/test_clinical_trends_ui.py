@@ -142,6 +142,7 @@ def test_history_generates_and_opens_patient_trend(
     qtbot.addWidget(dialog)
 
     assert dialog.trend_button.objectName() == "generatePatientTrendReportButton"
+    assert dialog.trend_button.text() == "一键综合报告"
 
     selected = dialog._current_entry()
 
@@ -201,7 +202,7 @@ def test_trend_report_failure_is_shown(
 
     assert messages
     assert any(
-        "趋势报告生成失败" in str(value) or "trend failed" in str(value)
+        "综合报告生成失败" in str(value) or "trend failed" in str(value)
         for call in messages
         for value in call
     )

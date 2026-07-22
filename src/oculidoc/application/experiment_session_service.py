@@ -22,6 +22,7 @@ from oculidoc.domain.experiment_session import (
     SessionArtifact,
     SessionArtifactKind,
 )
+from oculidoc.domain.patient import Patient
 
 
 class ExperimentSessionNotFoundError(LookupError):
@@ -165,6 +166,13 @@ class ExperimentSessionService:
             raise ExperimentSessionNotFoundError(f"Experiment session not found: {session_id}")
 
         return session
+
+    def get_patient(self, patient_id: UUID) -> Patient:
+        """Resolve the patient shown for a session or report."""
+        patient = self._patient_repository.get(patient_id)
+        if patient is None:
+            raise LookupError(f"Patient not found: {patient_id}")
+        return patient
 
     def list_sessions_for_patient(
         self,

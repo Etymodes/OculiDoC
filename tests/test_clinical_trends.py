@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Any, cast
+
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from oculidoc.application import (
     RegisterPatientRequest,
@@ -36,7 +40,26 @@ def write_tracking_result(
         parents=True,
         exist_ok=True,
     )
-    (run_directory / "gaze_events.parquet").write_bytes(b"parquet")
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {
+                    "monotonic_timestamp_ns": 1_000_000_000,
+                    "analysis_valid": True,
+                    "gaze_x_normalized": 0.50,
+                    "gaze_y_normalized": 0.50,
+                    "duration_ms": 100.0,
+                    "aoi_role": "target",
+                    "question_id": "tracking-target",
+                    "reference_aoi_left": 0.40,
+                    "reference_aoi_top": 0.40,
+                    "reference_aoi_right": 0.60,
+                    "reference_aoi_bottom": 0.60,
+                }
+            ]
+        ),
+        run_directory / "gaze_events.parquet",
+    )
     (run_directory / "run_manifest.json").write_text(
         '{"status":"finished"}\n',
         encoding="utf-8",
@@ -219,13 +242,21 @@ def test_trend_report_generates_and_registers_artifacts(
 
     payload = json.loads(artifacts.report_json_path.read_text(encoding="utf-8"))
 
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
     assert payload["patient_id"] == str(patient.patient_id)
+    assert payload["patient_name"] == "Report"
     assert payload["usable_point_count"] == 1
+    assert payload["aggregate_gaze"]["session_count"] == 1
+    assert artifacts.aggregate_heatmap_path is not None
+    assert artifacts.aggregate_heatmap_path.is_file()
 
     html_text = artifacts.html_path.read_text(encoding="utf-8")
 
-    assert "患者纵向趋势报告" in html_text
+    assert "患者全部任务综合报告" in html_text
+    assert patient.display_label in html_text
+    assert str(patient.patient_id) not in html_text
+    assert "全部任务综合热力图" in html_text
+    assert html_text.count("简要分析") >= 4
     assert "质量提示" in html_text
     assert "变化值不能单独解释" in html_text
 
@@ -237,5 +268,58 @@ def test_trend_report_generates_and_registers_artifacts(
     assert any(path.endswith("/trend_report.json") for path in registered)
     assert any(path.endswith("/trend_report.html") for path in registered)
     assert any(path.endswith("/tracking_trend.png") for path in registered)
+    assert any(path.endswith("/aggregate_heatmap.png") for path in registered)
+
+    runtime.dispose()
+
+
+def test_trend_report_skips_one_unreadable_gaze_session(
+    tmp_path: Path,
+) -> None:
+    runtime = initialize_database(
+        tmp_path / "oculidoc.sqlite3",
+        data_root=tmp_path / "data",
+    )
+    patient = runtime.patient_service.register_patient(
+        RegisterPatientRequest(
+            patient_code="DOC-M3D12I-CORRUPT",
+            family_name="容错",
+        )
+    )
+    unreadable = create_gaze_task_launch(
+        runtime.experiment_session_service,
+        patient_id=patient.patient_id,
+        module_id="tracking_ball",
+    )
+    corrupt_directory = unreadable.session_directory / "tasks" / "run-corrupt"
+    corrupt_directory.mkdir(parents=True)
+    (corrupt_directory / "gaze_events.parquet").write_bytes(b"not parquet")
+    finalize_gaze_task_launch(
+        runtime.experiment_session_service,
+        unreadable,
+        exit_code=0,
+    )
+    valid = create_tracking_session(
+        runtime,
+        patient.patient_id,
+        valid_sample_ratio=0.80,
+        target_hit_ratio=0.60,
+        target_hit_duration_ratio=0.55,
+        first_target_acquired_ms=700.0,
+        longest_continuous_tracking_ms=1800.0,
+        target_loss_count=2,
+        target_reacquisition_count=1,
+    )
+
+    artifacts = generate_patient_trend_report(
+        runtime.experiment_session_service,
+        cast(Any, valid).session_id,
+    )
+    payload = json.loads(artifacts.report_json_path.read_text(encoding="utf-8"))
+
+    assert payload["aggregate_gaze"]["session_count"] == 1
+    assert payload["aggregate_gaze"]["unreadable_session_count"] == 1
+    assert artifacts.aggregate_heatmap_path is not None
+    assert artifacts.aggregate_heatmap_path.is_file()
 
     runtime.dispose()

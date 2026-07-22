@@ -17,6 +17,8 @@ from oculidoc.devices.errors import (
     DeviceConnectionError,
     DeviceStreamEndedError,
 )
+from oculidoc.devices.gaze_collect_legacy import GazeCollectLegacyDevice
+from oculidoc.devices.just_need_to_see_bundle import JustNeedToSeeBundleDevice
 from oculidoc.devices.preflight import (
     GazePreflightResult,
     GazePreflightStore,
@@ -70,6 +72,19 @@ def create_eye_tracker(
 
     if settings.gaze_source == "tobii_stream_engine":
         return TobiiStreamEngineDevice(library_path=(settings.tobii_stream_engine_dll))
+
+    if settings.gaze_source == "gaze_collect_legacy":
+        return GazeCollectLegacyDevice(
+            json_root=settings.gaze_collect_json_root,
+            screen_width_px=settings.tobii_screen_width_px,
+            screen_height_px=settings.tobii_screen_height_px,
+            # HPF remains under the clinician's control so OculiDoC cannot
+            # accidentally start a second owner or stop an existing process.
+            player_executable=None,
+        )
+
+    if settings.gaze_source == "just_need_to_see_bundle":
+        return JustNeedToSeeBundleDevice(bundle_root=settings.just_need_to_see_root)
 
     if settings.tobii_bridge_mode == "hospital_server":
         return TobiiHospitalBridgeDevice(

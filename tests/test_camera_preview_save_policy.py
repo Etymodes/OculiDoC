@@ -31,4 +31,5 @@ def test_workbench_displays_patient_context() -> None:
 
     assert "normalize_patient_key" in constructor_source
     assert "self._patient_key" in constructor_source
+    assert "self._patient_display_label" in constructor_source
     assert "self.patient_status" in interface_source
