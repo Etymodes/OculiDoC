@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from oculidoc.application import (
     DuplicatePatientCodeError,
+    ExperimentSessionService,
     PatientService,
     RegisterPatientRequest,
     UpdatePatientRequest,
@@ -343,10 +344,13 @@ class PatientManagementDialog(QDialog):
         self,
         patient_service: PatientService,
         parent: QWidget | None = None,
+        *,
+        experiment_session_service: ExperimentSessionService | None = None,
     ) -> None:
         super().__init__(parent)
 
         self.patient_service = patient_service
+        self.experiment_session_service = experiment_session_service
         self.selected_patient: Patient | None = None
 
         self.setWindowTitle("\u60a3\u8005\u7ba1\u7406")
@@ -386,11 +390,11 @@ class PatientManagementDialog(QDialog):
         self.status_button.setObjectName("togglePatientStatusButton")
         self.status_button.clicked.connect(self._toggle_patient_status)
 
-        self.export_button = QPushButton("一键导出患者资料")
+        self.export_button = QPushButton("一键导出患者与实验数据")
         self.export_button.setObjectName("exportPatientDataButton")
         self.export_button.clicked.connect(self._export_patient_data)
 
-        self.import_button = QPushButton("一键录入患者资料")
+        self.import_button = QPushButton("一键导入患者与实验数据")
         self.import_button.setObjectName("importPatientDataButton")
         self.import_button.clicked.connect(self._import_patient_data)
 
@@ -410,7 +414,7 @@ class PatientManagementDialog(QDialog):
         actions.addWidget(close_button)
 
         transfer_actions = QHBoxLayout()
-        transfer_tip = QLabel("跨电脑转移患者基本资料（不含实验记录）")
+        transfer_tip = QLabel("跨电脑转移全部患者资料与实验文件（单个 CSV）")
         transfer_tip.setStyleSheet("color:#5a7184;")
         transfer_actions.addWidget(transfer_tip)
         transfer_actions.addStretch(1)
@@ -427,14 +431,14 @@ class PatientManagementDialog(QDialog):
         self.refresh_patients()
 
     def _export_patient_data(self, checked: bool = False) -> None:
-        """Export all registered patient demographics to one versioned JSON file."""
+        """Export every patient and completed experiment to one CSV file."""
         del checked
-        default_name = f"OculiDoC_患者资料_{date.today().isoformat()}.json"
+        default_name = f"OculiDoC_患者与实验数据_{date.today().isoformat()}.csv"
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            "导出患者资料",
+            "导出患者与实验数据",
             str(Path.home() / "Documents" / default_name),
-            "OculiDoC 患者资料 (*.json)",
+            "OculiDoC 完整患者数据 (*.csv)",
         )
 
         if not filename:
@@ -442,50 +446,64 @@ class PatientManagementDialog(QDialog):
 
         try:
             patients = self.patient_service.list_patients()
-            path = write_patient_transfer(filename, patients)
-        except OSError as error:
-            QMessageBox.warning(self, "患者资料导出失败", str(error))
+            path = write_patient_transfer(
+                filename,
+                patients,
+                self.experiment_session_service,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as error:
+            QMessageBox.warning(self, "患者与实验数据导出失败", str(error))
             return
 
         QMessageBox.information(
             self,
-            "患者资料已导出",
-            f"已导出 {len(patients)} 名患者资料。\n{path}",
+            "患者与实验数据已导出",
+            f"已将 {len(patients)} 名患者及其全部实验数据导出为一个 CSV。\n{path}",
         )
 
     def _import_patient_data(self, checked: bool = False) -> None:
-        """Validate and import patient demographics without overwriting duplicates."""
+        """Validate and import a complete CSV without overwriting duplicate patients."""
         del checked
         filename, _ = QFileDialog.getOpenFileName(
             self,
-            "录入患者资料",
+            "导入患者与实验数据",
             str(Path.home() / "Documents"),
-            "OculiDoC 患者资料 (*.json)",
+            "OculiDoC 完整患者数据 (*.csv);;旧版患者资料 (*.json)",
         )
 
         if not filename:
             return
 
         try:
-            records = read_patient_transfer(filename)
-            summary = import_patient_records(self.patient_service, records)
+            bundle = read_patient_transfer(filename)
+            try:
+                summary = import_patient_records(
+                    self.patient_service,
+                    bundle,
+                    self.experiment_session_service,
+                )
+            finally:
+                bundle.close()
         except (
             OSError,
             UnicodeDecodeError,
             json.JSONDecodeError,
             KeyError,
+            RuntimeError,
             TypeError,
             ValueError,
         ) as error:
-            QMessageBox.warning(self, "患者资料录入失败", str(error))
+            QMessageBox.warning(self, "患者与实验数据导入失败", str(error))
             return
 
         self.refresh_patients()
         QMessageBox.information(
             self,
-            "患者资料录入完成",
+            "患者与实验数据导入完成",
             f"新增 {summary.imported_count} 名；"
-            f"同编号已存在并跳过 {summary.skipped_duplicate_count} 名。",
+            f"恢复 {summary.imported_session_count} 次实验、"
+            f"{summary.imported_file_count} 个文件；"
+            f"同编号已存在并整名跳过 {summary.skipped_duplicate_count} 名。",
         )
 
     def refresh_patients(

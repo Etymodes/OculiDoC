@@ -30,9 +30,10 @@ from oculidoc.devices.preflight import GazePreflightResult
 from oculidoc.devices.tobii_stream_engine import discover_tobii_stream_engine_dll
 
 _SOURCE_ITEMS = (
+    ("自动检测传感器（推荐）", "auto"),
     ("模拟模式（仅工程测试）", "mock"),
     ("Tobii Eye Tracker 5（原生 Stream Engine）", "tobii_stream_engine"),
-    ("Tobii 兼容桥接", "tobii_legacy_bridge"),
+    ("兼容桥接（第三方/自制传感器）", "tobii_legacy_bridge"),
 )
 
 
@@ -108,6 +109,17 @@ class DeviceSettingsDialog(QDialog):
         dll_row.addWidget(discover_button)
         self.dll_controls = (self.dll_path_edit, browse_button, discover_button)
 
+        self.bridge_host_edit = QLineEdit(current.tobii_bridge_host)
+        self.bridge_host_edit.setPlaceholderText("通常为 127.0.0.1")
+        self.bridge_port_spin = QSpinBox()
+        self.bridge_port_spin.setRange(1, 65_535)
+        self.bridge_port_spin.setValue(current.tobii_bridge_port)
+        bridge_row = QHBoxLayout()
+        bridge_row.addWidget(self.bridge_host_edit, 1)
+        bridge_row.addWidget(QLabel("端口"))
+        bridge_row.addWidget(self.bridge_port_spin)
+        self.bridge_controls = (self.bridge_host_edit, self.bridge_port_spin)
+
         self.preflight_seconds_spin = QSpinBox()
         self.preflight_seconds_spin.setRange(3, 10)
         self.preflight_seconds_spin.setSuffix(" 秒")
@@ -121,9 +133,19 @@ class DeviceSettingsDialog(QDialog):
 
         form.addRow("眼动源：", self.source_combo)
         form.addRow("Stream Engine DLL：", dll_row)
+        form.addRow("兼容桥接地址：", bridge_row)
         form.addRow("任务前预检：", self.preflight_seconds_spin)
         form.addRow("最低有效率：", self.minimum_validity_spin)
         root.addLayout(form)
+
+        source_tip = QLabel(
+            "自动模式会依次检测 Tobii 原生驱动和兼容桥接，绝不回退到模拟数据。"
+            "第三方或自制传感器需要其程序在上述地址输出换行分隔 JSON，"
+            "至少包含归一化 x、y 和 valid；仅插入 USB/串口设备无法推断视线坐标。"
+        )
+        source_tip.setWordWrap(True)
+        source_tip.setStyleSheet("color:#5a7184;")
+        root.addWidget(source_tip)
 
         self.preflight_label = QLabel(self._preflight_text(latest_preflight))
         self.preflight_label.setWordWrap(True)
@@ -175,9 +197,13 @@ class DeviceSettingsDialog(QDialog):
         return details
 
     def _update_source_controls(self) -> None:
-        enabled = self.source_combo.currentData() == "tobii_stream_engine"
-        for widget in self.dll_controls:
-            widget.setEnabled(enabled)
+        source = self.source_combo.currentData()
+        enabled = source in {"auto", "tobii_stream_engine"}
+        for dll_widget in self.dll_controls:
+            dll_widget.setEnabled(enabled)
+        bridge_enabled = source in {"auto", "tobii_legacy_bridge"}
+        for bridge_widget in self.bridge_controls:
+            bridge_widget.setEnabled(bridge_enabled)
 
     def _browse_dll(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -250,12 +276,22 @@ class DeviceSettingsDialog(QDialog):
         return GazeDeviceConfig(
             gaze_source=self.source_combo.currentData(),
             tobii_stream_engine_dll=Path(dll_text) if dll_text else None,
+            tobii_bridge_host=self.bridge_host_edit.text().strip(),
+            tobii_bridge_port=self.bridge_port_spin.value(),
             gaze_preflight_seconds=self.preflight_seconds_spin.value(),
             gaze_minimum_valid_ratio=self.minimum_validity_spin.value() / 100.0,
         )
 
     def _save(self) -> None:
         config = self.build_config()
+        if config.gaze_source in {"auto", "tobii_legacy_bridge"}:
+            if not config.tobii_bridge_host.strip():
+                QMessageBox.warning(
+                    self,
+                    "兼容桥接地址无效",
+                    "请输入第三方/自制传感器桥接程序的主机地址。",
+                )
+                return
         if config.gaze_source == "tobii_stream_engine" and config.tobii_stream_engine_dll:
             if not config.tobii_stream_engine_dll.is_file():
                 QMessageBox.warning(

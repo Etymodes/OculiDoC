@@ -91,7 +91,10 @@ def test_inactive_patient_cannot_be_selected(
     )
     runtime.patient_service.deactivate_patient(patient.patient_id)
 
-    dialog = PatientManagementDialog(runtime.patient_service)
+    dialog = PatientManagementDialog(
+        runtime.patient_service,
+        experiment_session_service=runtime.experiment_session_service,
+    )
     qtbot.addWidget(dialog)
     dialog.patient_list.setCurrentRow(0)
 
@@ -116,11 +119,14 @@ def test_patient_management_exposes_import_and_export_buttons(
     tmp_path,
 ) -> None:
     runtime = initialize_database(tmp_path / "patients.sqlite3", data_root=tmp_path)
-    dialog = PatientManagementDialog(runtime.patient_service)
+    dialog = PatientManagementDialog(
+        runtime.patient_service,
+        experiment_session_service=runtime.experiment_session_service,
+    )
     qtbot.addWidget(dialog)
 
-    assert dialog.export_button.text() == "一键导出患者资料"
-    assert dialog.import_button.text() == "一键录入患者资料"
+    assert dialog.export_button.text() == "一键导出患者与实验数据"
+    assert dialog.import_button.text() == "一键导入患者与实验数据"
 
     runtime.dispose()
 

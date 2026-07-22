@@ -120,6 +120,7 @@ def test_mobile_api_controls_patient_display(
     assert control_page.status_code == 200
     assert "OculiDoC 手机管理员端" in control_page.text
     assert "保存并直接启动" in control_page.text
+    assert "自动检测传感器" in control_page.text
 
     sent = client.post(
         "/api/v1/patient-display/text",

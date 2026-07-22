@@ -386,8 +386,12 @@ async function refresh() {
     };
     document.getElementById("online").textContent = "本地后台在线";
     const preflight = runtime.gaze_preflight;
-    let gazeText = "眼动源：" +
-      (runtime.gaze_source === "mock" ? "模拟模式（仅工程测试）" : runtime.gaze_source);
+    const gazeLabels = {
+      auto: "自动检测传感器", mock: "模拟模式（仅工程测试）",
+      tobii_stream_engine: "Tobii Eye Tracker 5",
+      tobii_legacy_bridge: "兼容眼动传感器桥接"
+    };
+    let gazeText = "眼动源：" + (gazeLabels[runtime.gaze_source] || runtime.gaze_source);
     if (preflight && preflight.source === runtime.gaze_source) {
       gazeText += " · " + Math.round(preflight.sample_rate_hz) + " Hz" +
         " · 有效率 " + Math.round(preflight.valid_ratio * 100) + "%";

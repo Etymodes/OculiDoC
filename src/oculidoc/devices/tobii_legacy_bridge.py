@@ -1,4 +1,4 @@
-"""TCP adapter for a legacy Tobii gaze bridge."""
+"""TCP adapter for Tobii, third-party, or self-built gaze bridges."""
 
 import json
 import socket
@@ -316,7 +316,7 @@ def _looks_like_gaze(
 
 
 class TobiiLegacyBridgeDevice:
-    """Read newline-delimited gaze JSON from a local bridge."""
+    """Read OculiDoC-compatible newline-delimited gaze JSON."""
 
     def __init__(
         self,
@@ -355,11 +355,11 @@ class TobiiLegacyBridgeDevice:
         self._buffer = bytearray()
         self._sequence = 0
         self._info = DeviceInfo(
-            device_id=(f"tobii-legacy-bridge:{self.host}:{self.port}"),
+            device_id=(f"compatible-gaze-bridge:{self.host}:{self.port}"),
             kind=DeviceKind.EYE_TRACKER,
-            name="Tobii Legacy Bridge",
-            manufacturer="Tobii",
-            model="TCP NDJSON Bridge",
+            name="兼容眼动传感器桥接",
+            manufacturer="第三方/自制设备",
+            model="OculiDoC TCP NDJSON Bridge",
             serial_number=None,
             is_simulated=False,
             capabilities=(

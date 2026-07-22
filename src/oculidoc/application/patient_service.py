@@ -136,6 +136,22 @@ class PatientService:
 
         return saved_patient
 
+    def restore_patient(self, patient: Patient) -> Patient:
+        """Restore one validated transfer record while preserving its identity."""
+        existing_code = self._repository.get_by_code(patient.patient_code)
+        existing_id = self._repository.get(patient.patient_id)
+
+        if existing_code is not None or existing_id is not None:
+            raise DuplicatePatientCodeError(f"Patient already exists: {patient.patient_code}")
+
+        saved_patient = self._repository.add(patient)
+        self._record_audit(
+            saved_patient.patient_id,
+            PatientAuditAction.REGISTERED,
+            _EDITABLE_FIELDS,
+        )
+        return saved_patient
+
     def update_patient(
         self,
         request: UpdatePatientRequest,
