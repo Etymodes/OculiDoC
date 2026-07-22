@@ -46,6 +46,7 @@ class CommonQuestionTemplate:
     option_1: str
     option_2: str
     correct_option_id: str | None = None
+    category: str = "自定义"
     built_in: bool = False
 
     def __post_init__(self) -> None:
@@ -53,10 +54,14 @@ class CommonQuestionTemplate:
         normalized_question = self.question.strip()
         normalized_option_1 = self.option_1.strip()
         normalized_option_2 = self.option_2.strip()
+        normalized_category = self.category.strip()
         normalized_type = BinaryQuestionType(self.question_type)
 
         if not normalized_id:
             raise ValueError("template_id cannot be empty.")
+
+        if not normalized_category:
+            raise ValueError("category cannot be empty.")
 
         for name, value in (
             ("question", normalized_question),
@@ -82,6 +87,7 @@ class CommonQuestionTemplate:
         object.__setattr__(self, "option_1", normalized_option_1)
         object.__setattr__(self, "option_2", normalized_option_2)
         object.__setattr__(self, "correct_option_id", correct_option_id)
+        object.__setattr__(self, "category", normalized_category)
 
     @classmethod
     def create(
@@ -92,6 +98,7 @@ class CommonQuestionTemplate:
         option_1: str,
         option_2: str,
         correct_option_id: str | None = None,
+        category: str = "自定义",
     ) -> CommonQuestionTemplate:
         return cls(
             template_id=str(uuid4()),
@@ -100,6 +107,7 @@ class CommonQuestionTemplate:
             option_1=option_1,
             option_2=option_2,
             correct_option_id=correct_option_id,
+            category=category,
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -110,6 +118,7 @@ class CommonQuestionTemplate:
             "option_1": self.option_1,
             "option_2": self.option_2,
             "correct_option_id": self.correct_option_id,
+            "category": self.category,
         }
 
     @classmethod
@@ -131,192 +140,358 @@ class CommonQuestionTemplate:
                 if value.get("correct_option_id") is not None
                 else None
             ),
+            category=str(value.get("category", "自定义")),
         )
 
 
-def _xlsx_question(
-    number: int,
-    question: str,
-    option_1: object,
-    option_2: object,
-    *,
-    correct_answer: object | None = None,
-    question_type: BinaryQuestionType = BinaryQuestionType.INQUIRY,
-) -> CommonQuestionTemplate:
-    """Preserve one row from the administrator-provided question workbook."""
-    first = str(option_1)
-    second = str(option_2)
-    correct = str(correct_answer) if correct_answer is not None else None
+QUESTION_CATEGORY_DATA: tuple[
+    tuple[str, str, BinaryQuestionType, tuple[tuple[str, str, str, str | None], ...]], ...
+] = (
+    (
+        "fact",
+        "基础事实",
+        BinaryQuestionType.YES_NO,
+        (
+            ("北京是中国的首都吗？", "是", "否", "option_1"),
+            ("太阳是恒星吗？", "是", "否", "option_1"),
+            ("水在常温下通常是液体吗？", "是", "否", "option_1"),
+            ("一年有十二个月吗？", "是", "否", "option_1"),
+            ("一周有七天吗？", "是", "否", "option_1"),
+            ("人通常有两只眼睛吗？", "是", "否", "option_1"),
+            ("鱼通常生活在水里吗？", "是", "否", "option_1"),
+            ("医生通常在医院工作吗？", "是", "否", "option_1"),
+            ("飞机可以在空中飞行吗？", "是", "否", "option_1"),
+            ("汽车通常在公路上行驶吗？", "是", "否", "option_1"),
+        ),
+    ),
+    (
+        "function",
+        "物品功能",
+        BinaryQuestionType.QUESTION_ANSWER,
+        (
+            ("杯子通常用来做什么？", "喝水", "穿衣", "option_1"),
+            ("鞋子通常用来做什么？", "穿在脚上", "盛水", "option_1"),
+            ("筷子通常用来做什么？", "吃饭", "写字", "option_1"),
+            ("枕头通常用来做什么？", "睡觉时垫头", "盛水", "option_1"),
+            ("剪刀通常用来做什么？", "剪东西", "煮饭", "option_1"),
+            ("雨伞通常用来做什么？", "挡雨", "照明", "option_1"),
+            ("牙刷通常用来做什么？", "刷牙", "写字", "option_1"),
+            ("电话通常用来做什么？", "通话", "切菜", "option_1"),
+            ("钥匙通常用来做什么？", "开锁", "喝水", "option_1"),
+            ("毛巾通常用来做什么？", "擦拭", "开门", "option_1"),
+        ),
+    ),
+    (
+        "category",
+        "类别辨别",
+        BinaryQuestionType.QUESTION_ANSWER,
+        (
+            ("下面哪一个不是动物？", "大象", "桌子", "option_2"),
+            ("下面哪一个是水果？", "苹果", "汽车", "option_1"),
+            ("下面哪一个是交通工具？", "公交车", "香蕉", "option_1"),
+            ("下面哪一个是衣物？", "上衣", "杯子", "option_1"),
+            ("下面哪一个是家具？", "床", "小鸟", "option_1"),
+            ("下面哪一个是食物？", "米饭", "铅笔", "option_1"),
+            ("下面哪一个不是水果？", "梨", "椅子", "option_2"),
+            ("下面哪一个是动物？", "猫", "飞机", "option_1"),
+            ("下面哪一个是饮品？", "牛奶", "鞋子", "option_1"),
+            ("下面哪一个是书写工具？", "铅笔", "勺子", "option_1"),
+        ),
+    ),
+    (
+        "attribute",
+        "属性辨别",
+        BinaryQuestionType.QUESTION_ANSWER,
+        (
+            ("草通常是什么颜色？", "绿色", "红色", "option_1"),
+            ("晴朗的天空通常是什么颜色？", "蓝色", "黑色", "option_1"),
+            ("雪通常是什么颜色？", "白色", "紫色", "option_1"),
+            ("火通常是热的还是冷的？", "热的", "冷的", "option_1"),
+            ("冰通常是冷的还是热的？", "冷的", "热的", "option_1"),
+            ("大象通常是大还是小？", "大", "小", "option_1"),
+            ("羽毛通常是轻还是重？", "轻", "重", "option_1"),
+            ("柠檬通常是什么味道？", "酸", "咸", "option_1"),
+            ("糖通常是什么味道？", "甜", "苦", "option_1"),
+            ("夜晚通常是明亮还是黑暗？", "黑暗", "明亮", "option_1"),
+        ),
+    ),
+    (
+        "quantity",
+        "基础数量",
+        BinaryQuestionType.QUESTION_ANSWER,
+        (
+            ("一加一等于几？", "二", "三", "option_1"),
+            ("一加二等于几？", "三", "五", "option_1"),
+            ("二加二等于几？", "四", "三", "option_1"),
+            ("二乘三等于几？", "六", "八", "option_1"),
+            ("五乘六等于几？", "三十", "二十五", "option_1"),
+            ("五比三大还是小？", "大", "小", "option_1"),
+            ("一只手通常有几根手指？", "五根", "八根", "option_1"),
+            ("人通常有几只眼睛？", "两只", "四只", "option_1"),
+            ("十减三等于几？", "七", "六", "option_1"),
+            ("三加四等于几？", "七", "九", "option_1"),
+        ),
+    ),
+    (
+        "sequence",
+        "自然与顺序",
+        BinaryQuestionType.QUESTION_ANSWER,
+        (
+            ("春天之后通常是什么季节？", "夏天", "冬天", "option_1"),
+            ("如果今天是星期五，明天是星期几？", "星期六", "星期三", "option_1"),
+            ("早晨之后通常是下午还是深夜？", "下午", "深夜", "option_1"),
+            ("星期一之后是星期几？", "星期二", "星期日", "option_1"),
+            ("一、二之后通常是几？", "三", "五", "option_1"),
+            ("早餐之后通常是午餐还是晚餐？", "午餐", "晚餐", "option_1"),
+            ("秋天之后通常是什么季节？", "冬天", "夏天", "option_1"),
+            ("白天之后通常是夜晚还是清晨？", "夜晚", "清晨", "option_1"),
+            ("一年中的第一个月是一月还是二月？", "一月", "二月", "option_1"),
+            ("一年通常有四个季节还是三个季节？", "四个", "三个", "option_1"),
+        ),
+    ),
+    (
+        "sensory",
+        "感知与交流",
+        BinaryQuestionType.INQUIRY,
+        (
+            ("你现在能听见我说话吗？", "能", "不能", None),
+            ("你现在能看清屏幕吗？", "能", "不能", None),
+            ("你现在是清醒的吗？", "是", "不确定", None),
+            ("你知道现在有人在和你说话吗？", "知道", "不知道", None),
+            ("你现在头脑清楚吗？", "清楚", "不清楚", None),
+            ("你现在想表达自己的意思吗？", "想", "不想", None),
+            ("你现在用目光回答容易吗？", "容易", "困难", None),
+            ("现在说话的声音大小合适吗？", "合适", "太小", None),
+            ("屏幕亮度让你舒服吗？", "舒服", "不舒服", None),
+            ("你需要我重复这个问题吗？", "需要", "不需要", None),
+        ),
+    ),
+    (
+        "orientation",
+        "现场定向",
+        BinaryQuestionType.INQUIRY,
+        (
+            ("你现在是在床上吗？", "是", "不是", None),
+            ("你现在是在医院还是家里？", "医院", "家里", None),
+            ("现在是白天还是晚上？", "白天", "晚上", None),
+            ("你现在是躺着还是坐着？", "躺着", "坐着", None),
+            ("我现在是在你左边还是右边？", "左边", "右边", None),
+            ("你现在是刚醒还是醒了一会儿？", "刚醒", "醒了一会儿", None),
+            ("你认识现在照护你的人吗？", "认识", "不确定", None),
+            ("你知道今天的日期吗？", "知道", "不知道", None),
+            ("你知道自己现在在哪个城市吗？", "知道", "不知道", None),
+            ("你知道自己为什么在这里吗？", "知道", "不知道", None),
+        ),
+    ),
+    (
+        "symptom",
+        "疼痛与不适",
+        BinaryQuestionType.INQUIRY,
+        (
+            ("你现在难受吗？", "难受", "不难受", None),
+            ("你现在疼吗？", "疼", "不疼", None),
+            ("你现在觉得冷吗？", "冷", "不冷", None),
+            ("你现在觉得热吗？", "热", "不热", None),
+            ("你现在呼吸顺畅吗？", "顺畅", "不顺畅", None),
+            ("你现在口渴或口干吗？", "是", "否", None),
+            ("你现在恶心吗？", "恶心", "不恶心", None),
+            ("你现在头痛吗？", "头痛", "不头痛", None),
+            ("你现在身体有麻木感吗？", "有", "没有", None),
+            ("你现在觉得疲倦吗？", "疲倦", "不疲倦", None),
+        ),
+    ),
+    (
+        "care",
+        "护理需求",
+        BinaryQuestionType.INQUIRY,
+        (
+            ("你现在想喝水吗？", "想", "不想", None),
+            ("你现在需要吸痰吗？", "需要", "不需要", None),
+            ("你现在想翻身吗？", "想", "不想", None),
+            ("你需要调整枕头吗？", "需要", "不需要", None),
+            ("你现在需要如厕帮助吗？", "需要", "不需要", None),
+            ("你需要清洁口腔吗？", "需要", "不需要", None),
+            ("你需要擦脸吗？", "需要", "不需要", None),
+            ("你需要加盖被子吗？", "需要", "不需要", None),
+            ("你需要我呼叫医护人员吗？", "需要", "不需要", None),
+            ("你需要暂停检查吗？", "需要", "不需要", None),
+        ),
+    ),
+    (
+        "activity",
+        "康复与活动",
+        BinaryQuestionType.INQUIRY,
+        (
+            ("你现在想休息还是活动？", "休息", "活动", None),
+            ("你现在想睡觉还是保持清醒？", "睡觉", "保持清醒", None),
+            ("你现在想做眼动训练吗？", "想", "不想", None),
+            ("你现在想做康复训练吗？", "想", "不想", None),
+            ("你现在想坐起来还是继续躺着？", "坐起来", "继续躺着", None),
+            ("你现在想活动上肢还是下肢？", "上肢", "下肢", None),
+            ("你现在想听音乐还是保持安静？", "听音乐", "保持安静", None),
+            ("你现在想看屏幕还是闭眼休息？", "看屏幕", "闭眼休息", None),
+            ("你想继续当前任务还是停止？", "继续", "停止", None),
+            ("你现在想自己选择接下来的活动吗？", "想", "不想", None),
+        ),
+    ),
+    (
+        "emotion",
+        "情绪与陪伴",
+        BinaryQuestionType.INQUIRY,
+        (
+            ("你现在感到舒服吗？", "舒服", "不舒服", None),
+            ("你现在是一个人还是有人陪伴？", "一个人", "有人陪伴", None),
+            ("你现在心情平静还是紧张？", "平静", "紧张", None),
+            ("你现在感到开心还是难过？", "开心", "难过", None),
+            ("你希望家人陪在身边吗？", "希望", "不希望", None),
+            ("你希望有人和你说话吗？", "希望", "不希望", None),
+            ("你现在希望周围安静吗？", "希望", "不希望", None),
+            ("你认得现在陪伴你的人吗？", "认得", "不确定", None),
+            ("你现在感到孤单吗？", "孤单", "不孤单", None),
+            ("你现在需要安慰吗？", "需要", "不需要", None),
+        ),
+    ),
+)
 
-    if correct is not None:
-        question_type = BinaryQuestionType.QUESTION_ANSWER
 
-        if correct not in {first, second}:
-            raise ValueError(f"Question {number} correct answer is not one of its options.")
-
-    return CommonQuestionTemplate(
-        template_id=f"xlsx-{number:03d}",
+BUILT_IN_QUESTION_TEMPLATES = tuple(
+    CommonQuestionTemplate(
+        template_id=f"{prefix}-{index:02d}",
         question_type=question_type,
         question=question,
-        option_1=first,
-        option_2=second,
-        correct_option_id=(
-            "option_1" if correct == first else "option_2" if correct == second else None
-        ),
+        option_1=option_1,
+        option_2=option_2,
+        correct_option_id=correct_option_id,
+        category=category,
         built_in=True,
     )
-
-
-BUILT_IN_QUESTION_TEMPLATES = (
-    CommonQuestionTemplate(
-        template_id="builtin-comfort",
-        question_type=BinaryQuestionType.INQUIRY,
-        question="你现在感到舒服吗？",
-        option_1="是",
-        option_2="否",
-        built_in=True,
-    ),
-    CommonQuestionTemplate(
-        template_id="builtin-hearing",
-        question_type=BinaryQuestionType.INQUIRY,
-        question="你能听到我说话吗？",
-        option_1="能",
-        option_2="不能",
-        built_in=True,
-    ),
-    CommonQuestionTemplate(
-        template_id="builtin-capital",
-        question_type=BinaryQuestionType.YES_NO,
-        question="北京是中国的首都吗？",
-        option_1="是",
-        option_2="否",
-        correct_option_id="option_1",
-        built_in=True,
-    ),
-    CommonQuestionTemplate(
-        template_id="builtin-arithmetic",
-        question_type=BinaryQuestionType.QUESTION_ANSWER,
-        question="一加一等于几？",
-        option_1="二",
-        option_2="三",
-        correct_option_id="option_1",
-        built_in=True,
-    ),
-    _xlsx_question(1, "你能听见我说话吗？", "能", "不能"),
-    _xlsx_question(2, "你能看到我吗？", "能", "不能"),
-    _xlsx_question(3, "你现在醒着吗？", "醒着", "不清楚"),
-    _xlsx_question(4, "我现在在跟你说话对不对？", "对", "不对"),
-    _xlsx_question(5, "你现在有感觉吗？", "有", "没有"),
-    _xlsx_question(6, "你知道我在你身边吗？", "知道", "不知道"),
-    _xlsx_question(7, "你现在是在床上吗？", "是", "不是"),
-    _xlsx_question(8, "你现在难受吗？", "难受", "不难受"),
-    _xlsx_question(9, "你现在是在家里还是医院？", "家里", "医院"),
-    _xlsx_question(10, "现在是白天还是晚上？", "白天", "晚上"),
-    _xlsx_question(11, "你现在是躺着还是坐着？", "躺着", "坐着"),
-    _xlsx_question(12, "我是在你左边还是右边？", "左边", "右边"),
-    _xlsx_question(13, "你现在疼不疼？", "疼", "不疼"),
-    _xlsx_question(14, "你现在冷吗？", "冷", "不冷"),
-    _xlsx_question(15, "你现在热吗？", "热", "不热"),
-    _xlsx_question(16, "你现在想不想喝水？", "想", "不想"),
-    _xlsx_question(17, "我现在是在照顾你对不对？", "对", "不对"),
-    _xlsx_question(18, "我是你的家人还是陌生人？", "家人", "陌生人"),
-    _xlsx_question(19, "你现在是一个人还是有人陪？一个人", "一个人", "有人陪"),
-    _xlsx_question(20, "你现在需要休息还是活动？", "休息", "活动"),
-    _xlsx_question(21, "你想不想说话？", "想", "不想"),
-    _xlsx_question(22, "你现在是刚醒还是醒了一会？刚醒", "刚醒", "醒了一会"),
-    _xlsx_question(23, "杯子是用来喝水的还是穿的？", "喝水", "穿", correct_answer="喝水"),
-    _xlsx_question(24, "你现在有没有力气？", "有", "没有"),
-    _xlsx_question(25, "你现在想不想翻身？", "想", "不想"),
-    _xlsx_question(26, "你现在头清不清楚？", "清楚", "不清楚"),
-    _xlsx_question(
-        27,
-        "你看我一眼",
-        "做到",
-        "做不到",
-        question_type=BinaryQuestionType.OTHER,
-    ),
-    _xlsx_question(
-        28,
-        "你把头轻轻转向我这边",
-        "做到",
-        "做不到",
-        question_type=BinaryQuestionType.OTHER,
-    ),
-    _xlsx_question(
-        29,
-        "你看一下天花板",
-        "做到",
-        "做不到",
-        question_type=BinaryQuestionType.OTHER,
-    ),
-    _xlsx_question(
-        30,
-        "你动一下手指",
-        "做到",
-        "做不到",
-        question_type=BinaryQuestionType.OTHER,
-    ),
-    _xlsx_question(
-        31,
-        "你把手轻轻抬一下",
-        "做到",
-        "做不到",
-        question_type=BinaryQuestionType.OTHER,
-    ),
-    _xlsx_question(
-        32,
-        "你握一下我的手",
-        "做到",
-        "做不到",
-        question_type=BinaryQuestionType.OTHER,
-    ),
-    _xlsx_question(
-        33,
-        "你点一下头",
-        "做到",
-        "做不到",
-        question_type=BinaryQuestionType.OTHER,
-    ),
-    _xlsx_question(34, "现在是哪一年？", "2025年", "2026年", correct_answer="2026年"),
-    _xlsx_question(35, "你在哪个城市？", "北京", "上海", correct_answer="北京"),
-    _xlsx_question(36, "你在哪个城市？", "上海", "北京", correct_answer="北京"),
-    _xlsx_question(37, "现在是白天还是黑夜？", "白天", "黑夜"),
-    _xlsx_question(38, "这是什么地方？", "医院", "家里", correct_answer="医院"),
-    _xlsx_question(39, "这是什么地方？", "家里", "医院", correct_answer="医院"),
-    _xlsx_question(40, "草的颜色是什么？", "绿色", "红色", correct_answer="绿色"),
-    _xlsx_question(41, "草的颜色是什么？", "红色", "绿色", correct_answer="绿色"),
-    _xlsx_question(42, "天空通常是什么颜色？", "蓝色", "黑色", correct_answer="蓝色"),
-    _xlsx_question(43, "天空通常是什么颜色？", "黑色", "蓝色", correct_answer="蓝色"),
-    _xlsx_question(44, "你喝水时会用什么？", "鞋子", "杯子", correct_answer="杯子"),
-    _xlsx_question(45, "你喝水时会用什么？", "杯子", "鞋子", correct_answer="杯子"),
-    _xlsx_question(46, "太阳从哪边升起？", "西方", "东方", correct_answer="东方"),
-    _xlsx_question(47, "鱼生活在？", "水里", "天上", correct_answer="水里"),
-    _xlsx_question(48, "夏天通常是冷还是热？", "冷", "热", correct_answer="热"),
-    _xlsx_question(49, "汽车是跑在什么上？", "公路", "河流", correct_answer="公路"),
-    _xlsx_question(50, "早上吃的饭叫？", "早餐", "晚餐", correct_answer="早餐"),
-    _xlsx_question(51, "医生在什么地方工作？", "学校", "医院", correct_answer="医院"),
-    _xlsx_question(52, "一加二等于几？", "三", "五", correct_answer="三"),
-    _xlsx_question(53, "二加二等于几？", "三", "四", correct_answer="四"),
-    _xlsx_question(54, "一乘二等于几？", "三", "二", correct_answer="二"),
-    _xlsx_question(55, "二乘三等于几？", "六", "八", correct_answer="六"),
-    _xlsx_question(56, "下面哪一个不是动物？", "大象", "桌子", correct_answer="桌子"),
-    _xlsx_question(57, "5比3大还是小？", "大", "小", correct_answer="大"),
-    _xlsx_question(58, "春天之后是？", "冬天", "夏天", correct_answer="夏天"),
-    _xlsx_question(59, "如果今天是星期五，明天是？", "星期六", "星期三", correct_answer="星期六"),
-    _xlsx_question(60, "下面哪个可以飞？", "火车", "飞机", correct_answer="飞机"),
-    _xlsx_question(61, "你想做眼动训练吗？", "想", "不想"),
-    _xlsx_question(62, "你想做眼动训练吗？", "不想", "想"),
-    _xlsx_question(63, "你有没有用心做吗？", "用心了", "没用心"),
-    _xlsx_question(64, "你有没有用心做吗？", "没用心", "用心了"),
-    _xlsx_question(65, "5乘以6等于多少", 30, 25, correct_answer=30),
-    _xlsx_question(66, "5乘以6等于多少", 25, 30, correct_answer=30),
+    for prefix, category, question_type, questions in QUESTION_CATEGORY_DATA
+    for index, (question, option_1, option_2, correct_option_id) in enumerate(
+        questions,
+        start=1,
+    )
 )
+
+
+FIXED_BINARY_QUESTION_FORMS: dict[int, tuple[str, ...]] = {
+    6: (
+        "fact-01",
+        "function-01",
+        "quantity-01",
+        "symptom-02",
+        "care-02",
+        "emotion-06",
+    ),
+    8: (
+        "fact-04",
+        "function-07",
+        "category-01",
+        "quantity-02",
+        "symptom-01",
+        "care-03",
+        "activity-03",
+        "emotion-05",
+    ),
+    10: (
+        "fact-01",
+        "function-01",
+        "category-01",
+        "attribute-01",
+        "quantity-01",
+        "sensory-01",
+        "symptom-02",
+        "care-02",
+        "activity-04",
+        "emotion-06",
+    ),
+}
+
+
+_LEGACY_CANONICAL_IDS = (
+    "sensory-01",
+    "sensory-02",
+    "sensory-03",
+    "sensory-04",
+    "sensory-05",
+    "sensory-04",
+    "orientation-01",
+    "symptom-01",
+    "orientation-02",
+    "orientation-03",
+    "orientation-04",
+    "orientation-05",
+    "symptom-02",
+    "symptom-03",
+    "symptom-04",
+    "care-01",
+    "care-09",
+    "emotion-08",
+    "emotion-02",
+    "activity-01",
+    "sensory-06",
+    "orientation-06",
+    "function-01",
+    "symptom-10",
+    "care-03",
+    "sensory-05",
+    "sensory-02",
+    "activity-05",
+    "sensory-02",
+    "activity-06",
+    "activity-06",
+    "activity-06",
+    "activity-06",
+    "orientation-08",
+    "orientation-09",
+    "orientation-09",
+    "orientation-03",
+    "orientation-02",
+    "orientation-02",
+    "attribute-01",
+    "attribute-01",
+    "attribute-02",
+    "attribute-02",
+    "function-01",
+    "function-01",
+    "fact-02",
+    "fact-07",
+    "attribute-04",
+    "fact-10",
+    "sequence-06",
+    "fact-08",
+    "quantity-02",
+    "quantity-03",
+    "quantity-01",
+    "quantity-04",
+    "category-01",
+    "quantity-06",
+    "sequence-01",
+    "sequence-02",
+    "fact-09",
+    "activity-03",
+    "activity-03",
+    "activity-09",
+    "activity-09",
+    "quantity-05",
+    "quantity-05",
+)
+
+LEGACY_QUESTION_ALIASES = {
+    **{
+        f"xlsx-{index:03d}": canonical_id
+        for index, canonical_id in enumerate(_LEGACY_CANONICAL_IDS, start=1)
+    },
+    "builtin-comfort": "emotion-01",
+    "builtin-hearing": "sensory-01",
+    "builtin-capital": "fact-01",
+    "builtin-arithmetic": "quantity-01",
+}
 
 
 class CommonQuestionStore:
     """Load and atomically save user question templates."""
 
-    schema_version = "1.0"
+    schema_version = "1.1"
 
     def __init__(
         self,
@@ -408,6 +583,7 @@ class CommonQuestionStore:
                 option_1=template.option_1,
                 option_2=template.option_2,
                 correct_option_id=template.correct_option_id,
+                category=template.category,
             )
             existing[index] = updated
             self._write_user_templates(existing)
@@ -421,6 +597,7 @@ class CommonQuestionStore:
                 option_1=template.option_1,
                 option_2=template.option_2,
                 correct_option_id=template.correct_option_id,
+                category=template.category,
             )
             existing.append(override)
             self._write_user_templates(existing)

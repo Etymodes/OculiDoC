@@ -41,6 +41,7 @@ class GazeReportArtifacts:
     screen_heatmap_path: Path
     semantic_aoi_path: Path
     tracking_error_path: Path | None
+    tracking_error_timeline_path: Path | None
 
 
 def _finite_float(
@@ -671,8 +672,12 @@ def _build_metrics(
         float,
     ] = {}
     tracking_errors: list[float] = []
+    tracking_series: list[tuple[float, float, float, float, float, float]] = []
+    target_trajectory: list[tuple[float, float, float]] = []
     tracking_inside_count = 0
     tracking_sample_count = 0
+    tracking_time_origin_ns: int | None = None
+    previous_tracking_time_seconds = 0.0
     question_ids: set[str] = set()
 
     for row in rows:
@@ -681,6 +686,49 @@ def _build_metrics(
         if question_id is not None:
             question_ids.add(str(question_id))
 
+        duration_ms = max(
+            0.0,
+            _finite_float(row.get("duration_ms")) or 0.0,
+        )
+        left = _finite_float(row.get("reference_aoi_left"))
+        top = _finite_float(row.get("reference_aoi_top"))
+        right = _finite_float(row.get("reference_aoi_right"))
+        bottom = _finite_float(row.get("reference_aoi_bottom"))
+        reference_center: tuple[float, float] | None = None
+        elapsed_seconds: float | None = None
+
+        if (
+            left is not None
+            and top is not None
+            and right is not None
+            and bottom is not None
+            and 0.0 <= left <= right <= 1.0
+            and 0.0 <= top <= bottom <= 1.0
+        ):
+            center_x = (left + right) / 2.0
+            center_y = (top + bottom) / 2.0
+            reference_center = (center_x, center_y)
+            timestamp_value = row.get("monotonic_timestamp_ns")
+            timestamp_ns = (
+                int(timestamp_value)
+                if isinstance(timestamp_value, int) and not isinstance(timestamp_value, bool)
+                else None
+            )
+
+            if timestamp_ns is not None and timestamp_ns >= 0:
+                if tracking_time_origin_ns is None:
+                    tracking_time_origin_ns = timestamp_ns
+
+                elapsed_seconds = max(
+                    previous_tracking_time_seconds,
+                    (timestamp_ns - tracking_time_origin_ns) / 1_000_000_000.0,
+                )
+            else:
+                elapsed_seconds = previous_tracking_time_seconds + max(duration_ms, 1.0) / 1_000.0
+
+            previous_tracking_time_seconds = elapsed_seconds
+            target_trajectory.append((elapsed_seconds, center_x, center_y))
+
         x = _finite_float(row.get("gaze_x_normalized"))
         y = _finite_float(row.get("gaze_y_normalized"))
         valid = bool(row.get("analysis_valid"))
@@ -688,10 +736,6 @@ def _build_metrics(
         if not valid or x is None or y is None or not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
             continue
 
-        duration_ms = max(
-            0.0,
-            _finite_float(row.get("duration_ms")) or 0.0,
-        )
         weight = duration_ms if duration_ms > 0 else 1.0
         valid_points.append((x, y, weight))
 
@@ -704,35 +748,21 @@ def _build_metrics(
             + duration_ms
         )
 
-        left = _finite_float(row.get("reference_aoi_left"))
-        top = _finite_float(row.get("reference_aoi_top"))
-        right = _finite_float(row.get("reference_aoi_right"))
-        bottom = _finite_float(row.get("reference_aoi_bottom"))
-
-        if None in {
-            left,
-            top,
-            right,
-            bottom,
-        }:
+        if reference_center is None or elapsed_seconds is None:
             continue
 
-        assert left is not None
-        assert top is not None
-        assert right is not None
-        assert bottom is not None
-
-        if not (right >= left and bottom >= top):
-            continue
-
-        center_x = (left + right) / 2.0
-        center_y = (top + bottom) / 2.0
-        tracking_errors.append(
-            float(
-                np.hypot(
-                    x - center_x,
-                    y - center_y,
-                )
+        assert left is not None and top is not None and right is not None and bottom is not None
+        center_x, center_y = reference_center
+        tracking_error = float(np.hypot(x - center_x, y - center_y))
+        tracking_errors.append(tracking_error)
+        tracking_series.append(
+            (
+                elapsed_seconds,
+                x,
+                y,
+                center_x,
+                center_y,
+                tracking_error,
             )
         )
         tracking_sample_count += 1
@@ -800,8 +830,10 @@ def _build_metrics(
         )
         tracking_metrics = {
             "sample_count": (tracking_sample_count),
+            "target_reference_sample_count": len(target_trajectory),
             "mean_error_normalized": float(np.mean(errors)),
             "median_error_normalized": float(np.median(errors)),
+            "rmse_normalized": float(np.sqrt(np.mean(np.square(errors)))),
             "p95_error_normalized": float(
                 np.percentile(
                     errors,
@@ -859,12 +891,16 @@ def _build_metrics(
         "binary": binary_metrics,
         "_valid_points": valid_points,
         "_tracking_errors": (tracking_errors),
+        "_tracking_series": tracking_series,
+        "_target_trajectory": target_trajectory,
     }
 
 
 def _screen_heatmap(
     valid_points: list[tuple[float, float, float]],
     output_path: Path,
+    target_trajectory: list[tuple[float, float, float]] | None = None,
+    tracking_series: list[tuple[float, float, float, float, float, float]] | None = None,
 ) -> None:
     figure, axis = plt.subplots(figsize=(10, 6))
 
@@ -916,7 +952,76 @@ def _screen_heatmap(
             va="center",
         )
 
-    axis.set_title("Screen-space gaze density")
+    if target_trajectory:
+        target_step = max(1, int(np.ceil(len(target_trajectory) / 2_000)))
+        plotted_target = target_trajectory[::target_step]
+        target_x = [sample[1] for sample in plotted_target]
+        target_y = [sample[2] for sample in plotted_target]
+        axis.plot(
+            target_x,
+            target_y,
+            color="#00b7ff",
+            linewidth=2.4,
+            linestyle="--",
+            label="Target trajectory",
+            zorder=4,
+        )
+        axis.scatter(
+            [target_x[0]],
+            [target_y[0]],
+            color="#00b7ff",
+            marker="o",
+            s=42,
+            zorder=6,
+        )
+        axis.scatter(
+            [target_x[-1]],
+            [target_y[-1]],
+            color="#00b7ff",
+            marker="X",
+            s=54,
+            zorder=6,
+        )
+
+    if tracking_series:
+        gaze_step = max(1, int(np.ceil(len(tracking_series) / 2_000)))
+        plotted_gaze = tracking_series[::gaze_step]
+        gaze_x = [sample[1] for sample in plotted_gaze]
+        gaze_y = [sample[2] for sample in plotted_gaze]
+        axis.plot(
+            gaze_x,
+            gaze_y,
+            color="#ff8c42",
+            linewidth=1.6,
+            alpha=0.9,
+            label="Gaze trajectory",
+            zorder=5,
+        )
+        axis.scatter(
+            [gaze_x[0]],
+            [gaze_y[0]],
+            color="#ff8c42",
+            marker="o",
+            s=42,
+            zorder=6,
+        )
+        axis.scatter(
+            [gaze_x[-1]],
+            [gaze_y[-1]],
+            color="#ff8c42",
+            marker="X",
+            s=54,
+            zorder=6,
+        )
+
+    if target_trajectory or tracking_series:
+        axis.legend(loc="upper right")
+
+    axis.set_title(
+        "Screen-space gaze density with target/gaze trajectories"
+        if target_trajectory or tracking_series
+        else "Screen-space gaze density"
+    )
     axis.set_xlabel("Normalized screen X")
     axis.set_ylabel("Normalized screen Y")
     axis.set_xlim(0.0, 1.0)
@@ -988,6 +1093,50 @@ def _tracking_error_plot(
     )
 
 
+def _tracking_error_timeline_plot(
+    series: list[tuple[float, float, float, float, float, float]],
+    output_path: Path,
+) -> None:
+    figure, axis = plt.subplots(figsize=(10, 5))
+    times = np.array([sample[0] for sample in series], dtype=float)
+    errors = np.array([sample[5] for sample in series], dtype=float)
+    axis.scatter(
+        times,
+        errors,
+        s=10,
+        alpha=0.28,
+        color="#315f8c",
+        label="Sample error",
+    )
+
+    if len(series) > 1:
+        positive_intervals = np.diff(times)
+        positive_intervals = positive_intervals[positive_intervals > 0]
+        median_interval = float(np.median(positive_intervals)) if positive_intervals.size else 1.0
+        window = min(len(errors), max(1, int(round(1.0 / median_interval))))
+        kernel = np.ones(window, dtype=float)
+        smoothed = np.convolve(errors, kernel, mode="same") / np.convolve(
+            np.ones(len(errors), dtype=float),
+            kernel,
+            mode="same",
+        )
+        axis.plot(
+            times,
+            smoothed,
+            linewidth=2.2,
+            color="#e56b1f",
+            label="1-second moving average",
+        )
+
+    axis.axhline(0.0, color="#5b6770", linewidth=0.8)
+    axis.set_title("Gaze-target position error over time")
+    axis.set_xlabel("Elapsed time (seconds)")
+    axis.set_ylabel("Normalized gaze-target distance")
+    axis.set_ylim(bottom=0.0)
+    axis.legend(loc="upper right")
+    _atomic_save_figure(figure, output_path)
+
+
 def _metric_rows(
     metrics: dict[str, object],
 ) -> str:
@@ -1021,6 +1170,10 @@ def _metric_rows(
                 (
                     "Median tracking error",
                     (f"{float(tracking['median_error_normalized']):.4f}"),
+                ),
+                (
+                    "Tracking RMSE",
+                    (f"{float(tracking['rmse_normalized']):.4f}"),
                 ),
                 (
                     "Target hit ratio",
@@ -1069,13 +1222,21 @@ def _html_document(
     metrics: dict[str, object],
     task_results: list[dict[str, object]],
     has_tracking_plot: bool,
+    has_tracking_timeline: bool,
 ) -> str:
     task_result_html = _task_result_sections(task_results)
     tracking_image = (
-        "<section><h2>Tracking error</h2>"
+        "<section><h2>Tracking error distribution</h2>"
         '<img src="tracking_error.png" '
         'alt="Tracking error"></section>'
         if has_tracking_plot
+        else ""
+    )
+    tracking_timeline = (
+        "<section><h2>Gaze-target error over time</h2>"
+        '<img src="tracking_error_timeline.png" '
+        'alt="Gaze-target error over time"></section>'
+        if has_tracking_timeline
         else ""
     )
 
@@ -1135,6 +1296,7 @@ code {{ word-break: break-all; }}
 <img src="semantic_aoi.png" alt="Semantic AOI dwell">
 </section>
 {tracking_image}
+{tracking_timeline}
 <section class="notice">
 <strong>用途声明：</strong>
 本报告用于研究与临床辅助观察，不能单独作为意识状态诊断、
@@ -1175,6 +1337,8 @@ def generate_gaze_session_report(
     metrics = _build_metrics(rows)
     valid_points = metrics.pop("_valid_points")
     tracking_errors = metrics.pop("_tracking_errors")
+    tracking_series = metrics.pop("_tracking_series")
+    target_trajectory = metrics.pop("_target_trajectory")
 
     assert isinstance(
         valid_points,
@@ -1184,18 +1348,25 @@ def generate_gaze_session_report(
         tracking_errors,
         list,
     )
+    assert isinstance(tracking_series, list)
+    assert isinstance(target_trajectory, list)
     dwell_by_role_ms = metrics["dwell_by_role_ms"]
     assert isinstance(dwell_by_role_ms, dict)
 
     screen_heatmap_path = report_directory / "screen_heatmap.png"
     semantic_aoi_path = report_directory / "semantic_aoi.png"
     tracking_error_path = report_directory / "tracking_error.png" if tracking_errors else None
+    tracking_error_timeline_path = (
+        report_directory / "tracking_error_timeline.png" if tracking_series else None
+    )
     report_json_path = report_directory / "report.json"
     html_path = report_directory / "report.html"
 
     _screen_heatmap(
         valid_points,
         screen_heatmap_path,
+        target_trajectory,
+        tracking_series,
     )
     _semantic_aoi_plot(
         dwell_by_role_ms,
@@ -1208,9 +1379,15 @@ def generate_gaze_session_report(
             tracking_error_path,
         )
 
+    if tracking_error_timeline_path is not None:
+        _tracking_error_timeline_plot(
+            tracking_series,
+            tracking_error_timeline_path,
+        )
+
     generated_at_text = generated_at.isoformat()
     report_document: dict[str, object] = {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "task_results": task_results,
         "generated_at_utc": (generated_at_text),
         "patient_id": str(session.patient_id),
@@ -1235,6 +1412,7 @@ def generate_gaze_session_report(
             metrics=metrics,
             task_results=task_results,
             has_tracking_plot=(tracking_error_path is not None),
+            has_tracking_timeline=(tracking_error_timeline_path is not None),
         ),
     )
 
@@ -1247,6 +1425,9 @@ def generate_gaze_session_report(
 
     if tracking_error_path is not None:
         produced_paths.append(tracking_error_path)
+
+    if tracking_error_timeline_path is not None:
+        produced_paths.append(tracking_error_timeline_path)
 
     for path in produced_paths:
         _register_artifact(
@@ -1263,4 +1444,5 @@ def generate_gaze_session_report(
         screen_heatmap_path=(screen_heatmap_path),
         semantic_aoi_path=(semantic_aoi_path),
         tracking_error_path=(tracking_error_path),
+        tracking_error_timeline_path=(tracking_error_timeline_path),
     )

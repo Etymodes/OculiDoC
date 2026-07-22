@@ -146,7 +146,8 @@ def test_mobile_api_controls_patient_display(
     assert runtime.status_code == 200
     assert runtime.json()["gaze_source"] == "mock"
     assert runtime.json()["patient_display"]["mode"] == "preview"
-    assert len(runtime.json()["question_bank"]) >= 66
+    assert len(runtime.json()["question_bank"]) >= 120
+    assert len(runtime.json()["multiple_choice_templates"]) >= 12
     assert {asset["category"] for asset in runtime.json()["image_library"]} >= {
         "水果",
         "动物",

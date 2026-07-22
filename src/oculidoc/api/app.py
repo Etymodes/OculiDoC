@@ -32,6 +32,7 @@ from oculidoc.task_configs import (
     TaskConfigConflict,
     TaskConfigStore,
 )
+from oculidoc.tasks.multiple_choice import BUILT_IN_MULTIPLE_CHOICE_TEMPLATES
 from oculidoc.tasks.question_bank import BUILT_IN_QUESTION_TEMPLATES, CommonQuestionStore
 
 
@@ -118,7 +119,10 @@ def create_api(
         return [
             {
                 **template.to_dict(),
-                "display_label": (f"[{template.question_type.display_label}] {template.question}"),
+                "display_label": (
+                    f"[{template.category}·{template.question_type.display_label}] "
+                    f"{template.question}"
+                ),
             }
             for template in templates
         ]
@@ -171,6 +175,17 @@ def create_api(
             "patient_display": state.to_dict(),
             "commands": [command.to_dict() for command in commands.list_commands(limit=10)],
             "question_bank": common_questions(),
+            "multiple_choice_templates": [
+                {
+                    "template_id": template.template_id,
+                    "category": template.category,
+                    "question": template.question,
+                    "options": list(template.options),
+                    "grid_shape": template.grid_shape,
+                    "display_label": f"[{template.category}] {template.question}",
+                }
+                for template in BUILT_IN_MULTIPLE_CHOICE_TEMPLATES
+            ],
             "image_library": image_assets(),
             "modules": [
                 {

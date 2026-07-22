@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -28,6 +29,14 @@ from PySide6.QtWidgets import (
 from oculidoc.devices.contracts import EyeTrackerSample
 
 MULTIPLE_CHOICE_LAYOUTS = frozenset({"grid", "ring"})
+MULTIPLE_CHOICE_GRID_SHAPES = {
+    "2x2": (2, 2),
+    "2x3": (2, 3),
+    "2x4": (2, 4),
+    "3x2": (3, 2),
+    "3x3": (3, 3),
+    "3x4": (3, 4),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,23 +49,43 @@ class MultipleChoiceConfig:
     option_4: str = "不知道"
     option_5: str = "需要帮助"
     option_6: str = "暂不回答"
+    option_7: str = "选项 7"
+    option_8: str = "选项 8"
+    option_9: str = "选项 9"
+    option_10: str = "选项 10"
+    option_11: str = "选项 11"
+    option_12: str = "选项 12"
     layout: str = "grid"
+    grid_shape: str = "auto"
     dwell_time_ms: int = 900
     duration_seconds: int = 600
     question_font_size_pt: int = 36
     option_font_size_pt: int = 34
     randomize_positions: bool = True
     randomization_seed: int | None = None
+    template_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.question.strip():
             raise ValueError("question cannot be empty.")
 
-        if isinstance(self.option_count, bool) or not 2 <= self.option_count <= 6:
-            raise ValueError("option_count must be between 2 and 6.")
+        if isinstance(self.option_count, bool) or not 2 <= self.option_count <= 12:
+            raise ValueError("option_count must be between 2 and 12.")
 
         if self.layout not in MULTIPLE_CHOICE_LAYOUTS:
             raise ValueError("layout must be grid or ring.")
+
+        if self.grid_shape != "auto" and self.grid_shape not in MULTIPLE_CHOICE_GRID_SHAPES:
+            raise ValueError("grid_shape must be auto or one of the supported row/column shapes.")
+
+        if self.layout == "ring" and self.option_count > 6:
+            raise ValueError("Ring layout supports at most 6 options.")
+
+        if self.layout == "grid":
+            rows, columns = self.resolved_grid_shape
+
+            if self.option_count > rows * columns:
+                raise ValueError("Selected grid_shape does not have enough option cells.")
 
         if not 250 <= self.dwell_time_ms <= 10_000:
             raise ValueError("dwell_time_ms must be between 250 and 10000.")
@@ -77,6 +106,9 @@ class MultipleChoiceConfig:
         ):
             raise TypeError("randomization_seed must be an integer or null.")
 
+        if self.template_id is not None and not self.template_id.strip():
+            raise ValueError("template_id cannot be empty when provided.")
+
         if any(not label.strip() for _, label in self.options):
             raise ValueError("Enabled option labels cannot be empty.")
 
@@ -89,11 +121,164 @@ class MultipleChoiceConfig:
             self.option_4,
             self.option_5,
             self.option_6,
+            self.option_7,
+            self.option_8,
+            self.option_9,
+            self.option_10,
+            self.option_11,
+            self.option_12,
         )
         return tuple(
             (f"option_{index}", values[index - 1].strip())
             for index in range(1, self.option_count + 1)
         )
+
+    @property
+    def resolved_grid_shape(self) -> tuple[int, int]:
+        if self.grid_shape != "auto":
+            return MULTIPLE_CHOICE_GRID_SHAPES[self.grid_shape]
+
+        if self.option_count <= 4:
+            return 2, 2
+
+        if self.option_count <= 6:
+            return 2, 3
+
+        if self.option_count <= 8:
+            return 2, 4
+
+        if self.option_count == 9:
+            return 3, 3
+
+        return 3, 4
+
+    @property
+    def resolved_grid_shape_name(self) -> str:
+        rows, columns = self.resolved_grid_shape
+        return f"{rows}x{columns}"
+
+
+@dataclass(frozen=True, slots=True)
+class MultipleChoiceTemplate:
+    template_id: str
+    category: str
+    question: str
+    options: tuple[str, ...]
+    grid_shape: str
+
+
+BUILT_IN_MULTIPLE_CHOICE_TEMPLATES = (
+    MultipleChoiceTemplate(
+        "immediate-care",
+        "即时护理",
+        "你现在最需要哪项帮助？（可多选；选择不会自动执行护理）",
+        ("喝水", "吸痰", "翻身", "调整枕头", "如厕", "擦脸", "呼叫医护", "暂停任务"),
+        "2x4",
+    ),
+    MultipleChoiceTemplate(
+        "current-action",
+        "当前意愿",
+        "你现在想做什么？（可多选）",
+        ("睡觉", "吸痰", "康复训练", "眼动训练", "听音乐", "看视频", "和家人交流", "安静休息"),
+        "2x4",
+    ),
+    MultipleChoiceTemplate(
+        "discomfort-location",
+        "不适部位",
+        "你哪里不舒服？（可多选）",
+        (
+            "头",
+            "眼睛",
+            "口腔",
+            "咽喉",
+            "胸部",
+            "腹部",
+            "背部",
+            "左臂",
+            "右臂",
+            "左腿",
+            "右腿",
+            "全身",
+        ),
+        "3x4",
+    ),
+    MultipleChoiceTemplate(
+        "position-adjustment",
+        "体位调整",
+        "你希望怎样调整体位？（可多选）",
+        ("左侧卧", "右侧卧", "平躺", "坐起", "抬高床头", "保持不变"),
+        "3x2",
+    ),
+    MultipleChoiceTemplate(
+        "drink-choice",
+        "饮品选择",
+        "你想喝什么？（须由医护确认能否饮用）",
+        ("温水", "凉水", "牛奶", "果汁", "茶", "暂时不喝"),
+        "2x3",
+    ),
+    MultipleChoiceTemplate(
+        "fruit-choice",
+        "水果选择",
+        "你想选择哪些水果？（可多选）",
+        ("苹果", "香蕉", "橙子", "葡萄", "西瓜", "梨", "桃", "草莓"),
+        "2x4",
+    ),
+    MultipleChoiceTemplate(
+        "city-choice",
+        "城市选择",
+        "请选择你想表达的城市（可多选）",
+        (
+            "北京",
+            "上海",
+            "广州",
+            "深圳",
+            "成都",
+            "重庆",
+            "武汉",
+            "西安",
+            "南京",
+            "杭州",
+            "桂林",
+            "南宁",
+        ),
+        "3x4",
+    ),
+    MultipleChoiceTemplate(
+        "transport-choice",
+        "交通工具",
+        "请选择交通工具（可多选）",
+        ("步行", "轮椅", "自行车", "公交车", "地铁", "汽车", "火车", "飞机"),
+        "2x4",
+    ),
+    MultipleChoiceTemplate(
+        "rehabilitation-choice",
+        "康复训练",
+        "你想做哪些康复活动？（可多选）",
+        ("眼动训练", "上肢训练", "下肢训练", "坐起训练", "语言训练", "今天暂停"),
+        "3x2",
+    ),
+    MultipleChoiceTemplate(
+        "game-choice",
+        "游戏活动",
+        "你想玩什么游戏或活动？（可多选）",
+        ("看图片", "猜颜色", "数字题", "听音乐", "看视频", "讲故事", "棋类", "拼图", "球类"),
+        "3x3",
+    ),
+    MultipleChoiceTemplate(
+        "leisure-choice",
+        "休闲偏好",
+        "你现在想怎样放松？（可多选）",
+        ("听音乐", "看电视", "听故事", "看照片", "闭眼休息", "保持安静"),
+        "2x3",
+    ),
+    MultipleChoiceTemplate(
+        "company-choice",
+        "陪伴交流",
+        "你希望谁来陪伴或与你交流？（可多选）",
+        ("家人", "朋友", "医生", "护士", "康复师", "暂时独处"),
+        "3x2",
+    ),
+)
 
 
 class MultipleChoiceTask(QWidget):
@@ -149,7 +334,6 @@ class MultipleChoiceTask(QWidget):
             QLabel#multipleChoiceSummary { color: #245b78; font-weight: 700; padding: 4px 12px; }
             QLabel#multipleChoiceCenter { color: #52728a; font-weight: 700; }
             QPushButton#multipleChoiceOption {
-                min-height: 180px;
                 background: #ffffff;
                 color: #12304a;
                 border: 5px solid #78add0;
@@ -184,8 +368,9 @@ class MultipleChoiceTask(QWidget):
         self.question_label.setObjectName("multipleChoiceQuestion")
         self.question_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.question_label.setWordWrap(True)
-        self.question_label.setMaximumHeight(110)
+        self.question_label.setMaximumHeight(82)
         self.question_label.setFont(self._font(config.question_font_size_pt))
+        self.question_labels = [self.question_label]
 
         self.summary_label = QLabel("尚未选择 · 可选择多个，再次选择可取消")
         self.summary_label.setObjectName("multipleChoiceSummary")
@@ -208,7 +393,10 @@ class MultipleChoiceTask(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 10)
         root.setSpacing(2)
-        root.addWidget(self.question_label)
+
+        if config.layout == "ring":
+            root.addWidget(self.question_label)
+
         root.addWidget(self.summary_label)
         root.addWidget(self.options_widget, 1)
         root.addWidget(self.dwell_progress)
@@ -249,11 +437,39 @@ class MultipleChoiceTask(QWidget):
             center.setFont(self._font(20))
             self.options_layout.addWidget(center, 1, 1)
             positions = self._ring_positions(len(self._displayed_options))
+            option_minimum_height = 150
+            row_count = 3
+            column_count = 3
         else:
-            columns = 2 if len(self._displayed_options) <= 4 else 3
+            rows, columns = self.config.resolved_grid_shape
             positions = tuple(
-                (index // columns, index % columns) for index in range(len(self._displayed_options))
+                ((index // columns) * 2, index % columns)
+                for index in range(len(self._displayed_options))
             )
+            option_minimum_height = 180 if rows == 2 else 110
+            row_count = rows * 2 - 1
+            column_count = columns
+
+            for separator_index in range(rows - 1):
+                question_label = (
+                    self.question_label if separator_index == 0 else QLabel(self.config.question)
+                )
+
+                if separator_index:
+                    question_label.setObjectName("multipleChoiceQuestion")
+                    question_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    question_label.setWordWrap(True)
+                    question_label.setMaximumHeight(82)
+                    question_label.setFont(self._font(self.config.question_font_size_pt))
+                    self.question_labels.append(question_label)
+
+                self.options_layout.addWidget(
+                    question_label,
+                    separator_index * 2 + 1,
+                    0,
+                    1,
+                    columns,
+                )
 
         for position_index, ((option_id, label), (row, column)) in enumerate(
             zip(self._displayed_options, positions, strict=True),
@@ -264,6 +480,7 @@ class MultipleChoiceTask(QWidget):
             button.setProperty("active", False)
             button.setProperty("selected", False)
             button.setFont(self._font(self.config.option_font_size_pt))
+            button.setMinimumHeight(option_minimum_height)
             button.clicked.connect(
                 lambda checked=False, selected_id=option_id: self._toggle(
                     selected_id,
@@ -279,8 +496,14 @@ class MultipleChoiceTask(QWidget):
             self._position_by_option[option_id] = position_index
             self.options_layout.addWidget(button, row, column)
 
-        for index in range(3):
+        for index in range(row_count):
             self.options_layout.setRowStretch(index, 1)
+
+        if self.config.layout == "grid":
+            for separator_index in range(1, row_count, 2):
+                self.options_layout.setRowStretch(separator_index, 0)
+
+        for index in range(column_count):
             self.options_layout.setColumnStretch(index, 1)
 
     @staticmethod
@@ -305,6 +528,8 @@ class MultipleChoiceTask(QWidget):
                 "question": self.config.question,
                 "options": self._option_payloads(),
                 "layout": self.config.layout,
+                "grid_shape": self.config.resolved_grid_shape_name,
+                "template_id": self.config.template_id,
                 "randomization_seed": self.randomization_seed,
                 "allows_multiple": True,
                 "has_fixed_answer": False,
@@ -552,6 +777,7 @@ class MultipleChoiceTask(QWidget):
             "answer": self._labels[option_id],
             "position": self._position_by_option[option_id],
             "layout": self.config.layout,
+            "grid_shape": self.config.resolved_grid_shape_name,
         }
 
     def recording_context_for_sample(self, sample: EyeTrackerSample) -> dict[str, object]:
@@ -592,7 +818,9 @@ class MultipleChoiceTask(QWidget):
                 "question": self.config.question,
                 "options": self._option_payloads(),
                 "layout": self.config.layout,
+                "grid_shape": self.config.resolved_grid_shape_name,
                 "option_count": self.config.option_count,
+                "template_id": self.config.template_id,
                 "randomize_positions": self.config.randomize_positions,
                 "randomization_seed": self.randomization_seed,
                 "allows_multiple": True,
@@ -645,6 +873,8 @@ class MultipleChoiceTask(QWidget):
             "option_count": self.config.option_count,
             "options": self._option_payloads(),
             "layout": self.config.layout,
+            "grid_shape": self.config.resolved_grid_shape_name,
+            "template_id": self.config.template_id,
             "allows_multiple": True,
             "has_fixed_answer": False,
             "is_scored": False,
@@ -673,34 +903,56 @@ class MultipleChoiceSetupDialog(QDialog):
         super().__init__(parent)
         initial = config or MultipleChoiceConfig()
         self.setWindowTitle("多选项问答设置")
-        self.resize(720, 760)
+        self.resize(760, 860)
+        self._applying_template = False
+        self._selected_template_id = initial.template_id
 
+        form_widget = QWidget()
         form = QFormLayout()
+        form_widget.setLayout(form)
+
+        self.template_combo = QComboBox()
+        self.template_combo.setObjectName("multipleChoiceTemplateCombo")
+        self.template_combo.addItem("自定义多选题", None)
+
+        for template in BUILT_IN_MULTIPLE_CHOICE_TEMPLATES:
+            self.template_combo.addItem(
+                f"[{template.category}] {template.question}",
+                template.template_id,
+            )
+
+        template_index = self.template_combo.findData(initial.template_id)
+        self.template_combo.setCurrentIndex(max(0, template_index))
+        form.addRow("固定题库：", self.template_combo)
 
         self.question_edit = QLineEdit(initial.question)
         form.addRow("问题文字：", self.question_edit)
 
         self.option_count_spin = QSpinBox()
-        self.option_count_spin.setRange(2, 6)
+        self.option_count_spin.setRange(2, 12)
         self.option_count_spin.setValue(initial.option_count)
         form.addRow("选项数量：", self.option_count_spin)
 
         self.layout_combo = QComboBox()
-        self.layout_combo.addItem("自动宫格（2×2 / 2×3）", "grid")
+        self.layout_combo.addItem("分区宫格", "grid")
         self.layout_combo.addItem("环形排列", "ring")
         self.layout_combo.setCurrentIndex(self.layout_combo.findData(initial.layout))
         form.addRow("排列方式：", self.layout_combo)
 
+        self.grid_shape_combo = QComboBox()
+        self.grid_shape_combo.addItem("按选项数自动选择", "auto")
+
+        for shape in MULTIPLE_CHOICE_GRID_SHAPES:
+            self.grid_shape_combo.addItem(shape.replace("x", "×"), shape)
+
+        self.grid_shape_combo.setCurrentIndex(self.grid_shape_combo.findData(initial.grid_shape))
+        form.addRow("宫格行列：", self.grid_shape_combo)
+
         self.option_edits: list[QLineEdit] = []
 
         for index, (_, value) in enumerate(
-            (
-                ("option_1", initial.option_1),
-                ("option_2", initial.option_2),
-                ("option_3", initial.option_3),
-                ("option_4", initial.option_4),
-                ("option_5", initial.option_5),
-                ("option_6", initial.option_6),
+            tuple(
+                (f"option_{index}", getattr(initial, f"option_{index}")) for index in range(1, 13)
             ),
             start=1,
         ):
@@ -740,11 +992,63 @@ class MultipleChoiceSetupDialog(QDialog):
         buttons.rejected.connect(self.reject)
 
         root = QVBoxLayout(self)
-        root.addLayout(form)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(form_widget)
+        root.addWidget(scroll, 1)
         root.addWidget(buttons)
 
         self.option_count_spin.valueChanged.connect(self._refresh_option_fields)
+        self.template_combo.currentIndexChanged.connect(self._apply_selected_template)
+        self.question_edit.textEdited.connect(self._clear_selected_template)
+        self.option_count_spin.valueChanged.connect(self._clear_selected_template)
+        self.layout_combo.currentIndexChanged.connect(self._clear_selected_template)
+        self.grid_shape_combo.currentIndexChanged.connect(self._clear_selected_template)
+
+        for edit in self.option_edits:
+            edit.textEdited.connect(self._clear_selected_template)
+
         self._refresh_option_fields(initial.option_count)
+
+    def _clear_selected_template(self, *_args: object) -> None:
+        if self._applying_template:
+            return
+
+        self._selected_template_id = None
+        self.template_combo.blockSignals(True)
+        self.template_combo.setCurrentIndex(0)
+        self.template_combo.blockSignals(False)
+
+    def _apply_selected_template(self, *_args: object) -> None:
+        template_id = self.template_combo.currentData()
+        template = next(
+            (
+                item
+                for item in BUILT_IN_MULTIPLE_CHOICE_TEMPLATES
+                if item.template_id == template_id
+            ),
+            None,
+        )
+
+        if template is None:
+            self._selected_template_id = None
+            return
+
+        self._applying_template = True
+
+        try:
+            self._selected_template_id = template.template_id
+            self.question_edit.setText(template.question)
+            self.option_count_spin.setValue(len(template.options))
+            self.layout_combo.setCurrentIndex(self.layout_combo.findData("grid"))
+            self.grid_shape_combo.setCurrentIndex(
+                self.grid_shape_combo.findData(template.grid_shape)
+            )
+
+            for index, edit in enumerate(self.option_edits):
+                edit.setText(template.options[index] if index < len(template.options) else "")
+        finally:
+            self._applying_template = False
 
     def _refresh_option_fields(self, count: int) -> None:
         for index, edit in enumerate(self.option_edits, start=1):
@@ -761,11 +1065,19 @@ class MultipleChoiceSetupDialog(QDialog):
             option_4=values[3],
             option_5=values[4],
             option_6=values[5],
+            option_7=values[6],
+            option_8=values[7],
+            option_9=values[8],
+            option_10=values[9],
+            option_11=values[10],
+            option_12=values[11],
             layout=str(self.layout_combo.currentData()),
+            grid_shape=str(self.grid_shape_combo.currentData()),
             dwell_time_ms=self.dwell_spin.value(),
             duration_seconds=self.duration_spin.value(),
             question_font_size_pt=self.question_font_spin.value(),
             option_font_size_pt=self.option_font_spin.value(),
             randomize_positions=self.randomize_check.isChecked(),
             randomization_seed=None,
+            template_id=self._selected_template_id,
         )

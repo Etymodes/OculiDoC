@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from math import pi
 from pathlib import Path
+from typing import cast
 
 from PySide6.QtWidgets import QMessageBox
 from pytest import MonkeyPatch
@@ -17,6 +18,8 @@ from oculidoc.tasks.binary_question import (
     binary_question_sequence,
 )
 from oculidoc.tasks.question_bank import (
+    BUILT_IN_QUESTION_TEMPLATES,
+    FIXED_BINARY_QUESTION_FORMS,
     BinaryQuestionType,
     CommonQuestionStore,
     CommonQuestionTemplate,
@@ -118,9 +121,12 @@ def test_scored_options_randomize_logical_sides(
     }
     assert task.displayed_correct_side == "right"
 
-    context = task.recording_context_for_sample(InvalidSample())
-    metadata = context["question_metadata"]
-    roles = {aoi["metadata"]["logical_option_id"]: aoi["role"] for aoi in context["aois"]}
+    context = task.recording_context_for_sample(InvalidSample())  # type: ignore[arg-type]
+    metadata = cast(dict[str, object], context["question_metadata"])
+    aois = cast(list[dict[str, object]], context["aois"])
+    roles = {
+        cast(dict[str, object], aoi["metadata"])["logical_option_id"]: aoi["role"] for aoi in aois
+    }
 
     assert metadata["is_scored"] is True
     assert metadata["correct_option_id"] == "option_1"
@@ -144,12 +150,36 @@ def test_inquiry_has_no_correct_option(
     task = BinaryQuestionTask(config)
     qtbot.addWidget(task)
 
-    context = task.recording_context_for_sample(InvalidSample())
+    context = task.recording_context_for_sample(InvalidSample())  # type: ignore[arg-type]
+    aois = cast(list[dict[str, object]], context["aois"])
 
     assert config.is_scored is False
     assert config.correct_option_id is None
     assert task.displayed_correct_side is None
-    assert {aoi["role"] for aoi in context["aois"]} == {"other"}
+    assert {aoi["role"] for aoi in aois} == {"other"}
+
+
+def test_vertical_binary_question_uses_center_question_strip(qtbot: QtBot) -> None:
+    task = BinaryQuestionTask(
+        BinaryQuestionConfig(
+            question="你现在想休息吗？",
+            randomize_sides=False,
+        ),
+        layout="vertical",
+    )
+    qtbot.addWidget(task)
+    task.resize(900, 900)
+    task.show()
+    qtbot.wait(10)
+
+    top_bottom = task.left_button.geometry().bottom()
+    question_top = task.question_label.geometry().top()
+    question_bottom = task.question_label.geometry().bottom()
+    bottom_top = task.right_button.geometry().top()
+
+    assert top_bottom < question_top <= question_bottom < bottom_top
+    assert task.left_button.height() > task.question_label.height()
+    assert task.right_button.height() > task.question_label.height()
 
 
 def test_legacy_left_right_configuration_remains_stable(
@@ -197,24 +227,24 @@ def test_question_store_persists_full_template(
     assert saved.correct_option_id == "option_1"
 
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
     assert len(payload["questions"]) == 1
 
 
-def test_workbook_questions_are_in_the_default_editable_bank(tmp_path: Path) -> None:
-    templates = {
-        item.template_id: item
-        for item in CommonQuestionStore(tmp_path / "common_questions.json").load()
-    }
-    workbook_rows = [item for item in templates.values() if item.template_id.startswith("xlsx-")]
+def test_default_bank_has_120_unique_categorized_questions(tmp_path: Path) -> None:
+    templates = CommonQuestionStore(tmp_path / "common_questions.json").load()
 
-    assert len(workbook_rows) == 66
-    assert templates["xlsx-001"].question == "你能听见我说话吗？"
-    assert templates["xlsx-019"].question == "你现在是一个人还是有人陪？一个人"
-    assert templates["xlsx-036"].option_1 == "上海"
-    assert templates["xlsx-036"].correct_option_id == "option_2"
-    assert templates["xlsx-065"].correct_option_id == "option_1"
-    assert templates["xlsx-066"].correct_option_id == "option_2"
+    assert templates == BUILT_IN_QUESTION_TEMPLATES
+    assert len(templates) == 120
+    assert len({item.template_id for item in templates}) == 120
+    assert len({item.question.casefold() for item in templates}) == 120
+    category_counts = {
+        category: sum(item.category == category for item in templates)
+        for category in {item.category for item in templates}
+    }
+    assert len(category_counts) == 12
+    assert set(category_counts.values()) == {10}
+    assert sum(item.question_type.is_scored for item in templates) == 60
 
 
 def test_binary_sequence_randomly_samples_requested_question_count(tmp_path: Path) -> None:
@@ -233,12 +263,47 @@ def test_binary_sequence_randomly_samples_requested_question_count(tmp_path: Pat
     assert first == second
     assert len(first) == 3
     assert {question_id for question_id, _question in first} <= {
-        "xlsx-040",
-        "xlsx-041",
-        "xlsx-042",
-        "xlsx-043",
+        "attribute-01",
+        "attribute-02",
     }
     assert len({question.randomization_seed for _question_id, question in first}) == 3
+
+
+def test_fixed_binary_forms_are_semantic_and_not_randomized(tmp_path: Path) -> None:
+    store = CommonQuestionStore(tmp_path / "common_questions.json")
+    templates = {item.template_id: item for item in store.load()}
+
+    for size, expected_ids in FIXED_BINARY_QUESTION_FORMS.items():
+        config = BinaryQuestionConfig(
+            question="备用单题",
+            fixed_form_size=size,
+            randomize_question_order=True,
+            randomization_seed=99,
+        )
+        resolved = binary_question_sequence(config, store)
+        resolved_ids = tuple(question_id for question_id, _question in resolved)
+
+        assert resolved_ids == expected_ids
+        assert all(templates[item].question_type.is_scored for item in expected_ids[: size // 2])
+        assert all(
+            not templates[item].question_type.is_scored for item in expected_ids[size // 2 :]
+        )
+
+
+def test_question_setup_applies_fixed_form_without_random_sampling(
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    dialog = BinaryQuestionSetupDialog(question_bank_path=tmp_path / "common_questions.json")
+    qtbot.addWidget(dialog)
+    dialog.fixed_form_combo.setCurrentIndex(dialog.fixed_form_combo.findData(8))
+    config = dialog.build_config()
+
+    assert config.fixed_form_size == 8
+    assert config.question_template_ids == FIXED_BINARY_QUESTION_FORMS[8]
+    assert config.question_count == 0
+    assert config.randomize_question_order is False
+    assert not dialog.sequence_question_list.isEnabled()
 
 
 def test_question_setup_loads_and_saves_templates(
@@ -258,6 +323,7 @@ def test_question_setup_loads_and_saves_templates(
     assert dialog.question_font_size_spin.value() == 48
     assert dialog.option_font_size_spin.value() == 44
     assert dialog.common_question_combo.count() >= 5
+    assert dialog.category_filter_combo.count() == 13
     assert dialog.option_1_label.text() == "选项1："
 
     dialog.question_type_buttons[BinaryQuestionType.QUESTION_ANSWER].setChecked(True)
@@ -414,12 +480,12 @@ def test_builtin_question_can_be_modified_with_a_persistent_override(
     )
     qtbot.addWidget(dialog)
 
-    builtin_index = dialog.common_question_combo.findData("builtin-comfort")
+    builtin_index = dialog.common_question_combo.findData("emotion-01")
     dialog.common_question_combo.setCurrentIndex(builtin_index)
     dialog.question_edit.setText("你现在身体舒服吗？")
     dialog._edit_common_question()
 
     templates = CommonQuestionStore(path).load()
-    saved = {item.template_id: item for item in templates}["builtin-comfort"]
+    saved = {item.template_id: item for item in templates}["emotion-01"]
     assert saved.built_in is False
     assert saved.question == "你现在身体舒服吗？"

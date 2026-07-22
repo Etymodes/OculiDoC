@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
+from PySide6.QtCore import Qt
 from pytestqt.qtbot import QtBot
 
 from oculidoc.image_library import ImageLibraryStore
@@ -102,3 +104,50 @@ def test_sequential_questions_require_correct_answer_and_manual_advance(
     assert result["completion_status"] == "answered"
     assert result["correct_count"] == 2
     assert result["question_count"] == 2
+
+
+def test_sequential_questions_can_be_skipped_by_space_or_enter(qtbot: QtBot) -> None:
+    configs = tuple(
+        BinaryQuestionConfig(
+            question=f"测试问题 {index}",
+            option_1="是",
+            option_2="否",
+            question_type=BinaryQuestionType.YES_NO,
+            correct_option_id="option_1",
+            dwell_time_ms=250,
+            randomize_sides=False,
+        )
+        for index in (1, 2)
+    )
+    task = SequentialChoiceTask(
+        config=configs[0],
+        question_ids=("q1", "q2"),
+        task_factory=lambda index: BinaryQuestionTask(configs[index]),
+        layout_orientation="horizontal",
+    )
+    qtbot.addWidget(task)
+    task.start()
+
+    task.current_task.advance_dwell("right", 250, monotonic_timestamp_ns=1_000_000_000)
+    qtbot.keyClick(task, Qt.Key.Key_Space)
+
+    assert task.current_question_number == 2
+    qtbot.wait(1_050)
+    assert task.current_question_number == 2
+
+    qtbot.keyClick(task, Qt.Key.Key_Return)
+    result = task.recording_result("completed")
+    events = task.drain_recording_events()
+
+    assert result["completion_status"] == "answered"
+    assert result["completed_question_count"] == 2
+    assert result["answered_question_count"] == 0
+    assert result["skipped_question_count"] == 2
+    incorrect_attempts = cast(list[dict[str, object]], result["incorrect_attempts"])
+    questions = cast(list[dict[str, object]], result["questions"])
+    assert len(incorrect_attempts) == 1
+    assert [item["completion_status"] for item in questions] == [
+        "skipped",
+        "skipped",
+    ]
+    assert sum(event["event_type"] == "question_skipped" for event in events) == 2

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
 from oculidoc.application import (
     RegisterPatientRequest,
@@ -92,6 +93,7 @@ def test_tracking_report_generates_heatmap_and_error(
     )
     rows = [
         {
+            "monotonic_timestamp_ns": 1_000_000_000,
             "analysis_valid": True,
             "gaze_x_normalized": 0.50,
             "gaze_y_normalized": 0.50,
@@ -104,6 +106,7 @@ def test_tracking_report_generates_heatmap_and_error(
             "reference_aoi_bottom": 0.60,
         },
         {
+            "monotonic_timestamp_ns": 1_500_000_000,
             "analysis_valid": True,
             "gaze_x_normalized": 0.80,
             "gaze_y_normalized": 0.50,
@@ -116,16 +119,17 @@ def test_tracking_report_generates_heatmap_and_error(
             "reference_aoi_bottom": 0.60,
         },
         {
+            "monotonic_timestamp_ns": 2_000_000_000,
             "analysis_valid": False,
             "gaze_x_normalized": None,
             "gaze_y_normalized": None,
             "duration_ms": 100.0,
             "aoi_role": None,
             "question_id": "tracking-target",
-            "reference_aoi_left": None,
-            "reference_aoi_top": None,
-            "reference_aoi_right": None,
-            "reference_aoi_bottom": None,
+            "reference_aoi_left": 0.60,
+            "reference_aoi_top": 0.40,
+            "reference_aoi_right": 0.80,
+            "reference_aoi_bottom": 0.60,
         },
     ]
     _write_run(launch, rows)
@@ -145,6 +149,8 @@ def test_tracking_report_generates_heatmap_and_error(
     assert artifacts.semantic_aoi_path.is_file()
     assert artifacts.tracking_error_path is not None
     assert artifacts.tracking_error_path.is_file()
+    assert artifacts.tracking_error_timeline_path is not None
+    assert artifacts.tracking_error_timeline_path.is_file()
 
     payload = json.loads(artifacts.report_json_path.read_text(encoding="utf-8"))
     metrics = payload["metrics"]
@@ -153,7 +159,12 @@ def test_tracking_report_generates_heatmap_and_error(
     assert metrics["valid_sample_count"] == 2
     assert metrics["valid_sample_ratio"] == 2 / 3
     assert metrics["tracking"]["sample_count"] == 2
+    assert metrics["tracking"]["target_reference_sample_count"] == 3
     assert metrics["tracking"]["target_hit_ratio"] == 0.5
+    assert metrics["tracking"]["rmse_normalized"] == pytest.approx(0.3 / 2**0.5)
+
+    html_text = artifacts.html_path.read_text(encoding="utf-8")
+    assert "tracking_error_timeline.png" in html_text
 
     registered_paths = {
         artifact.relative_path
@@ -161,6 +172,7 @@ def test_tracking_report_generates_heatmap_and_error(
     }
     assert any(path.endswith("/report.html") for path in registered_paths)
     assert any(path.endswith("/screen_heatmap.png") for path in registered_paths)
+    assert any(path.endswith("/tracking_error_timeline.png") for path in registered_paths)
 
     runtime.dispose()
 
@@ -229,5 +241,6 @@ def test_binary_report_summarizes_semantic_dwell(
     assert binary["non_option_dwell_ms"] == 100.0
     assert binary["correct_option_share"] == 0.75
     assert artifacts.tracking_error_path is None
+    assert artifacts.tracking_error_timeline_path is None
 
     runtime.dispose()
