@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from time import monotonic_ns
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QKeyEvent
@@ -38,6 +39,7 @@ class SequentialChoiceTask(QWidget):
         self._task_factory = task_factory
         self._question_index = 0
         self._attempt_number = 1
+        self._task_generation = 0
         self._started = False
         self._waiting_for_advance = False
         self._sequence_finished = False
@@ -98,7 +100,9 @@ class SequentialChoiceTask(QWidget):
                 "按空格或 Enter 继续"
             )
         else:
-            self.status_label.setText(f"第 {self.current_question_number}/{self.question_count} 题")
+            self.status_label.setText(
+                f"第 {self.current_question_number}/{self.question_count} 题 · 空格或 Enter 可跳过"
+            )
 
     def _question_id(self) -> str:
         return self._question_ids[self._question_index]
@@ -144,9 +148,11 @@ class SequentialChoiceTask(QWidget):
 
         self._attempt_results.append(result)
         self._current_task.show_incorrect_feedback()
-        QTimer.singleShot(1_000, self._retry_current_question)
+        generation = self._task_generation
+        QTimer.singleShot(1_000, lambda: self._retry_current_question(generation))
 
     def _replace_current_task(self) -> None:
+        self._task_generation += 1
         previous = self._current_task
         self._root.removeWidget(previous)
         previous.deleteLater()
@@ -159,8 +165,12 @@ class SequentialChoiceTask(QWidget):
 
         self.question_changed.emit(self.current_question_text)
 
-    def _retry_current_question(self) -> None:
-        if self._waiting_for_advance or self._sequence_finished:
+    def _retry_current_question(self, generation: int) -> None:
+        if (
+            generation != self._task_generation
+            or self._waiting_for_advance
+            or self._sequence_finished
+        ):
             return
 
         self._attempt_number += 1
@@ -186,6 +196,39 @@ class SequentialChoiceTask(QWidget):
         self._refresh_status()
         return False
 
+    def skip_question(self, key_name: str) -> bool:
+        """Record an operator skip and immediately move to the next question."""
+        if self._waiting_for_advance or self._sequence_finished:
+            return False
+
+        result = self._decorate_payload(
+            self._current_task.recording_result("operator_keyboard_skip")
+        )
+        self._drain_current_events()
+        result.update(
+            {
+                "selected_option_id": None,
+                "selected_side": None,
+                "selected_position": None,
+                "selected_answer": None,
+                "correct": None,
+                "completion_status": "skipped",
+                "completion_reason": "operator_keyboard_skip",
+                "skipped": True,
+                "skip_key": key_name,
+            }
+        )
+        self._queued_events.append(
+            {
+                "event_type": "question_skipped",
+                "monotonic_timestamp_ns": monotonic_ns(),
+                "payload": dict(result),
+            }
+        )
+        self._completed_results.append(result)
+        self._waiting_for_advance = True
+        return self.advance_question()
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() in {
             Qt.Key.Key_Space,
@@ -194,8 +237,12 @@ class SequentialChoiceTask(QWidget):
         }:
             if self._waiting_for_advance:
                 self.advance_question()
-                event.accept()
-                return
+            else:
+                key_name = "Space" if event.key() == Qt.Key.Key_Space else "Enter"
+                self.skip_question(key_name)
+
+            event.accept()
+            return
 
         super().keyPressEvent(event)
 
@@ -237,6 +284,12 @@ class SequentialChoiceTask(QWidget):
             "completion_reason": reason.strip() or "completed",
             "question_count": self.question_count,
             "completed_question_count": len(self._completed_results),
+            "answered_question_count": sum(
+                item.get("completion_status") != "skipped" for item in self._completed_results
+            ),
+            "skipped_question_count": sum(
+                item.get("completion_status") == "skipped" for item in self._completed_results
+            ),
             "correct_count": sum(item.get("correct") is True for item in self._completed_results),
             "questions": questions,
             "incorrect_attempts": list(self._attempt_results),

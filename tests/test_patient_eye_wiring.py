@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from pytest import MonkeyPatch
 from pytestqt.qtbot import QtBot
@@ -42,9 +43,11 @@ class StubCameraPreviewWindow:
         self,
         *,
         patient_key: str,
+        patient_display_label: str,
         dataset_directory: str | Path,
     ) -> None:
         self.patient_key = patient_key
+        self.patient_display_label = patient_display_label
         self.dataset_directory = Path(dataset_directory).resolve()
         self.dataset_directory.mkdir(
             parents=True,
@@ -118,6 +121,10 @@ def test_patient_launches_session_scoped_eye_workbench(
     assert session.status is (ExperimentSessionStatus.RUNNING)
     assert workbench.shown is True
     assert workbench.patient_key == str(patient.patient_id)
+    assert (
+        cast(StubCameraPreviewWindow, workbench).patient_display_label
+        == patient.display_label
+    )
 
     session_directory = runtime.experiment_session_service.resolve_session_directory(session_id)
 

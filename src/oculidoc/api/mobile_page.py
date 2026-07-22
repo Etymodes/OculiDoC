@@ -99,8 +99,10 @@ const token = __TOKEN__;
 const query = "?token=" + encodeURIComponent(token);
 let currentRecord = null;
 let formDirty = false;
+let multipleChoiceTemplates = [];
 
 const binaryFields = [
+  {name: "fixed_form_size", label: "标准模式卷", type: "select", options: [[0, "自定义题组 / 单题"], [6, "固定 6 题（前半客观、后半开放）"], [8, "固定 8 题（前半客观、后半开放）"], [10, "固定 10 题（前半客观、后半开放）"]]},
   {name: "question_template_ids", label: "连续题目（可多选；不选则只运行下方单题）", type: "multi-select", options: []},
   {name: "question_count", label: "随机抽取题数（0 = 全部已选）", type: "number", min: 0, max: 200, step: 1},
   {name: "randomize_question_order", label: "每次任务随机抽题并排列", type: "checkbox"},
@@ -140,15 +142,23 @@ const fields = {
   binary_horizontal: binaryFields,
   binary_vertical: binaryFields,
   multiple_choice: [
+    {name: "template_id", label: "固定多选题库", type: "select", nullable: true, options: [["", "自定义多选题"]]},
     {name: "question", label: "问题文字", type: "textarea"},
-    {name: "option_count", label: "选项数量", type: "number", min: 2, max: 6, step: 1},
+    {name: "option_count", label: "选项数量", type: "number", min: 2, max: 12, step: 1},
     {name: "option_1", label: "选项 1", type: "text"},
     {name: "option_2", label: "选项 2", type: "text"},
     {name: "option_3", label: "选项 3", type: "text"},
     {name: "option_4", label: "选项 4", type: "text"},
     {name: "option_5", label: "选项 5", type: "text"},
     {name: "option_6", label: "选项 6", type: "text"},
-    {name: "layout", label: "排列方式", type: "select", options: [["grid", "自动宫格（2×2 / 2×3）"], ["ring", "环形排列"]]},
+    {name: "option_7", label: "选项 7", type: "text"},
+    {name: "option_8", label: "选项 8", type: "text"},
+    {name: "option_9", label: "选项 9", type: "text"},
+    {name: "option_10", label: "选项 10", type: "text"},
+    {name: "option_11", label: "选项 11", type: "text"},
+    {name: "option_12", label: "选项 12", type: "text"},
+    {name: "layout", label: "排列方式", type: "select", options: [["grid", "分区宫格"], ["ring", "环形排列（最多 6 项）"]]},
+    {name: "grid_shape", label: "宫格行列", type: "select", options: [["auto", "按选项数自动选择"], ["2x2", "2×2"], ["2x3", "2×3"], ["2x4", "2×4"], ["3x2", "3×2"], ["3x3", "3×3"], ["3x4", "3×4"]]},
     {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
     {name: "duration_seconds", label: "最长任务时长（秒）", type: "number", min: 5, max: 3600, step: 1},
     {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 20, max: 120, step: 1},
@@ -238,6 +248,24 @@ function refreshCorrectOptionState() {
   }
 }
 
+function applyMultipleChoiceTemplate(templateId) {
+  const template = multipleChoiceTemplates.find((item) => item.template_id === templateId);
+  if (!template) return;
+  const values = {
+    question: template.question,
+    option_count: template.options.length,
+    layout: "grid",
+    grid_shape: template.grid_shape
+  };
+  for (let index = 1; index <= 12; index += 1) {
+    values["option_" + index] = template.options[index - 1] || "";
+  }
+  Object.entries(values).forEach(([name, value]) => {
+    const input = document.querySelector('[data-field="' + name + '"]');
+    if (input) input.value = value;
+  });
+}
+
 function renderConfig(record) {
   currentRecord = record;
   formDirty = false;
@@ -285,6 +313,9 @@ function renderConfig(record) {
       label.appendChild(input);
     }
     input.addEventListener("input", () => {
+      if (record.module_id === "multiple_choice" && definition.name === "template_id") {
+        applyMultipleChoiceTemplate(input.value);
+      }
       formDirty = true;
       document.getElementById("config-status").textContent =
         "有尚未保存的修改 · 当前版本 " + currentRecord.revision;
@@ -306,7 +337,7 @@ function collectConfig() {
       config[name] = input.checked;
     } else if (input.dataset.kind === "multi-select") {
       config[name] = [...input.selectedOptions].map((option) => option.value);
-    } else if (input.dataset.kind === "number") {
+    } else if (input.dataset.kind === "number" || name === "fixed_form_size") {
       config[name] = Number(input.value);
     } else if (input.dataset.nullable === "true" && !input.value.trim()) {
       config[name] = null;
@@ -372,6 +403,15 @@ async function refresh() {
     sequenceField.options = (runtime.question_bank || []).map((question) => [
       question.template_id, question.display_label
     ]);
+    multipleChoiceTemplates = runtime.multiple_choice_templates || [];
+    const multipleTemplateField = fields.multiple_choice.find((definition) =>
+      definition.name === "template_id"
+    );
+    multipleTemplateField.options = [["", "自定义多选题"]].concat(
+      multipleChoiceTemplates.map((template) => [
+        template.template_id, template.display_label
+      ])
+    );
     const imageAssets = runtime.image_library || [];
     const imageFields = fields.image_choice;
     const categoryField = imageFields.find((definition) => definition.name === "category_filters");

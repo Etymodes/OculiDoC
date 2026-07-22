@@ -213,6 +213,37 @@ class ExperimentSession:
             ended_at=ended_at,
         )
 
+    def correct_terminal_status(
+        self,
+        status: ExperimentSessionStatus,
+        reason: str | None = None,
+        *,
+        corrected_at: datetime | None = None,
+    ) -> None:
+        """Apply an administrator correction without inventing acquisition time."""
+        if status not in {
+            ExperimentSessionStatus.COMPLETED,
+            ExperimentSessionStatus.ABORTED,
+            ExperimentSessionStatus.FAILED,
+        }:
+            raise ValueError("A manual correction must use a terminal status.")
+
+        normalized_reason = reason.strip() if reason is not None else ""
+
+        if status is ExperimentSessionStatus.FAILED and not normalized_reason:
+            raise ValueError("A failed session requires a reason.")
+
+        self.status = status
+        self.failure_reason = (
+            normalized_reason
+            if status in {
+                ExperimentSessionStatus.ABORTED,
+                ExperimentSessionStatus.FAILED,
+            }
+            else None
+        ) or None
+        self.updated_at = _require_utc(corrected_at or datetime.now(UTC))
+
     def _finish(
         self,
         status: ExperimentSessionStatus,

@@ -28,6 +28,8 @@ from oculidoc.devices.errors import (
     DeviceStreamEndedError,
     InvalidDeviceStateError,
 )
+from oculidoc.devices.gaze_collect_legacy import GazeCollectLegacyDevice
+from oculidoc.devices.just_need_to_see_bundle import JustNeedToSeeBundleDevice
 from oculidoc.devices.matching import (
     GazeFrameMatch,
     GazeSampleBuffer,
@@ -89,11 +91,13 @@ __all__ = [
     "DeviceTimestamp",
     "EyeTrackerDevice",
     "EyeTrackerSample",
+    "GazeCollectLegacyDevice",
     "GazeFrameMatch",
     "GazePreflightResult",
     "GazePreflightStore",
     "GazeSampleBuffer",
     "InvalidDeviceStateError",
+    "JustNeedToSeeBundleDevice",
     "MatchStatus",
     "OpenCVCameraDevice",
     "PairedAcquisitionPacket",

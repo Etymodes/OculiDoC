@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import literal_column, select
+from sqlalchemy import delete, literal_column, select
 from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import sessionmaker
 
@@ -103,6 +103,28 @@ class SQLiteExperimentSessionRepository:
             database.refresh(record)
 
             return record_to_session(record)
+
+    def delete(
+        self,
+        session_id: UUID,
+    ) -> None:
+        """Delete one session and its artifact manifest atomically."""
+        with self._session_factory() as database:
+            record = database.get(
+                ExperimentSessionRecord,
+                str(session_id),
+            )
+
+            if record is None:
+                raise KeyError(session_id)
+
+            database.execute(
+                delete(SessionArtifactRecord).where(
+                    SessionArtifactRecord.session_id == str(session_id)
+                )
+            )
+            database.delete(record)
+            database.commit()
 
 
 class SQLiteSessionArtifactRepository:

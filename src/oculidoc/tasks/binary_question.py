@@ -42,6 +42,8 @@ from oculidoc.devices.contracts import (
     EyeTrackerSample,
 )
 from oculidoc.tasks.question_bank import (
+    FIXED_BINARY_QUESTION_FORMS,
+    LEGACY_QUESTION_ALIASES,
     BinaryQuestionType,
     CommonQuestionStore,
     CommonQuestionTemplate,
@@ -74,6 +76,7 @@ class BinaryQuestionConfig:
     question_template_ids: tuple[str, ...]
     question_count: int
     randomize_question_order: bool
+    fixed_form_size: int
 
     def __init__(
         self,
@@ -94,6 +97,7 @@ class BinaryQuestionConfig:
         question_template_ids: tuple[str, ...] | list[str] = (),
         question_count: int = 0,
         randomize_question_order: bool = True,
+        fixed_form_size: int = 0,
         left_answer: str | None = None,
         right_answer: str | None = None,
         correct_side: str | None = None,
@@ -189,6 +193,9 @@ class BinaryQuestionConfig:
         if not isinstance(randomize_question_order, bool):
             raise TypeError("randomize_question_order must be a boolean.")
 
+        if fixed_form_size not in {0, *FIXED_BINARY_QUESTION_FORMS}:
+            raise ValueError("fixed_form_size must be 0, 6, 8, or 10.")
+
         object.__setattr__(self, "question", normalized_question)
         object.__setattr__(self, "option_1", normalized_option_1)
         object.__setattr__(self, "option_2", normalized_option_2)
@@ -229,6 +236,7 @@ class BinaryQuestionConfig:
         object.__setattr__(self, "question_template_ids", normalized_template_ids)
         object.__setattr__(self, "question_count", int(question_count))
         object.__setattr__(self, "randomize_question_order", randomize_question_order)
+        object.__setattr__(self, "fixed_form_size", int(fixed_form_size))
 
     @property
     def is_scored(self) -> bool:
@@ -358,7 +366,7 @@ class BinaryQuestionTask(QWidget):
         self.question_label.setObjectName("questionLabel")
         self.question_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.question_label.setWordWrap(True)
-        self.question_label.setMaximumHeight(190)
+        self.question_label.setMaximumHeight(120 if self.layout_orientation == "vertical" else 190)
 
         question_font = QFont(config.question_font_family)
         question_font.setPointSize(config.question_font_size_pt)
@@ -428,16 +436,21 @@ class BinaryQuestionTask(QWidget):
                 )
                 button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
-        answers = QVBoxLayout() if self.layout_orientation == "vertical" else QHBoxLayout()
-        answers.setSpacing(6)
-        answers.addLayout(left_layout, 1)
-        answers.addLayout(right_layout, 1)
-
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 4, 6, 6)
         root.setSpacing(6)
-        root.addWidget(self.question_label)
-        root.addLayout(answers, 1)
+
+        if self.layout_orientation == "vertical":
+            root.addLayout(left_layout, 1)
+            root.addWidget(self.question_label)
+            root.addLayout(right_layout, 1)
+        else:
+            answers = QHBoxLayout()
+            answers.setSpacing(6)
+            answers.addLayout(left_layout, 1)
+            answers.addLayout(right_layout, 1)
+            root.addWidget(self.question_label)
+            root.addLayout(answers, 1)
 
     @property
     def result(
@@ -1179,8 +1192,31 @@ class BinaryQuestionSetupDialog(QDialog):
 
         self.question_store = CommonQuestionStore(question_bank_path)
         self._templates: dict[str, CommonQuestionTemplate] = {}
-        self._initial_sequence_ids = set(initial.question_template_ids)
+        self._initial_sequence_ids = {
+            LEGACY_QUESTION_ALIASES.get(template_id, template_id)
+            for template_id in initial.question_template_ids
+        }
         form = QFormLayout()
+
+        self.fixed_form_combo = QComboBox()
+        self.fixed_form_combo.setObjectName("binaryFixedFormCombo")
+        self.fixed_form_combo.addItem("自定义题组 / 单题", 0)
+
+        for size in sorted(FIXED_BINARY_QUESTION_FORMS):
+            self.fixed_form_combo.addItem(
+                f"固定 {size} 题标准卷（前半客观、后半开放）",
+                size,
+            )
+
+        self.fixed_form_combo.setCurrentIndex(
+            self.fixed_form_combo.findData(initial.fixed_form_size)
+        )
+        form.addRow("标准模式卷：", self.fixed_form_combo)
+
+        self.category_filter_combo = QComboBox()
+        self.category_filter_combo.setObjectName("binaryQuestionCategoryFilter")
+        self.category_filter_combo.addItem("全部功能分类", None)
+        form.addRow("题目功能分类：", self.category_filter_combo)
 
         self.common_question_combo = QComboBox()
         self.common_question_combo.setObjectName("commonQuestionCombo")
@@ -1322,7 +1358,10 @@ class BinaryQuestionSetupDialog(QDialog):
         root.addWidget(buttons)
 
         self.common_question_combo.currentIndexChanged.connect(self._load_selected_template)
+        self.category_filter_combo.currentIndexChanged.connect(self._filter_sequence_questions)
         self._reload_common_questions()
+        self.fixed_form_combo.currentIndexChanged.connect(self._apply_fixed_form)
+        self._apply_fixed_form()
         self._refresh_option_labels()
 
     def _current_question_type(
@@ -1376,12 +1415,26 @@ class BinaryQuestionSetupDialog(QDialog):
             templates = ()
 
         self._templates = {template.template_id: template for template in templates}
+        current_category = self.category_filter_combo.currentData()
+        self.category_filter_combo.blockSignals(True)
+        self.category_filter_combo.clear()
+        self.category_filter_combo.addItem("全部功能分类", None)
+
+        for category in dict.fromkeys(template.category for template in templates):
+            self.category_filter_combo.addItem(category, category)
+
+        category_index = self.category_filter_combo.findData(current_category)
+        self.category_filter_combo.setCurrentIndex(max(0, category_index))
+        self.category_filter_combo.blockSignals(False)
         selected_index = 0
 
         for template in templates:
             prefix = "内置" if template.built_in else "自定义"
             self.common_question_combo.addItem(
-                (f"[{prefix}·{template.question_type.display_label}] {template.question}"),
+                (
+                    f"[{prefix}·{template.category}·{template.question_type.display_label}] "
+                    f"{template.question}"
+                ),
                 template.template_id,
             )
 
@@ -1389,7 +1442,7 @@ class BinaryQuestionSetupDialog(QDialog):
                 selected_index = self.common_question_combo.count() - 1
 
             sequence_item = QListWidgetItem(
-                f"[{prefix}] {template.question}",
+                f"[{template.category}] {template.question}",
                 self.sequence_question_list,
             )
             sequence_item.setData(Qt.ItemDataRole.UserRole, template.template_id)
@@ -1404,6 +1457,45 @@ class BinaryQuestionSetupDialog(QDialog):
         self.common_question_combo.blockSignals(False)
         self.sequence_question_list.blockSignals(False)
         self._refresh_common_question_actions()
+        self._refresh_question_count_limit()
+        self._filter_sequence_questions()
+
+    def _filter_sequence_questions(self, *_args: object) -> None:
+        selected_category = self.category_filter_combo.currentData()
+
+        for index in range(self.sequence_question_list.count()):
+            item = self.sequence_question_list.item(index)
+            template_id = str(item.data(Qt.ItemDataRole.UserRole))
+            template = self._templates.get(template_id)
+            item.setHidden(
+                selected_category is not None
+                and template is not None
+                and template.category != selected_category
+            )
+
+    def _apply_fixed_form(self, *_args: object) -> None:
+        size = int(self.fixed_form_combo.currentData() or 0)
+        fixed_ids = set(FIXED_BINARY_QUESTION_FORMS.get(size, ()))
+        enabled = size == 0
+        self.sequence_question_list.setEnabled(enabled)
+        self.question_count_spin.setEnabled(enabled)
+        self.randomize_question_order_check.setEnabled(enabled)
+
+        if enabled:
+            return
+
+        self.sequence_question_list.blockSignals(True)
+
+        for index in range(self.sequence_question_list.count()):
+            item = self.sequence_question_list.item(index)
+            template_id = str(item.data(Qt.ItemDataRole.UserRole))
+            item.setCheckState(
+                Qt.CheckState.Checked if template_id in fixed_ids else Qt.CheckState.Unchecked
+            )
+
+        self.sequence_question_list.blockSignals(False)
+        self.question_count_spin.setValue(0)
+        self.randomize_question_order_check.setChecked(False)
         self._refresh_question_count_limit()
 
     def _set_all_sequence_questions(self, checked: bool) -> None:
@@ -1480,6 +1572,11 @@ class BinaryQuestionSetupDialog(QDialog):
             "option_2": self.option_2_edit.text(),
             "correct_option_id": (
                 str(self.correct_option_combo.currentData()) if question_type.is_scored else None
+            ),
+            "category": (
+                self._templates[template_id].category
+                if template_id is not None and template_id in self._templates
+                else "自定义"
             ),
         }
 
@@ -1577,6 +1674,7 @@ class BinaryQuestionSetupDialog(QDialog):
             question_template_ids=self.selected_question_template_ids(),
             question_count=self.question_count_spin.value(),
             randomize_question_order=(self.randomize_question_order_check.isChecked()),
+            fixed_form_size=int(self.fixed_form_combo.currentData() or 0),
         )
 
 
@@ -1585,20 +1683,24 @@ def binary_question_sequence(
     store: CommonQuestionStore,
 ) -> tuple[tuple[str, BinaryQuestionConfig], ...]:
     """Resolve checked common questions while preserving display and dwell settings."""
-    if not config.question_template_ids:
+    if not config.question_template_ids and not config.fixed_form_size:
         return (("binary-question-1", config),)
 
     templates = {template.template_id: template for template in store.load()}
-    template_ids = list(config.question_template_ids)
+    template_ids = list(
+        FIXED_BINARY_QUESTION_FORMS[config.fixed_form_size]
+        if config.fixed_form_size
+        else config.question_template_ids
+    )
     seed = (
         config.randomization_seed if config.randomization_seed is not None else secrets.randbits(63)
     )
     rng = random.Random(seed)
 
-    if config.randomize_question_order:
+    if config.randomize_question_order and not config.fixed_form_size:
         rng.shuffle(template_ids)
 
-    if config.question_count:
+    if config.question_count and not config.fixed_form_size:
         if config.question_count > len(template_ids):
             raise ValueError(
                 f"随机抽取题数 {config.question_count} 超过已选候选题 {len(template_ids)}。"
@@ -1610,6 +1712,9 @@ def binary_question_sequence(
 
     for template_id in template_ids:
         template = templates.get(template_id)
+
+        if template is None:
+            template = templates.get(LEGACY_QUESTION_ALIASES.get(template_id, ""))
 
         if template is None:
             raise ValueError(f"连续题目已不存在：{template_id}")

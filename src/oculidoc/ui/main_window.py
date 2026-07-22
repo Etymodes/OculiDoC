@@ -296,6 +296,8 @@ class AdminMainWindow(QMainWindow):
 
         labels = {
             "auto": "自动检测传感器",
+            "gaze_collect_legacy": "GazeCollect / HPF 旧系统兼容",
+            "just_need_to_see_bundle": "JustNeedToSee 内置 Tobii DLL 兼容",
             "tobii_stream_engine": "Tobii Eye Tracker 5",
             "tobii_legacy_bridge": "兼容眼动传感器桥接",
         }
@@ -574,8 +576,16 @@ class AdminMainWindow(QMainWindow):
             self.experiment_session_service,
             self.current_patient,
             self,
+            is_session_active=self._is_gaze_session_active,
         )
         dialog.exec()
+
+    def _is_gaze_session_active(
+        self,
+        session_id: UUID,
+    ) -> bool:
+        """Return whether this window still owns a live task process."""
+        return session_id in self._gaze_launches
 
     def _build_module_area(self) -> QScrollArea:
         scroll = QScrollArea()
@@ -1247,6 +1257,7 @@ class AdminMainWindow(QMainWindow):
 
             workbench = CameraPreviewWindow(
                 patient_key=str(self.current_patient.patient_id),
+                patient_display_label=self.current_patient.display_label,
                 dataset_directory=dataset_directory,
             )
         except Exception as error:
@@ -1614,6 +1625,11 @@ class AdminMainWindow(QMainWindow):
             )
             return
 
+        patient_label = "该患者"
+        if self.patient_service is not None:
+            with suppress(Exception):
+                patient_label = self.patient_service.get_patient(launch.patient_id).display_label
+
         if status is ExperimentSessionStatus.COMPLETED:
             result_state = self._publish_patient_display(
                 "任务已结束\n请休息",
@@ -1630,7 +1646,7 @@ class AdminMainWindow(QMainWindow):
             self._show_timed_task_message(
                 QMessageBox.Icon.Information,
                 "眼动任务已保存",
-                (f"任务记录已关联到当前患者的实验会话。\n目录：{launch.session_directory}"),
+                f"任务记录已保存至 {patient_label} 的实验历史。",
             )
         elif status is ExperimentSessionStatus.ABORTED:
             self._reset_patient_display()

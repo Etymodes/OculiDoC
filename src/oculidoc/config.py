@@ -14,6 +14,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 GazeSource = Literal[
     "auto",
+    "gaze_collect_legacy",
+    "just_need_to_see_bundle",
     "mock",
     "tobii_stream_engine",
     "tobii_legacy_bridge",
@@ -69,6 +71,14 @@ class Settings(BaseSettings):
         le=16_384,
     )
     tobii_helper_executable: Path | None = None
+    gaze_collect_json_root: Path = Path(r"D:\GazeCollect\HPFData\json")
+    gaze_collect_player_executable: Path | None = Path(
+        r"D:\GazeCollect\VMMachine\HPFMediaPlayer.exe"
+    )
+    eye_position_executable: Path | None = Path(
+        r"D:\EyePosition\TobiiDynavox.EyeAssist.Smorgasbord.exe"
+    )
+    just_need_to_see_root: Path = Path(r"D:\JustNeedToSee")
 
     @property
     def database_path(self) -> Path:
@@ -93,6 +103,14 @@ class GazeDeviceConfig(BaseModel):
     tobii_stream_engine_dll: Path | None = None
     tobii_bridge_host: str = "127.0.0.1"
     tobii_bridge_port: int = Field(default=9999, ge=1, le=65535)
+    gaze_collect_json_root: Path = Path(r"D:\GazeCollect\HPFData\json")
+    gaze_collect_player_executable: Path | None = Path(
+        r"D:\GazeCollect\VMMachine\HPFMediaPlayer.exe"
+    )
+    eye_position_executable: Path | None = Path(
+        r"D:\EyePosition\TobiiDynavox.EyeAssist.Smorgasbord.exe"
+    )
+    just_need_to_see_root: Path = Path(r"D:\JustNeedToSee")
     gaze_preflight_seconds: int = Field(ge=3, le=10)
     gaze_minimum_valid_ratio: float = Field(ge=0.0, le=1.0)
 
@@ -103,6 +121,10 @@ class GazeDeviceConfig(BaseModel):
             tobii_stream_engine_dll=settings.tobii_stream_engine_dll,
             tobii_bridge_host=settings.tobii_bridge_host,
             tobii_bridge_port=settings.tobii_bridge_port,
+            gaze_collect_json_root=settings.gaze_collect_json_root,
+            gaze_collect_player_executable=settings.gaze_collect_player_executable,
+            eye_position_executable=settings.eye_position_executable,
+            just_need_to_see_root=settings.just_need_to_see_root,
             gaze_preflight_seconds=settings.gaze_preflight_seconds,
             gaze_minimum_valid_ratio=settings.gaze_minimum_valid_ratio,
         )
@@ -115,6 +137,10 @@ class GazeDeviceConfig(BaseModel):
                 "tobii_stream_engine_dll": self.tobii_stream_engine_dll,
                 "tobii_bridge_host": self.tobii_bridge_host,
                 "tobii_bridge_port": self.tobii_bridge_port,
+                "gaze_collect_json_root": self.gaze_collect_json_root,
+                "gaze_collect_player_executable": self.gaze_collect_player_executable,
+                "eye_position_executable": self.eye_position_executable,
+                "just_need_to_see_root": self.just_need_to_see_root,
                 "gaze_preflight_seconds": self.gaze_preflight_seconds,
                 "gaze_minimum_valid_ratio": self.gaze_minimum_valid_ratio,
             }
@@ -130,6 +156,18 @@ class GazeDeviceConfig(BaseModel):
             ),
             "tobii_bridge_host": self.tobii_bridge_host,
             "tobii_bridge_port": self.tobii_bridge_port,
+            "gaze_collect_json_root": str(self.gaze_collect_json_root),
+            "gaze_collect_player_executable": (
+                str(self.gaze_collect_player_executable)
+                if self.gaze_collect_player_executable is not None
+                else None
+            ),
+            "eye_position_executable": (
+                str(self.eye_position_executable)
+                if self.eye_position_executable is not None
+                else None
+            ),
+            "just_need_to_see_root": str(self.just_need_to_see_root),
             "gaze_preflight_seconds": self.gaze_preflight_seconds,
             "gaze_minimum_valid_ratio": self.gaze_minimum_valid_ratio,
         }

@@ -24,6 +24,7 @@ PySide6 管理员端 / 患者端 / 手机后台
                   v
 Infrastructure Adapters
   - Tobii Stream Engine / generic gaze bridge
+  - GazeCollect JSON / JustNeedToSee DLL compatibility
   - hardware auto-detection
   - mock gaze source
   - SQLite
@@ -70,11 +71,31 @@ Infrastructure Adapters
 - 导入保留原患者、会话和清单标识；患者编号已存在时整名跳过其会话和文件，避免重复实验。系统生成的 `session.json` 由导入后的会话模型重新写入。
 - CSV 是受控迁移包而不是 Git 工件；其中可能包含 Parquet、图像、视频和患者敏感信息。
 
+## 实验记录人工维护
+
+- 人工状态纠正只接受 `completed`、`aborted`、`failed` 三种终态；未知的实际结束时间保持为空，避免制造虚假实验时长。
+- 主窗口把仍由当前进程持有的任务会话告知历史页，活动会话不可人工修改或删除。
+- 删除以会话为聚合边界：先把专属目录原子移动到 `deleted_sessions/`，再在同一 SQLite 事务中删除文件清单与会话；数据库失败时目录回滚原位。
+
 ## 眼动传感器自动检测
 
 - `AutoDetectEyeTrackerDevice` 复用现有 `EyeTrackerDevice` 协议，依次尝试 Stream Engine、通用 TCP NDJSON 桥接，以及已配置帮助程序的医院桥接。
 - 候选接口必须完成连接、启动并产出一个眼动样本才算检测成功；失败候选会停止并断开，所有硬件均失败时明确报错，禁止切换到模拟源。
 - 通用桥接接受第三方或自制传感器程序输出的逐行 JSON，至少包含归一化 `x`、`y` 与 `valid`；也支持带屏幕尺寸的像素坐标。USB/COM 设备枚举本身不等于视线数据。
+
+## 医院旧版 Tobii 兼容
+
+- `GazeCollectLegacyDevice` 只读取 HPF 新写入的 `*_gaze.json`；HPF 由管理员手动启动，OculiDoC 不加载其私有 DLL，也不结束既有进程。
+- `JustNeedToSeeBundleDevice` 复用其目录内的 `tobii_stream_engine.dll`，但不读取鼠标位置；正式采样时必须关闭 `JustNeedToSee.exe`。
+- EyePosition 只作为外部摆位检查入口，不实现 `EyeTrackerDevice`，也不进入自动探测候选。
+- 两个兼容采样源必须由管理员显式选择并通过 3–10 秒任务前预检，避免与原生 Stream Engine 同时订阅设备。
+
+## 患者报告
+
+- 单次报告从患者仓储解析姓名与患者编号；UUID 仅保留在 JSON 和文件索引中，不在普通界面或 HTML 报告展示。
+- 患者综合报告复用既有会话历史和单次采样解析，遍历全部任务并生成综合热力图、质量、追踪与问答趋势。
+- 综合热力图以实际视线密度叠加各任务目标位置，不把不同会话错误连接成一条连续轨迹。
+- 所有报告区块使用规则化中文摘要解释“图上看到了什么”，不自动推断意识状态、疗效或预后。
 
 ## 依赖规则
 

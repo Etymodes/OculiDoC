@@ -23,6 +23,11 @@ from oculidoc.application.experiment_session_service import (
     ExperimentSessionService,
     RegisterSessionArtifactRequest,
 )
+from oculidoc.application.gaze_report import (
+    _build_metrics,
+    _load_rows,
+    _screen_heatmap,
+)
 from oculidoc.application.session_history import (
     SessionHistoryEntry,
     build_patient_session_history,
@@ -31,9 +36,12 @@ from oculidoc.domain.experiment_session import (
     ExperimentSessionStatus,
     SessionArtifactKind,
 )
+from oculidoc.modules.registry import DEFAULT_MODULES
 
 LOW_VALID_SAMPLE_RATIO = 0.60
 LOW_SAMPLE_COUNT = 10
+
+_MODULE_TITLES = {module.module_id: module.title for module in DEFAULT_MODULES}
 
 _COMPARABLE_METRICS = (
     "valid_sample_ratio",
@@ -58,6 +66,7 @@ class PatientTrendArtifacts:
     report_json_path: Path
     html_path: Path
     data_quality_path: Path | None
+    aggregate_heatmap_path: Path | None
     tracking_path: Path | None
     binary_path: Path | None
 
@@ -457,6 +466,8 @@ def build_patient_trend_document(
     a change as clinical improvement or deterioration.
     """
 
+    patient = service.get_patient(patient_id)
+
     entries = list(
         build_patient_session_history(
             service,
@@ -551,9 +562,12 @@ def build_patient_trend_document(
             )
 
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "generated_at_utc": (datetime.now(UTC).isoformat()),
         "patient_id": str(patient_id),
+        "patient_name": patient.family_name,
+        "patient_code": patient.patient_code,
+        "patient_display_label": patient.display_label,
         "anchor_session_id": (str(anchor_session_id) if anchor_session_id is not None else None),
         "session_count": len(entries),
         "point_count": len(points),
@@ -691,9 +705,9 @@ def _labels(
 ) -> list[str]:
     labels: list[str] = []
 
-    for point in points:
+    for index, point in enumerate(points, start=1):
         created_at = str(point.get("created_at_utc") or "")
-        labels.append(created_at[:10] if created_at else str(point.get("session_id"))[:8])
+        labels.append(created_at[:10] if created_at else f"记录{index}")
 
     return labels
 
@@ -1091,9 +1105,110 @@ def _warning_text(
     return "；".join(messages) or "无"
 
 
+def _analysis_html(text: str) -> str:
+    return f'<p class="analysis"><strong>简要分析：</strong>{html.escape(text)}</p>'
+
+
+def _overview_analysis(document: dict[str, object]) -> str:
+    session_count = _safe_integer(document.get("session_count")) or 0
+    usable_count = _safe_integer(document.get("usable_point_count")) or 0
+    modules = document.get("modules")
+    module_count = len(modules) if isinstance(modules, dict) else 0
+    return (
+        f"本报告汇总该患者 {session_count} 次实验、{module_count} 类任务，"
+        f"其中 {usable_count} 个结果点满足当前趋势展示条件。"
+        "任务参数和患者当日状态不同会影响结果，跨任务数值不能直接互相比高低。"
+    )
+
+
+def _aggregate_gaze_analysis(document: dict[str, object]) -> str:
+    value = document.get("aggregate_gaze")
+    if not isinstance(value, dict):
+        return "没有可读取的眼动采样文件，暂时无法生成该患者的综合热力图。"
+    metrics = value.get("metrics")
+    if not isinstance(metrics, dict):
+        return "没有可读取的眼动采样文件，暂时无法生成该患者的综合热力图。"
+    sample_count = _safe_integer(metrics.get("sample_count")) or 0
+    valid_ratio = _safe_number(metrics.get("valid_sample_ratio")) or 0.0
+    session_count = _safe_integer(value.get("session_count")) or 0
+    return (
+        f"综合图合并了 {session_count} 次实验的 {sample_count} 个样本，"
+        f"整体有效率为 {valid_ratio:.1%}。"
+        "底图表示实际视线累计密度，蓝点表示各任务目标位置；它适合看长期空间偏向，"
+        "单次追踪准确性仍应查看对应任务报告。"
+    )
+
+
+def _quality_trend_analysis(points: list[dict[str, object]]) -> str:
+    ratios = []
+    for point in points:
+        metrics = point.get("metrics")
+        if isinstance(metrics, dict):
+            ratio = _safe_number(metrics.get("valid_sample_ratio"))
+            if ratio is not None:
+                ratios.append(ratio)
+    if not ratios:
+        return "没有足够的有效率记录可比较。"
+    low_count = sum(ratio < LOW_VALID_SAMPLE_RATIO for ratio in ratios)
+    return (
+        f"共有 {len(ratios)} 个结果点记录了有效率，其中 {low_count} 个低于 "
+        f"{LOW_VALID_SAMPLE_RATIO:.0%}。"
+        "若波动较大，应先统一摆位、校准、环境光和测试时段，再比较行为变化。"
+    )
+
+
+def _tracking_trend_analysis(points: list[dict[str, object]]) -> str:
+    tracking = [point for point in points if point.get("metric_family") == "tracking"]
+    if not tracking:
+        return "没有可比较的追踪任务结果。"
+    latest_metrics = tracking[-1].get("metrics")
+    latest = latest_metrics if isinstance(latest_metrics, dict) else {}
+    return (
+        f"共纳入 {len(tracking)} 个追踪结果点；最近一次目标命中率为 "
+        f"{_ratio_text(latest.get('target_hit_ratio'))}。"
+        "同一任务设置下，命中率上升、误差下降和持续追踪延长可作为描述性变化，不能单独等同于意识改善。"
+    )
+
+
+def _binary_trend_analysis(points: list[dict[str, object]]) -> str:
+    binary = [point for point in points if point.get("metric_family") == "binary"]
+    if not binary:
+        return "没有可比较的二分问答结果。"
+    answered = 0
+    for point in binary:
+        metrics = point.get("metrics")
+        if isinstance(metrics, dict) and metrics.get("answered") is True:
+            answered += 1
+    return (
+        f"共汇总 {len(binary)} 个二分问答结果点，其中 {answered} 个形成了明确选择。"
+        "应重点观察同类问题在多次测试中的一致性，而不是用单次对错直接下结论。"
+    )
+
+
+def _aggregate_gaze_rows(
+    service: ExperimentSessionService,
+    patient_id: UUID,
+) -> tuple[list[dict[str, object]], int, int]:
+    rows: list[dict[str, object]] = []
+    included_session_count = 0
+    unreadable_session_count = 0
+    for session in service.list_sessions_for_patient(patient_id):
+        directory = service.resolve_session_directory(session.session_id)
+        try:
+            session_rows = _load_rows(directory)
+        except (OSError, ValueError):
+            unreadable_session_count += 1
+            continue
+        if session_rows:
+            rows.extend(session_rows)
+            included_session_count += 1
+    return rows, included_session_count, unreadable_session_count
+
+
 def _html_document(
     document: dict[str, object],
     *,
+    has_aggregate_heatmap: bool,
     has_quality_plot: bool,
     has_tracking_plot: bool,
     has_binary_plot: bool,
@@ -1107,7 +1222,12 @@ def _html_document(
             "<td>"
             + html.escape(str(point.get("created_at_utc") or "-")[:19])
             + "</td><td>"
-            + html.escape(str(point.get("module_id") or "-"))
+            + html.escape(
+                _MODULE_TITLES.get(
+                    str(point.get("module_id") or "-"),
+                    str(point.get("module_id") or "-"),
+                )
+            )
             + "</td><td>"
             + html.escape(str(point.get("completion_status") or point.get("session_status") or "-"))
             + "</td><td>"
@@ -1121,25 +1241,42 @@ def _html_document(
 
     chart_sections = []
 
+    chart_sections.append(
+        "<section><h2>全部任务综合热力图</h2>"
+        + (
+            '<img src="aggregate_heatmap.png" alt="Combined patient gaze heatmap">'
+            if has_aggregate_heatmap
+            else "<p>没有可读取的有效眼动采样。</p>"
+        )
+        + _analysis_html(_aggregate_gaze_analysis(document))
+        + "</section>"
+    )
+
     if has_quality_plot:
         chart_sections.append(
             "<section><h2>数据质量趋势</h2>"
             '<img src="data_quality.png" '
-            'alt="Data quality trend"></section>'
+            'alt="Data quality trend">'
+            + _analysis_html(_quality_trend_analysis(points))
+            + "</section>"
         )
 
     if has_tracking_plot:
         chart_sections.append(
             "<section><h2>追踪任务趋势</h2>"
             '<img src="tracking_trend.png" '
-            'alt="Tracking trend"></section>'
+            'alt="Tracking trend">'
+            + _analysis_html(_tracking_trend_analysis(points))
+            + "</section>"
         )
 
     if has_binary_plot:
         chart_sections.append(
             "<section><h2>二分任务时序趋势</h2>"
             '<img src="binary_timing.png" '
-            'alt="Binary timing trend"></section>'
+            'alt="Binary timing trend">'
+            + _analysis_html(_binary_trend_analysis(points))
+            + "</section>"
         )
 
     notice = html.escape(str(document.get("clinical_use_notice") or ""))
@@ -1154,7 +1291,7 @@ def _html_document(
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>OculiDoC 患者纵向趋势</title>
+<title>OculiDoC 患者综合报告</title>
 <style>
 body {{
     font-family: "Microsoft YaHei UI", Arial, sans-serif;
@@ -1179,19 +1316,27 @@ th, td {{
 }}
 img {{ width: 100%; height: auto; }}
 .notice {{ color: #7a4e00; background: #fff7df; }}
+.analysis {{
+    margin-top: 14px;
+    padding: 12px 14px;
+    border-left: 4px solid #2e7d9a;
+    background: #eef8fb;
+    line-height: 1.7;
+}}
 code {{ word-break: break-all; }}
 </style>
 </head>
 <body>
 <header>
-<h1>OculiDoC 患者纵向趋势报告</h1>
-<p>患者 ID：<code>{html.escape(str(document["patient_id"]))}</code></p>
+<h1>OculiDoC 患者全部任务综合报告</h1>
+<p>患者：{html.escape(str(document["patient_display_label"]))}</p>
 <p>会话数：{document["session_count"]}</p>
 <p>可用于趋势的结果点：{document["usable_point_count"]}</p>
 <p>质量警告计数：{warning_counts}</p>
+{_analysis_html(_overview_analysis(document))}
 </header>
 <section>
-<h2>纵向结果与前次差值</h2>
+<h2>全部任务结果与同类前次差值</h2>
 <table>
 <thead>
 <tr>
@@ -1203,6 +1348,7 @@ code {{ word-break: break-all; }}
 {"".join(rows)}
 </tbody>
 </table>
+{_analysis_html("表格按时间列出全部任务；“相对前次变化”只与同一任务、同一指标的前一次记录比较，正负号本身不等于变好或变差。")}
 </section>
 {"".join(chart_sections)}
 <section class="notice">
@@ -1279,10 +1425,39 @@ def generate_patient_trend_report(
     )
     report_json_path = report_directory / "trend_report.json"
     html_path = report_directory / "trend_report.html"
+    aggregate_heatmap_path = report_directory / "aggregate_heatmap.png"
     data_quality_path = report_directory / "data_quality.png"
     tracking_path = report_directory / "tracking_trend.png"
     binary_path = report_directory / "binary_timing.png"
     points = _flatten_points(document)
+    aggregate_rows, gaze_session_count, unreadable_gaze_session_count = _aggregate_gaze_rows(
+        service,
+        anchor.patient_id,
+    )
+    has_aggregate_heatmap = bool(aggregate_rows)
+    if has_aggregate_heatmap:
+        aggregate_metrics = _build_metrics(aggregate_rows)
+        valid_points = aggregate_metrics.pop("_valid_points")
+        aggregate_metrics.pop("_tracking_errors")
+        tracking_series = aggregate_metrics.pop("_tracking_series")
+        target_trajectory = aggregate_metrics.pop("_target_trajectory")
+        assert isinstance(valid_points, list)
+        assert isinstance(tracking_series, list)
+        assert isinstance(target_trajectory, list)
+        _screen_heatmap(
+            valid_points,
+            aggregate_heatmap_path,
+            target_trajectory,
+            tracking_series,
+            connect_trajectories=False,
+        )
+    else:
+        aggregate_metrics = None
+    document["aggregate_gaze"] = {
+        "session_count": gaze_session_count,
+        "unreadable_session_count": unreadable_gaze_session_count,
+        "metrics": aggregate_metrics,
+    }
     has_quality_plot = _data_quality_plot(
         points,
         data_quality_path,
@@ -1304,6 +1479,7 @@ def generate_patient_trend_report(
         html_path,
         _html_document(
             document,
+            has_aggregate_heatmap=has_aggregate_heatmap,
             has_quality_plot=(has_quality_plot),
             has_tracking_plot=(has_tracking_plot),
             has_binary_plot=(has_binary_plot),
@@ -1316,6 +1492,10 @@ def generate_patient_trend_report(
     ]
 
     for has_plot, path in (
+        (
+            has_aggregate_heatmap,
+            aggregate_heatmap_path,
+        ),
         (
             has_quality_plot,
             data_quality_path,
@@ -1345,6 +1525,7 @@ def generate_patient_trend_report(
         report_json_path=(report_json_path),
         html_path=html_path,
         data_quality_path=(data_quality_path if has_quality_plot else None),
+        aggregate_heatmap_path=(aggregate_heatmap_path if has_aggregate_heatmap else None),
         tracking_path=(tracking_path if has_tracking_plot else None),
         binary_path=(binary_path if has_binary_plot else None),
     )

@@ -235,7 +235,7 @@ def main(
             CommonQuestionStore(settings.data_dir / "common_questions.json"),
         )
 
-        if config.question_template_ids:
+        if config.question_template_ids or config.fixed_form_size:
             task = SequentialChoiceTask(
                 config=config,
                 question_ids=[question_id for question_id, _question in sequence],

@@ -18,9 +18,11 @@ from oculidoc.application.session_workspace import (
 )
 from oculidoc.domain.experiment_session import (
     ExperimentSession,
+    ExperimentSessionStatus,
     SessionArtifact,
     SessionArtifactKind,
 )
+from oculidoc.domain.patient import Patient
 
 
 class ExperimentSessionNotFoundError(LookupError):
@@ -165,6 +167,13 @@ class ExperimentSessionService:
 
         return session
 
+    def get_patient(self, patient_id: UUID) -> Patient:
+        """Resolve the patient shown for a session or report."""
+        patient = self._patient_repository.get(patient_id)
+        if patient is None:
+            raise LookupError(f"Patient not found: {patient_id}")
+        return patient
+
     def list_sessions_for_patient(
         self,
         patient_id: UUID,
@@ -284,6 +293,41 @@ class ExperimentSessionService:
         self._write_metadata(saved_session)
 
         return saved_session
+
+    def correct_session_status(
+        self,
+        session_id: UUID,
+        status: ExperimentSessionStatus,
+        reason: str | None = None,
+    ) -> ExperimentSession:
+        """Apply an explicit administrator correction to a terminal state."""
+        session = self.get_session(session_id)
+        session.correct_terminal_status(status, reason)
+
+        saved_session = self._session_repository.update(session)
+        self._write_metadata(saved_session)
+        return saved_session
+
+    def delete_session(
+        self,
+        session_id: UUID,
+    ) -> Path | None:
+        """Delete one record while retaining its files in a recovery area."""
+        session = self.get_session(session_id)
+        archived_directory = (
+            self._workspace.archive_for_deletion(session)
+            if self._workspace is not None
+            else None
+        )
+
+        try:
+            self._session_repository.delete(session_id)
+        except Exception:
+            if self._workspace is not None and archived_directory is not None:
+                self._workspace.restore_archived(session, archived_directory)
+            raise
+
+        return archived_directory
 
     def register_artifact(
         self,

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QInputDialog, QMessageBox
 from pytest import MonkeyPatch
 from pytestqt.qtbot import QtBot
 
@@ -18,6 +19,7 @@ from oculidoc.application.gaze_task_session import (
     finalize_gaze_task_launch,
 )
 from oculidoc.config import Settings
+from oculidoc.domain.experiment_session import ExperimentSessionStatus
 from oculidoc.infrastructure.database import (
     initialize_database,
 )
@@ -121,6 +123,8 @@ def test_history_dialog_lists_and_filters(
     assert dialog.table.item(0, 4).text() == "25"
     assert dialog.table.item(0, 5).text() == "80.0%"
     assert "target" in (dialog.detail_label.text())
+    assert cast(Any, patient).display_label in dialog.detail_label.text()
+    assert str(cast(Any, patient).patient_id) not in dialog.detail_label.text()
 
     dialog.close()
     runtime.dispose()
@@ -145,6 +149,7 @@ def test_main_window_opens_history_dialog(
         )
     )
     opened: list[tuple[object, object]] = []
+    active_checks: list[object] = []
 
     class StubHistoryDialog:
         def __init__(
@@ -152,6 +157,8 @@ def test_main_window_opens_history_dialog(
             service: object,
             selected_patient: object,
             parent: object = None,
+            *,
+            is_session_active: object = None,
         ) -> None:
             opened.append(
                 (
@@ -160,6 +167,8 @@ def test_main_window_opens_history_dialog(
                 )
             )
             self.parent = parent
+            self.is_session_active = is_session_active
+            active_checks.append(is_session_active)
 
         def exec(self) -> int:
             return 0
@@ -186,8 +195,175 @@ def test_main_window_opens_history_dialog(
             patient,
         )
     ]
+    assert callable(active_checks[0])
 
     window.close()
+    runtime.dispose()
+
+
+def test_history_dialog_can_correct_stale_running_status(
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    runtime = initialize_database(
+        tmp_path / "oculidoc.sqlite3",
+        data_root=tmp_path / "data",
+    )
+    patient = runtime.patient_service.register_patient(
+        RegisterPatientRequest(
+            patient_code="DOC-HISTORY-CORRECT",
+            family_name="Correct",
+        )
+    )
+    launch = create_gaze_task_launch(
+        runtime.experiment_session_service,
+        patient_id=patient.patient_id,
+        module_id="tracking_ball",
+    )
+    dialog = PatientSessionHistoryDialog(
+        runtime.experiment_session_service,
+        patient,
+    )
+    qtbot.addWidget(dialog)
+    information_messages: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        QInputDialog,
+        "getItem",
+        lambda *args: ("已取消", True),
+    )
+    monkeypatch.setattr(
+        QInputDialog,
+        "getMultiLineText",
+        lambda *args: ("异常退出后人工取消", True),
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args: QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args: information_messages.append(args),
+    )
+
+    dialog.status_button.click()
+
+    corrected = runtime.experiment_session_service.get_session(launch.session_id)
+    assert corrected.status is ExperimentSessionStatus.ABORTED
+    assert corrected.failure_reason == "异常退出后人工取消"
+    status_item = dialog.table.item(0, 2)
+    assert status_item is not None
+    assert status_item.text() == "已取消"
+    assert information_messages
+
+    dialog.close()
+    runtime.dispose()
+
+
+def test_history_dialog_deletes_record_and_keeps_files_in_recovery_area(
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    runtime = initialize_database(
+        tmp_path / "oculidoc.sqlite3",
+        data_root=tmp_path / "data",
+    )
+    patient = runtime.patient_service.register_patient(
+        RegisterPatientRequest(
+            patient_code="DOC-HISTORY-DELETE",
+            family_name="Delete",
+        )
+    )
+    launch = create_gaze_task_launch(
+        runtime.experiment_session_service,
+        patient_id=patient.patient_id,
+        module_id="tracking_ball",
+    )
+    (launch.session_directory / "payload.bin").write_bytes(b"recoverable")
+    dialog = PatientSessionHistoryDialog(
+        runtime.experiment_session_service,
+        patient,
+    )
+    qtbot.addWidget(dialog)
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *args: QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args: None,
+    )
+
+    dialog.delete_button.click()
+
+    assert dialog.table.rowCount() == 0
+    assert runtime.experiment_session_service.list_sessions_for_patient(
+        patient.patient_id
+    ) == []
+    archived_payloads = list(
+        (tmp_path / "data" / "deleted_sessions").rglob("payload.bin")
+    )
+    assert len(archived_payloads) == 1
+    assert archived_payloads[0].read_bytes() == b"recoverable"
+
+    dialog.close()
+    runtime.dispose()
+
+
+def test_history_dialog_blocks_mutation_for_live_process(
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    runtime = initialize_database(
+        tmp_path / "oculidoc.sqlite3",
+        data_root=tmp_path / "data",
+    )
+    patient = runtime.patient_service.register_patient(
+        RegisterPatientRequest(
+            patient_code="DOC-HISTORY-ACTIVE",
+            family_name="Active",
+        )
+    )
+    launch = create_gaze_task_launch(
+        runtime.experiment_session_service,
+        patient_id=patient.patient_id,
+        module_id="tracking_ball",
+    )
+    dialog = PatientSessionHistoryDialog(
+        runtime.experiment_session_service,
+        patient,
+        is_session_active=lambda session_id: session_id == launch.session_id,
+    )
+    qtbot.addWidget(dialog)
+    messages: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args: messages.append(args),
+    )
+    monkeypatch.setattr(
+        QInputDialog,
+        "getItem",
+        lambda *args: (_ for _ in ()).throw(AssertionError("dialog must not open")),
+    )
+
+    dialog.status_button.click()
+
+    assert runtime.experiment_session_service.get_session(
+        launch.session_id
+    ).status is ExperimentSessionStatus.RUNNING
+    assert any("任务仍在运行" in str(value) for call in messages for value in call)
+
+    dialog.close()
     runtime.dispose()
 
 

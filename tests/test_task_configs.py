@@ -27,10 +27,13 @@ def test_task_config_store_round_trip_and_preserves_modules(tmp_path: Path) -> N
     assert tracking.revision == 0
     assert tracking.config["diameter_px"] == 300
     assert binary.config["question"] == "你现在感到舒服吗？"
+    assert binary.config["fixed_form_size"] == 0
     assert vertical.config == binary.config
     assert keyboard.config["enable_tone_step"] is True
     assert keyboard.config["output_font_size_pt"] == 48
     assert multiple.config["option_count"] == 4
+    assert multiple.config["grid_shape"] == "auto"
+    assert multiple.config["template_id"] is None
     assert multiple.config["randomize_positions"] is True
     assert image_choice.config["question_ids"] == []
     assert image_choice.config["category_filters"] == []
