@@ -14,6 +14,7 @@ from oculidoc.tasks.binary_question import (
     BinaryQuestionConfig,
     BinaryQuestionSetupDialog,
     BinaryQuestionTask,
+    binary_question_sequence,
 )
 from oculidoc.tasks.question_bank import (
     BinaryQuestionType,
@@ -200,6 +201,46 @@ def test_question_store_persists_full_template(
     assert len(payload["questions"]) == 1
 
 
+def test_workbook_questions_are_in_the_default_editable_bank(tmp_path: Path) -> None:
+    templates = {
+        item.template_id: item
+        for item in CommonQuestionStore(tmp_path / "common_questions.json").load()
+    }
+    workbook_rows = [item for item in templates.values() if item.template_id.startswith("xlsx-")]
+
+    assert len(workbook_rows) == 66
+    assert templates["xlsx-001"].question == "你能听见我说话吗？"
+    assert templates["xlsx-019"].question == "你现在是一个人还是有人陪？一个人"
+    assert templates["xlsx-036"].option_1 == "上海"
+    assert templates["xlsx-036"].correct_option_id == "option_2"
+    assert templates["xlsx-065"].correct_option_id == "option_1"
+    assert templates["xlsx-066"].correct_option_id == "option_2"
+
+
+def test_binary_sequence_randomly_samples_requested_question_count(tmp_path: Path) -> None:
+    store = CommonQuestionStore(tmp_path / "common_questions.json")
+    config = BinaryQuestionConfig(
+        question="备用单题",
+        question_template_ids=("xlsx-040", "xlsx-041", "xlsx-042", "xlsx-043"),
+        question_count=3,
+        randomize_question_order=True,
+        randomization_seed=17,
+    )
+
+    first = binary_question_sequence(config, store)
+    second = binary_question_sequence(config, store)
+
+    assert first == second
+    assert len(first) == 3
+    assert {question_id for question_id, _question in first} <= {
+        "xlsx-040",
+        "xlsx-041",
+        "xlsx-042",
+        "xlsx-043",
+    }
+    assert len({question.randomization_seed for _question_id, question in first}) == 3
+
+
 def test_question_setup_loads_and_saves_templates(
     qtbot: QtBot,
     tmp_path: Path,
@@ -357,7 +398,7 @@ def test_question_setup_uses_radio_buttons_and_edits_custom_template(
     assert messages
 
 
-def test_builtin_question_is_copied_instead_of_overwritten(
+def test_builtin_question_can_be_modified_with_a_persistent_override(
     qtbot: QtBot,
     tmp_path: Path,
     monkeypatch: MonkeyPatch,
@@ -379,7 +420,6 @@ def test_builtin_question_is_copied_instead_of_overwritten(
     dialog._edit_common_question()
 
     templates = CommonQuestionStore(path).load()
-    custom = [item for item in templates if not item.built_in]
-    assert len(custom) == 1
-    assert custom[0].template_id != "builtin-comfort"
-    assert custom[0].question == "你现在身体舒服吗？"
+    saved = {item.template_id: item for item in templates}["builtin-comfort"]
+    assert saved.built_in is False
+    assert saved.question == "你现在身体舒服吗？"

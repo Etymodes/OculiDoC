@@ -80,6 +80,7 @@ def task_config_from_dict(module_id: str, value: object) -> object:
         "show_gaze_cursor",
         "randomize_sides",
         "randomize_positions",
+        "randomize_question_order",
         "enable_tone_step",
     } & normalized.keys():
         if not isinstance(normalized[name], bool):
@@ -89,7 +90,12 @@ def task_config_from_dict(module_id: str, value: object) -> object:
     if seed is not None and (not isinstance(seed, int) or isinstance(seed, bool)):
         raise TypeError("randomization_seed must be an integer or null.")
 
-    for name in {"question_template_ids", "question_ids"} & normalized.keys():
+    for name in {
+        "question_template_ids",
+        "question_ids",
+        "category_filters",
+        "style_filters",
+    } & normalized.keys():
         identifiers = normalized[name]
 
         if not isinstance(identifiers, (list, tuple)) or any(

@@ -69,6 +69,9 @@ def test_mobile_page_contains_desktop_commands() -> None:
     assert "multiple_choice" in html
     assert "image_choice" in html
     assert "question_template_ids" in html
+    assert "randomize_question_order" in html
+    assert "category_filters" in html
+    assert "style_filters" in html
     assert "currentSignature === nextSignature" in html
     assert "每次呈现随机交换选项位置" in html
     assert "启用声调选择步骤" in html

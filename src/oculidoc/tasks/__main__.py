@@ -14,6 +14,7 @@ from oculidoc.app import create_qt_application
 from oculidoc.config import apply_saved_gaze_device_config, get_settings
 from oculidoc.devices.preflight import GazePreflightResult, GazePreflightStore
 from oculidoc.experiments.task_runtime import RecordedTaskRuntime
+from oculidoc.image_library import ImageLibraryStore
 from oculidoc.lan_control import (
     LanControlStateStore,
     LanControlTransitionError,
@@ -114,7 +115,10 @@ def main(
         if not isinstance(config, TrackingBallConfig):
             raise TypeError("Tracking task configuration type mismatch.")
 
-        setup = TrackingBallSetupDialog(config=config)
+        setup = TrackingBallSetupDialog(
+            config=config,
+            image_library_path=(settings.data_dir / "image_library"),
+        )
 
         if setup.exec() != QDialog.DialogCode.Accepted:
             return 0
@@ -158,7 +162,10 @@ def main(
         if not isinstance(config, ImageChoiceConfig):
             raise TypeError("Image-choice task configuration type mismatch.")
 
-        setup = ImageChoiceSetupDialog(config=config)
+        setup = ImageChoiceSetupDialog(
+            config=config,
+            image_library_path=(settings.data_dir / "image_library"),
+        )
 
         if setup.exec() != QDialog.DialogCode.Accepted:
             return 0
@@ -255,13 +262,17 @@ def main(
         if not isinstance(config, ImageChoiceConfig):
             raise TypeError("Image-choice task configuration type mismatch.")
 
-        image_questions = image_question_sequence(config)
+        image_store = ImageLibraryStore(settings.data_dir / "image_library")
+        image_assets = {asset.image_id: asset for asset in image_store.load()}
+        image_questions = image_question_sequence(config, image_store)
         task = SequentialChoiceTask(
             config=config,
             question_ids=[question.question_id for question in image_questions],
             task_factory=lambda index: ImageChoiceTask(
                 image_questions[index],
                 config,
+                image_store,
+                assets=image_assets,
                 allow_mouse_fallback=allow_mouse_fallback,
             ),
             layout_orientation="horizontal",

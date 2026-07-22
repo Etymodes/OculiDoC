@@ -102,6 +102,8 @@ let formDirty = false;
 
 const binaryFields = [
   {name: "question_template_ids", label: "连续题目（可多选；不选则只运行下方单题）", type: "multi-select", options: []},
+  {name: "question_count", label: "随机抽取题数（0 = 全部已选）", type: "number", min: 0, max: 200, step: 1},
+  {name: "randomize_question_order", label: "每次任务随机抽题并排列", type: "checkbox"},
   {name: "question_type", label: "问题类型", type: "select", options: [["yes_no", "是否题"], ["question_answer", "问答题"], ["inquiry", "询问题"], ["other", "其他"]]},
   {name: "question", label: "问题文本", type: "textarea"},
   {name: "option_1", label: "选项 1", type: "text"},
@@ -154,14 +156,9 @@ const fields = {
     {name: "randomize_positions", label: "每次呈现随机交换选项位置", type: "checkbox"}
   ],
   image_choice: [
-    {name: "question_ids", label: "连续图片题", type: "multi-select", options: [
-      ["image-banana", "请看香蕉（香蕉 / 狮子）"],
-      ["image-apple", "请看苹果（小狗 / 苹果）"],
-      ["image-cup", "请看水杯（水杯 / 床）"],
-      ["image-sun", "请看太阳（月亮 / 太阳）"],
-      ["image-car", "请看汽车（汽车 / 花）"],
-      ["image-cat", "请看小猫（鞋 / 小猫）"]
-    ]},
+    {name: "category_filters", label: "图片类别（可多选；不选 = 全部）", type: "multi-select", options: []},
+    {name: "style_filters", label: "图片风格（可多选；不选 = 全部）", type: "multi-select", options: []},
+    {name: "question_count", label: "本次随机题数", type: "number", min: 1, max: 100, step: 1},
     {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
     {name: "duration_seconds", label: "每题最长时长（秒）", type: "number", min: 5, max: 600, step: 1},
     {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 20, max: 120, step: 1},
@@ -356,6 +353,14 @@ async function refresh() {
     sequenceField.options = (runtime.question_bank || []).map((question) => [
       question.template_id, question.display_label
     ]);
+    const imageAssets = runtime.image_library || [];
+    const imageFields = fields.image_choice;
+    const categoryField = imageFields.find((definition) => definition.name === "category_filters");
+    const styleField = imageFields.find((definition) => definition.name === "style_filters");
+    categoryField.options = [...new Set(imageAssets.map((asset) => asset.category))]
+      .sort().map((value) => [value, value]);
+    styleField.options = [...new Set(imageAssets.map((asset) => asset.style))]
+      .sort().map((value) => [value, value]);
     const displayLabels = {
       closed: "已关闭", idle: "待机", ready: "准备", preview: "提示",
       running: "任务进行中", paused: "已暂停", result: "任务结束", error: "异常"
