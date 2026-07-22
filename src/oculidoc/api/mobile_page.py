@@ -30,7 +30,7 @@ _PAGE = r"""<!doctype html>
     textarea { min-height: 100px; resize: vertical; }
     .check-label { display: flex; align-items: center; font-weight: 600; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
-    .grid.three { grid-template-columns: 1fr 1fr 1fr; }
+    .grid.four { grid-template-columns: 1fr 1fr 1fr 1fr; }
     button { border: 0; border-radius: 10px; padding: 13px 12px; font-size: 16px;
              font-weight: 700; background: #1565c0; color: white; }
     button.secondary { background: #edf4fb; color: #184e77; border: 1px solid #bfd3e4; }
@@ -40,7 +40,7 @@ _PAGE = r"""<!doctype html>
     .command-pending, .command-accepted { color: #8a5a00; }
     .command-completed { color: #176b36; }
     .command-rejected, .conflict { color: #b42318; }
-    @media (max-width: 560px) { .grid.three { grid-template-columns: 1fr; } }
+    @media (max-width: 680px) { .grid.four { grid-template-columns: 1fr 1fr; } }
   </style>
 </head>
 <body>
@@ -66,9 +66,10 @@ _PAGE = r"""<!doctype html>
       <button id="save-config" class="secondary">保存设置</button>
       <button id="start-task">保存并直接启动</button>
     </div>
-    <div class="grid three">
+    <div class="grid four">
       <button id="open-display" class="secondary">打开患者端</button>
       <button id="reload-config" class="secondary">重新读取设置</button>
+      <button id="replay-speech" class="secondary">重播语音</button>
       <button id="stop-task" class="danger">终止当前任务</button>
     </div>
     <pre id="command-status">尚未发送桌面命令。</pre>
@@ -99,10 +100,28 @@ const query = "?token=" + encodeURIComponent(token);
 let currentRecord = null;
 let formDirty = false;
 
+const binaryFields = [
+  {name: "question_template_ids", label: "连续题目（可多选；不选则只运行下方单题）", type: "multi-select", options: []},
+  {name: "question_type", label: "问题类型", type: "select", options: [["yes_no", "是否题"], ["question_answer", "问答题"], ["inquiry", "询问题"], ["other", "其他"]]},
+  {name: "question", label: "问题文本", type: "textarea"},
+  {name: "option_1", label: "选项 1", type: "text"},
+  {name: "option_2", label: "选项 2", type: "text"},
+  {name: "correct_option_id", label: "正确选项", type: "select", options: [["option_1", "选项 1"], ["option_2", "选项 2"]]},
+  {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
+  {name: "duration_seconds", label: "任务时长（秒）", type: "number", min: 5, max: 600, step: 1},
+  {name: "question_font_family", label: "字体", type: "text"},
+  {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 12, max: 120, step: 1},
+  {name: "option_font_size_pt", label: "选项字号（pt）", type: "number", min: 12, max: 120, step: 1},
+  {name: "neutral_zone_width", label: "中央中性区（0–0.6）", type: "number", min: 0, max: 0.6, step: 0.01},
+  {name: "randomize_sides", label: "随机交换选项位置", type: "checkbox"}
+];
+
 const fields = {
   tracking_ball: [
     {name: "shape", label: "目标形状", type: "select", options: [["circle", "圆形"], ["square", "方形"], ["diamond", "菱形"], ["star", "星形"]]},
     {name: "path", label: "运动轨迹", type: "select", options: [["horizontal", "水平往返"], ["vertical", "垂直往返"], ["circle", "圆周"], ["z", "Z 型"], ["figure_eight", "8 字"], ["random", "平滑随机"]]},
+    {name: "horizontal_position", label: "水平轨迹高度", type: "select", options: [["top", "屏幕上方"], ["middle", "屏幕中间"], ["bottom", "屏幕下方"]]},
+    {name: "vertical_position", label: "垂直轨迹位置", type: "select", options: [["left", "屏幕左侧"], ["center", "屏幕中间"], ["right", "屏幕右侧"]]},
     {name: "effect", label: "动画效果", type: "select", options: [["none", "无"], ["pulse", "呼吸缩放"], ["spin", "旋转"]]},
     {name: "diameter_px", label: "目标直径（px）", type: "number", min: 16, max: 600, step: 1},
     {name: "color", label: "目标颜色", type: "color"},
@@ -116,19 +135,45 @@ const fields = {
     {name: "dwell_outline_color", label: "目标轮廓颜色", type: "color"},
     {name: "show_gaze_cursor", label: "显示实时视线光标", type: "checkbox"}
   ],
-  binary_horizontal: [
-    {name: "question_type", label: "问题类型", type: "select", options: [["yes_no", "是否题"], ["question_answer", "问答题"], ["inquiry", "询问题"], ["other", "其他"]]},
-    {name: "question", label: "问题文本", type: "textarea"},
+  binary_horizontal: binaryFields,
+  binary_vertical: binaryFields,
+  multiple_choice: [
+    {name: "question", label: "问题文字", type: "textarea"},
+    {name: "option_count", label: "选项数量", type: "number", min: 2, max: 6, step: 1},
     {name: "option_1", label: "选项 1", type: "text"},
     {name: "option_2", label: "选项 2", type: "text"},
-    {name: "correct_option_id", label: "正确选项", type: "select", options: [["option_1", "选项 1"], ["option_2", "选项 2"]]},
+    {name: "option_3", label: "选项 3", type: "text"},
+    {name: "option_4", label: "选项 4", type: "text"},
+    {name: "option_5", label: "选项 5", type: "text"},
+    {name: "option_6", label: "选项 6", type: "text"},
+    {name: "layout", label: "排列方式", type: "select", options: [["grid", "自动宫格（2×2 / 2×3）"], ["ring", "环形排列"]]},
     {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
-    {name: "duration_seconds", label: "任务时长（秒）", type: "number", min: 5, max: 600, step: 1},
-    {name: "question_font_family", label: "字体", type: "text"},
-    {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 12, max: 120, step: 1},
-    {name: "option_font_size_pt", label: "选项字号（pt）", type: "number", min: 12, max: 120, step: 1},
-    {name: "neutral_zone_width", label: "中央中性区（0–0.6）", type: "number", min: 0, max: 0.6, step: 0.01},
-    {name: "randomize_sides", label: "随机交换左右位置", type: "checkbox"}
+    {name: "duration_seconds", label: "最长任务时长（秒）", type: "number", min: 5, max: 3600, step: 1},
+    {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "option_font_size_pt", label: "选项字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "randomize_positions", label: "每次呈现随机交换选项位置", type: "checkbox"}
+  ],
+  image_choice: [
+    {name: "question_ids", label: "连续图片题", type: "multi-select", options: [
+      ["image-banana", "请看香蕉（香蕉 / 狮子）"],
+      ["image-apple", "请看苹果（小狗 / 苹果）"],
+      ["image-cup", "请看水杯（水杯 / 床）"],
+      ["image-sun", "请看太阳（月亮 / 太阳）"],
+      ["image-car", "请看汽车（汽车 / 花）"],
+      ["image-cat", "请看小猫（鞋 / 小猫）"]
+    ]},
+    {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
+    {name: "duration_seconds", label: "每题最长时长（秒）", type: "number", min: 5, max: 600, step: 1},
+    {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "randomize_sides", label: "每题随机交换左右图片", type: "checkbox"}
+  ],
+  screen_keyboard: [
+    {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
+    {name: "duration_seconds", label: "任务时长（秒）", type: "number", min: 5, max: 3600, step: 1},
+    {name: "enable_tone_step", label: "启用声调选择步骤", type: "checkbox"},
+    {name: "output_font_size_pt", label: "上半屏输出字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "instruction_font_size_pt", label: "指示文字字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "option_font_size_pt", label: "下半屏选项字号（pt）", type: "number", min: 20, max: 120, step: 1}
   ]
 };
 
@@ -151,8 +196,14 @@ async function request(path, options = {}) {
 
 function refillSelect(select, modules, predicate) {
   const selected = select.value;
+  const choices = modules.filter(predicate);
+  const currentSignature = [...select.options]
+    .map((option) => option.value + "\u0000" + option.textContent).join("\u0001");
+  const nextSignature = choices
+    .map((module) => module.module_id + "\u0000" + module.title).join("\u0001");
+  if (currentSignature === nextSignature) return;
   select.innerHTML = "";
-  modules.filter(predicate).forEach((module) => {
+  choices.forEach((module) => {
     const option = document.createElement("option");
     option.value = module.module_id;
     option.textContent = module.title;
@@ -180,11 +231,14 @@ function renderConfig(record) {
     const label = document.createElement("label");
     label.textContent = definition.label;
     const input = definition.type === "textarea" ? document.createElement("textarea") :
-      definition.type === "select" ? document.createElement("select") : document.createElement("input");
+      ["select", "multi-select"].includes(definition.type) ? document.createElement("select") :
+      document.createElement("input");
     input.dataset.field = definition.name;
     input.dataset.kind = definition.type;
     input.dataset.nullable = definition.nullable ? "true" : "false";
-    if (definition.type === "select") {
+    if (["select", "multi-select"].includes(definition.type)) {
+      input.multiple = definition.type === "multi-select";
+      if (input.multiple) input.size = Math.min(8, Math.max(3, definition.options.length));
       definition.options.forEach(([value, text]) => {
         const option = document.createElement("option");
         option.value = value;
@@ -204,6 +258,12 @@ function renderConfig(record) {
       label.textContent = "";
       label.appendChild(input);
       label.appendChild(document.createTextNode(definition.label));
+    } else if (definition.type === "multi-select") {
+      const selectedValues = Array.isArray(value) ? value : [];
+      [...input.options].forEach((option) => {
+        option.selected = selectedValues.includes(option.value);
+      });
+      label.appendChild(input);
     } else {
       input.value = value === null || value === undefined ? "" : value;
       label.appendChild(input);
@@ -228,6 +288,8 @@ function collectConfig() {
     const name = input.dataset.field;
     if (input.dataset.kind === "checkbox") {
       config[name] = input.checked;
+    } else if (input.dataset.kind === "multi-select") {
+      config[name] = [...input.selectedOptions].map((option) => option.value);
     } else if (input.dataset.kind === "number") {
       config[name] = Number(input.value);
     } else if (input.dataset.nullable === "true" && !input.value.trim()) {
@@ -236,7 +298,7 @@ function collectConfig() {
       config[name] = input.value;
     }
   });
-  if (!["yes_no", "question_answer"].includes(config.question_type)) {
+  if ("question_type" in config && !["yes_no", "question_answer"].includes(config.question_type)) {
     config.correct_option_id = null;
   }
   return config;
@@ -288,12 +350,26 @@ function renderLatestCommand(commands) {
 async function refresh() {
   try {
     const runtime = await request("/api/v1/runtime");
+    const sequenceField = binaryFields.find((definition) =>
+      definition.name === "question_template_ids"
+    );
+    sequenceField.options = (runtime.question_bank || []).map((question) => [
+      question.template_id, question.display_label
+    ]);
     const displayLabels = {
       closed: "已关闭", idle: "待机", ready: "准备", preview: "提示",
       running: "任务进行中", paused: "已暂停", result: "任务结束", error: "异常"
     };
     document.getElementById("online").textContent = "本地后台在线";
-    document.getElementById("gaze").textContent = "眼动源：" + runtime.gaze_source;
+    const preflight = runtime.gaze_preflight;
+    let gazeText = "眼动源：" +
+      (runtime.gaze_source === "mock" ? "模拟模式（仅工程测试）" : runtime.gaze_source);
+    if (preflight && preflight.source === runtime.gaze_source) {
+      gazeText += " · " + Math.round(preflight.sample_rate_hz) + " Hz" +
+        " · 有效率 " + Math.round(preflight.valid_ratio * 100) + "%";
+      if (preflight.device_url) gazeText += "\n设备 URL：" + preflight.device_url;
+    }
+    document.getElementById("gaze").textContent = gazeText;
     document.getElementById("display").textContent =
       runtime.patient_display.text + "\n\n状态：" +
       (displayLabels[runtime.patient_display.mode] || runtime.patient_display.mode);
@@ -349,6 +425,9 @@ document.getElementById("start-task").addEventListener("click", async () => {
 });
 document.getElementById("open-display").addEventListener("click", async () => {
   await submitDesktopCommand("open_patient_display");
+});
+document.getElementById("replay-speech").addEventListener("click", async () => {
+  await submitDesktopCommand("replay_speech");
 });
 document.getElementById("stop-task").addEventListener("click", async () => {
   await submitDesktopCommand("stop_task", document.getElementById("run-module").value);

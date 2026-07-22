@@ -253,7 +253,47 @@ def format_task_result_lines(
         if completion_status is not None:
             lines.append(f"完成状态：{completion_status}")
 
-        is_binary = any(
+        sequence_questions = result.get("questions")
+
+        if isinstance(sequence_questions, list):
+            lines.append(
+                "连续题完成："
+                f"{result.get('completed_question_count', 0)}/"
+                f"{result.get('question_count', len(sequence_questions))}"
+            )
+            lines.append(f"答对题数：{result.get('correct_count', 0)}")
+
+            for question in sequence_questions:
+                if not isinstance(question, dict):
+                    continue
+
+                question_number = question.get("question_number", "-")
+                prompt = question.get("question", "-")
+                answer = question.get("selected_answer") or "未作答"
+                correct = question.get("correct")
+                correctness = (
+                    "正确" if correct is True else "错误" if correct is False else "不评分"
+                )
+                lines.append(f"第 {question_number} 题：{prompt} · 选择 {answer} · {correctness}")
+
+        is_multiple_choice = task_kind == "multiple_choice" or "selected_answers" in result
+
+        if is_multiple_choice:
+            selected_answers = result.get("selected_answers")
+            answer_text = (
+                "、".join(str(value) for value in selected_answers)
+                if isinstance(selected_answers, list) and selected_answers
+                else "未选择"
+            )
+            lines.append(f"患者选择：{answer_text}")
+            lines.append("评分结果：不评分")
+            lines.append(
+                "首次选择反应时间："
+                + milliseconds_text(result.get("first_selection_reaction_time_ms"))
+            )
+            lines.append(f"选择/取消次数：{result.get('toggle_count', 0)}")
+
+        is_binary = not is_multiple_choice and any(
             key in result
             for key in (
                 "question",

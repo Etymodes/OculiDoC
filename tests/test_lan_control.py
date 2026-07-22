@@ -221,7 +221,7 @@ def test_mobile_api_submits_desktop_commands(
     assert started.status_code == 200
     assert started.json()["payload"]["config_revision"] == 0
 
-    unsupported = client.post(
+    keyboard = client.post(
         "/api/v1/commands",
         params=parameters,
         json={
@@ -230,14 +230,43 @@ def test_mobile_api_submits_desktop_commands(
             "config_revision": 0,
         },
     )
-    assert unsupported.status_code == 422
+    assert keyboard.status_code == 200
+
+    vertical = client.post(
+        "/api/v1/commands",
+        params=parameters,
+        json={
+            "command_type": "start_task",
+            "module_id": "binary_vertical",
+            "config_revision": 0,
+        },
+    )
+    assert vertical.status_code == 200
+
+    multiple = client.post(
+        "/api/v1/commands",
+        params=parameters,
+        json={
+            "command_type": "start_task",
+            "module_id": "multiple_choice",
+            "config_revision": 0,
+        },
+    )
+    assert multiple.status_code == 200
+
+    replayed = client.post(
+        "/api/v1/commands",
+        params=parameters,
+        json={"command_type": "replay_speech"},
+    )
+    assert replayed.status_code == 200
 
     listed = client.get(
         "/api/v1/commands",
         params=parameters,
     )
     assert listed.status_code == 200
-    assert len(listed.json()) == 2
+    assert len(listed.json()) == 6
 
 
 def test_mobile_api_synchronizes_versioned_task_configs(tmp_path: Path) -> None:

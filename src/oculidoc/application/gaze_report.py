@@ -346,7 +346,66 @@ def _task_result_rows(
         )
     )
 
-    is_binary = any(
+    sequence_questions = result.get("questions")
+
+    if isinstance(sequence_questions, list):
+        rows.extend(
+            (
+                (
+                    "连续题完成",
+                    f"{result.get('completed_question_count', 0)}/"
+                    f"{result.get('question_count', len(sequence_questions))}",
+                ),
+                ("答对题数", _display_value(result.get("correct_count"))),
+            )
+        )
+
+        for question in sequence_questions:
+            if not isinstance(question, dict):
+                continue
+
+            correct = question.get("correct")
+            correctness = "正确" if correct is True else "错误" if correct is False else "不评分"
+            rows.append(
+                (
+                    f"第 {question.get('question_number', '-')} 题",
+                    f"{question.get('question', '-')} · "
+                    f"选择 {question.get('selected_answer') or '未作答'} · {correctness}",
+                )
+            )
+
+    is_multiple_choice = task_kind == "multiple_choice" or "selected_answers" in result
+
+    if is_multiple_choice:
+        selected_answers = result.get("selected_answers")
+        selected_option_ids = result.get("selected_option_ids")
+        rows.extend(
+            (
+                ("问题", _display_value(result.get("question"))),
+                (
+                    "患者选择",
+                    "、".join(str(value) for value in selected_answers)
+                    if isinstance(selected_answers, list) and selected_answers
+                    else "-",
+                ),
+                (
+                    "逻辑选项",
+                    ", ".join(str(value) for value in selected_option_ids)
+                    if isinstance(selected_option_ids, list) and selected_option_ids
+                    else "-",
+                ),
+                ("当前选择数", _display_value(result.get("selected_count"))),
+                ("选择/取消次数", _display_value(result.get("toggle_count"))),
+                ("排列方式", _display_value(result.get("layout"))),
+                ("评分结果", "不评分"),
+                (
+                    "首次选择反应时间",
+                    _display_ms(result.get("first_selection_reaction_time_ms")),
+                ),
+            )
+        )
+
+    is_binary = not is_multiple_choice and any(
         key in result
         for key in (
             "question",
@@ -387,8 +446,8 @@ def _task_result_rows(
                     _display_value(result.get("selected_option_id")),
                 ),
                 (
-                    "显示侧",
-                    _display_value(result.get("selected_side")),
+                    "显示位置",
+                    _display_value(result.get("selected_position", result.get("selected_side"))),
                 ),
                 (
                     "评分结果",
@@ -879,7 +938,7 @@ def _metric_rows(
         ),
         (
             "Valid ratio",
-            f"{float(metrics['valid_sample_ratio']):.1%}",
+            _display_ratio(metrics["valid_sample_ratio"]),
         ),
         (
             "Questions",
@@ -1061,6 +1120,8 @@ def generate_gaze_session_report(
         tracking_errors,
         list,
     )
+    dwell_by_role_ms = metrics["dwell_by_role_ms"]
+    assert isinstance(dwell_by_role_ms, dict)
 
     screen_heatmap_path = report_directory / "screen_heatmap.png"
     semantic_aoi_path = report_directory / "semantic_aoi.png"
@@ -1073,7 +1134,7 @@ def generate_gaze_session_report(
         screen_heatmap_path,
     )
     _semantic_aoi_plot(
-        dict(metrics["dwell_by_role_ms"]),
+        dwell_by_role_ms,
         semantic_aoi_path,
     )
 
@@ -1084,7 +1145,7 @@ def generate_gaze_session_report(
         )
 
     generated_at_text = generated_at.isoformat()
-    report_document = {
+    report_document: dict[str, object] = {
         "schema_version": "1.1",
         "task_results": task_results,
         "generated_at_utc": (generated_at_text),

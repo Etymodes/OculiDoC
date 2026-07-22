@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QApplication
 from oculidoc.branding import (
     apply_application_branding,
 )
-from oculidoc.config import Settings, get_settings
+from oculidoc.config import Settings, apply_saved_gaze_device_config, get_settings
 from oculidoc.infrastructure.database import (
     DatabaseRuntime,
     initialize_database,
@@ -60,7 +60,7 @@ def create_admin_window(
 
 def run() -> int:
     """Run the desktop application."""
-    settings = get_settings()
+    settings = apply_saved_gaze_device_config(get_settings())
     app = create_qt_application()
 
     window, database_runtime = create_admin_window(settings)

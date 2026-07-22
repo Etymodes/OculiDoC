@@ -16,10 +16,20 @@ def test_task_config_store_round_trip_and_preserves_modules(tmp_path: Path) -> N
     store = TaskConfigStore(path)
     tracking = store.load("tracking_ball")
     binary = store.load("binary_horizontal")
+    vertical = store.load("binary_vertical")
+    keyboard = store.load("screen_keyboard")
+    multiple = store.load("multiple_choice")
+    image_choice = store.load("image_choice")
 
     assert tracking.revision == 0
     assert tracking.config["diameter_px"] == 300
     assert binary.config["question"] == "你现在感到舒服吗？"
+    assert vertical.config == binary.config
+    assert keyboard.config["enable_tone_step"] is True
+    assert keyboard.config["output_font_size_pt"] == 48
+    assert multiple.config["option_count"] == 4
+    assert multiple.config["randomize_positions"] is True
+    assert image_choice.config["question_ids"] == ["image-banana", "image-apple"]
 
     tracking_config = dict(tracking.config)
     tracking_config["diameter_px"] = 180
@@ -35,15 +45,58 @@ def test_task_config_store_round_trip_and_preserves_modules(tmp_path: Path) -> N
         binary_config,
         expected_revision=binary.revision,
     )
+    vertical_config = dict(vertical.config)
+    vertical_config["option_2"] = "不能"
+    saved_vertical = store.save(
+        "binary_vertical",
+        vertical_config,
+        expected_revision=vertical.revision,
+    )
+    multiple_config = dict(multiple.config)
+    multiple_config["option_count"] = 3
+    saved_multiple = store.save(
+        "multiple_choice",
+        multiple_config,
+        expected_revision=multiple.revision,
+    )
 
     assert saved_tracking.revision == 1
     assert saved_binary.revision == 1
+    assert saved_vertical.revision == 1
+    assert saved_multiple.revision == 1
     assert store.load("tracking_ball").config["diameter_px"] == 180
     assert store.load("binary_horizontal").config["option_1"] == "能"
+    assert store.load("binary_vertical").config["option_2"] == "不能"
+    assert store.load("multiple_choice").config["option_count"] == 3
 
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == "1.0"
-    assert set(payload["modules"]) == {"tracking_ball", "binary_horizontal"}
+    assert set(payload["modules"]) == {
+        "tracking_ball",
+        "binary_horizontal",
+        "binary_vertical",
+        "multiple_choice",
+    }
+
+
+def test_screen_keyboard_config_validates_tone_boolean(tmp_path: Path) -> None:
+    store = TaskConfigStore(tmp_path / "task_configs.json")
+    record = store.load("screen_keyboard")
+    invalid = dict(record.config)
+    invalid["enable_tone_step"] = "false"
+
+    with pytest.raises(TypeError, match="enable_tone_step"):
+        store.save("screen_keyboard", invalid, expected_revision=record.revision)
+
+
+def test_multiple_choice_config_validates_randomization_boolean(tmp_path: Path) -> None:
+    store = TaskConfigStore(tmp_path / "task_configs.json")
+    record = store.load("multiple_choice")
+    invalid = dict(record.config)
+    invalid["randomize_positions"] = "false"
+
+    with pytest.raises(TypeError, match="randomize_positions"):
+        store.save("multiple_choice", invalid, expected_revision=record.revision)
 
 
 def test_task_config_store_rejects_stale_revision(tmp_path: Path) -> None:

@@ -12,7 +12,16 @@ from typing import Any
 
 from oculidoc.lan_control import utc_now_text
 
-TASK_CONFIG_MODULE_IDS = frozenset({"tracking_ball", "binary_horizontal"})
+TASK_CONFIG_MODULE_IDS = frozenset(
+    {
+        "tracking_ball",
+        "binary_horizontal",
+        "binary_vertical",
+        "screen_keyboard",
+        "multiple_choice",
+        "image_choice",
+    }
+)
 
 
 def _config_type(module_id: str) -> Any:
@@ -21,10 +30,25 @@ def _config_type(module_id: str) -> Any:
 
         return TrackingBallConfig
 
-    if module_id == "binary_horizontal":
+    if module_id in {"binary_horizontal", "binary_vertical"}:
         from oculidoc.tasks.binary_question import BinaryQuestionConfig
 
         return BinaryQuestionConfig
+
+    if module_id == "screen_keyboard":
+        from oculidoc.tasks.screen_keyboard import ScreenKeyboardConfig
+
+        return ScreenKeyboardConfig
+
+    if module_id == "multiple_choice":
+        from oculidoc.tasks.multiple_choice import MultipleChoiceConfig
+
+        return MultipleChoiceConfig
+
+    if module_id == "image_choice":
+        from oculidoc.tasks.image_choice import ImageChoiceConfig
+
+        return ImageChoiceConfig
 
     raise KeyError(f"Unsupported task configuration module: {module_id}")
 
@@ -35,7 +59,12 @@ def task_config_to_dict(config: object) -> dict[str, object]:
 
     for field in fields(config):  # type: ignore[arg-type]
         value = getattr(config, field.name)
-        values[field.name] = value.value if isinstance(value, Enum) else value
+        if isinstance(value, Enum):
+            values[field.name] = value.value
+        elif isinstance(value, tuple):
+            values[field.name] = list(value)
+        else:
+            values[field.name] = value
 
     return values
 
@@ -50,6 +79,8 @@ def task_config_from_dict(module_id: str, value: object) -> object:
     for name in {
         "show_gaze_cursor",
         "randomize_sides",
+        "randomize_positions",
+        "enable_tone_step",
     } & normalized.keys():
         if not isinstance(normalized[name], bool):
             raise TypeError(f"{name} must be a boolean.")
@@ -58,6 +89,14 @@ def task_config_from_dict(module_id: str, value: object) -> object:
     if seed is not None and (not isinstance(seed, int) or isinstance(seed, bool)):
         raise TypeError("randomization_seed must be an integer or null.")
 
+    for name in {"question_template_ids", "question_ids"} & normalized.keys():
+        identifiers = normalized[name]
+
+        if not isinstance(identifiers, (list, tuple)) or any(
+            not isinstance(value, str) for value in identifiers
+        ):
+            raise TypeError(f"{name} must be a list of strings.")
+
     return _config_type(module_id)(**normalized)
 
 
@@ -65,7 +104,7 @@ def default_task_config(module_id: str) -> object:
     """Return the existing desktop defaults for one supported module."""
     config_type = _config_type(module_id)
 
-    if module_id == "binary_horizontal":
+    if module_id in {"binary_horizontal", "binary_vertical"}:
         return config_type(question="你现在感到舒服吗？")
 
     return config_type()

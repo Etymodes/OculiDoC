@@ -23,6 +23,10 @@ from oculidoc.domain.experiment_session import (
 _GAZE_TASK_COMMANDS = {
     "tracking_ball": "tracking",
     "binary_horizontal": "binary",
+    "binary_vertical": "binary-vertical",
+    "screen_keyboard": "typing",
+    "multiple_choice": "multiple-choice",
+    "image_choice": "image-choice",
 }
 
 

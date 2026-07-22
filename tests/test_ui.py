@@ -23,6 +23,11 @@ def test_admin_window_builds(qtbot: QtBot, tmp_path: Path) -> None:
     )
     assert tracking_button is not None
     assert tracking_button.property("moduleId") == "tracking_ball"
+    assert window.update_button.text() == "检查更新"
+
+    image_button = window.findChild(QPushButton, "moduleButton_image_choice")
+    assert image_button is not None
+    assert image_button.isEnabled()
 
 
 def test_patient_window_builds(qtbot: QtBot) -> None:

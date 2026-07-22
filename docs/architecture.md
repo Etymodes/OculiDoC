@@ -31,6 +31,29 @@ Infrastructure Adapters
   - local API
 ```
 
+## 屏幕打字与语音
+
+- `ScreenKeyboardTask` 复用统一眼动采样、任务前预检、全屏计时和 `RecordedTaskRuntime`，不创建第二套任务运行时。
+- 拼音阶段状态只存在于任务进程；共享任务设置继续通过 `task_configs.json` 做版本校验和原子保存。
+- 最终文字与当前拼音通过现有 `LanControlStateStore` 的 RUNNING 状态同步，患者显示端和手机端不直接访问任务对象。
+- 自动播报由任务子进程调用 Qt 系统语音；手机端仅写入版本化 `speech_replay.json` 请求，任务进程轮询后重播最近一句，不开放公网语音接口。
+
+## 横向与纵向二分问答
+
+- `BinaryQuestionTask` 通过 `layout=horizontal/vertical` 复用同一套问题、停留、评分和记录逻辑，不维护两份任务代码。
+- 横向任务使用 `gaze_x_normalized` 与左右 AOI；纵向任务使用 `gaze_y_normalized` 与上下 AOI。
+- `binary_horizontal` 与 `binary_vertical` 使用独立配置修订号和患者会话，但共享问题库与配置模型，便于横纵协议比较。
+- 布局方向、显示位置、逻辑选项映射和 AOI 都写入结构化记录；旧版 `selected_side` 字段继续保留兼容，同时新增 `selected_position`。
+
+## 多选项问答
+
+- `MultipleChoiceTask` 复用统一预检、全屏计时、语音重播、患者会话和 `RecordedTaskRuntime`，只维护选择集合与停留切换状态。
+- 2–6 个逻辑选项与显示位置分离；随机化仅改变位置映射，不改变稳定的 `option_1` 至 `option_6` 标识。
+- 一次停留切换选择，再次停留取消；注视锁存要求视线离开后才能再次触发同一选项，避免静止注视连续反转。
+- 该任务没有正确答案和自动完成信号；多选集合持续保留到管理员退出、手机终止或达到最长时长。
+- 选择集合通过 `LanControlStateStore` 同步，问题由任务进程自动播报；手机端只写入重播请求或终止命令。
+- 记录选择/取消事件、显示位置、随机化种子、首次选择反应时间和每个选项 AOI；报告明确标为不评分。
+
 ## 依赖规则
 
 - UI 不直接读取 TCP socket；

@@ -13,7 +13,8 @@ from pydantic import BaseModel, Field
 
 from oculidoc import __version__
 from oculidoc.api.mobile_page import mobile_control_html
-from oculidoc.config import Settings, get_settings
+from oculidoc.config import Settings, apply_saved_gaze_device_config, get_settings
+from oculidoc.devices.preflight import GazePreflightStore
 from oculidoc.lan_commands import (
     REMOTE_GAZE_MODULE_IDS,
     LanCommandStore,
@@ -30,6 +31,7 @@ from oculidoc.task_configs import (
     TaskConfigConflict,
     TaskConfigStore,
 )
+from oculidoc.tasks.question_bank import BUILT_IN_QUESTION_TEMPLATES, CommonQuestionStore
 
 
 class DisplayTextRequest(BaseModel):
@@ -59,7 +61,7 @@ def create_api(
     command_store: LanCommandStore | None = None,
     task_config_store: TaskConfigStore | None = None,
 ) -> FastAPI:
-    active_settings = settings or get_settings()
+    active_settings = apply_saved_gaze_device_config(settings or get_settings())
     active_token = (
         token or os.environ.get("OCULIDOC_LAN_TOKEN", "").strip() or generate_pairing_token()
     )
@@ -80,6 +82,10 @@ def create_api(
     task_configs = task_config_store or TaskConfigStore(
         active_settings.data_dir / "runtime" / "task_configs.json"
     )
+    preflight_store = GazePreflightStore(
+        active_settings.data_dir / "runtime" / "gaze_preflight.json"
+    )
+    question_store = CommonQuestionStore(active_settings.data_dir / "common_questions.json")
     modules = {module.module_id: module for module in DEFAULT_MODULES}
 
     api = FastAPI(
@@ -98,15 +104,33 @@ def create_api(
                 detail="Invalid or expired LAN pairing token.",
             )
 
+    def current_settings() -> Settings:
+        return apply_saved_gaze_device_config(active_settings)
+
+    def common_questions() -> list[dict[str, object]]:
+        try:
+            templates = question_store.load()
+        except (OSError, KeyError, TypeError, ValueError):
+            templates = BUILT_IN_QUESTION_TEMPLATES
+
+        return [
+            {
+                **template.to_dict(),
+                "display_label": (f"[{template.question_type.display_label}] {template.question}"),
+            }
+            for template in templates
+        ]
+
     @api.get("/health", tags=["system"])
     def health() -> dict[str, str]:
+        settings_snapshot = current_settings()
         return {
-            "application": active_settings.app_name,
+            "application": settings_snapshot.app_name,
             "version": __version__,
             "status": "ok",
-            "environment": active_settings.environment,
-            "gaze_source": active_settings.gaze_source,
-            "collaborator": active_settings.collaborator_name,
+            "environment": settings_snapshot.environment,
+            "gaze_source": settings_snapshot.gaze_source,
+            "collaborator": settings_snapshot.collaborator_name,
         }
 
     @api.get("/control", response_class=HTMLResponse, include_in_schema=False)
@@ -117,13 +141,17 @@ def create_api(
     @api.get("/api/v1/runtime", tags=["lan-control"])
     def runtime(token: Annotated[str, Query(min_length=8)]) -> dict[str, object]:
         authorize(token)
+        settings_snapshot = current_settings()
         state = store.load()
+        preflight = preflight_store.load()
         return {
-            "application": active_settings.app_name,
+            "application": settings_snapshot.app_name,
             "version": __version__,
-            "gaze_source": active_settings.gaze_source,
+            "gaze_source": settings_snapshot.gaze_source,
+            "gaze_preflight": preflight.to_dict() if preflight is not None else None,
             "patient_display": state.to_dict(),
             "commands": [command.to_dict() for command in commands.list_commands(limit=10)],
+            "question_bank": common_questions(),
             "modules": [
                 {
                     "module_id": module.module_id,
@@ -281,6 +309,16 @@ def create_api(
             raise HTTPException(
                 status_code=422,
                 detail="open_patient_display does not accept module_id.",
+            )
+
+        if (
+            request.command_type is LanCommandType.REPLAY_SPEECH
+            and module_id is not None
+            and module_id not in REMOTE_GAZE_MODULE_IDS
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="replay_speech only accepts a gaze task module.",
             )
 
         payload: dict[str, object] = {}

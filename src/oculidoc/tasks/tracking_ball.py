@@ -76,6 +76,8 @@ class TrackingBallConfig:
     shape: TargetShape = TargetShape.CIRCLE
     effect: TargetEffect = TargetEffect.PULSE
     path: TargetPath = TargetPath.HORIZONTAL
+    horizontal_position: str = "middle"
+    vertical_position: str = "center"
     diameter_px: int = 300
     color: str = "#ffcc00"
     image_path: str | None = None
@@ -104,6 +106,12 @@ class TrackingBallConfig:
             "path",
             TargetPath(self.path),
         )
+
+        if self.horizontal_position not in {"top", "middle", "bottom"}:
+            raise ValueError("horizontal_position must be top, middle, or bottom.")
+
+        if self.vertical_position not in {"left", "center", "right"}:
+            raise ValueError("vertical_position must be left, center, or right.")
 
         if not 16 <= self.diameter_px <= 600:
             raise ValueError("diameter_px must be between 16 and 600.")
@@ -859,14 +867,16 @@ class TrackingBallTask(QWidget):
         phase: float,
     ) -> tuple[float, float]:
         if self.config.path is TargetPath.HORIZONTAL:
+            y_positions = {"top": 0.20, "middle": 0.50, "bottom": 0.80}
             return (
                 0.5 + 0.38 * sin(phase),
-                0.5,
+                y_positions[self.config.horizontal_position],
             )
 
         if self.config.path is TargetPath.VERTICAL:
+            x_positions = {"left": 0.20, "center": 0.50, "right": 0.80}
             return (
-                0.5,
+                x_positions[self.config.vertical_position],
                 0.5 + 0.38 * sin(phase),
             )
 
@@ -1201,6 +1211,24 @@ class TrackingBallSetupDialog(QDialog):
             self.path_combo,
         )
 
+        self.horizontal_position_combo = QComboBox()
+        self.horizontal_position_combo.addItem("屏幕上方", "top")
+        self.horizontal_position_combo.addItem("屏幕中间", "middle")
+        self.horizontal_position_combo.addItem("屏幕下方", "bottom")
+        self.horizontal_position_combo.setCurrentIndex(
+            self.horizontal_position_combo.findData(initial.horizontal_position)
+        )
+        form.addRow("水平轨迹高度：", self.horizontal_position_combo)
+
+        self.vertical_position_combo = QComboBox()
+        self.vertical_position_combo.addItem("屏幕左侧", "left")
+        self.vertical_position_combo.addItem("屏幕中间", "center")
+        self.vertical_position_combo.addItem("屏幕右侧", "right")
+        self.vertical_position_combo.setCurrentIndex(
+            self.vertical_position_combo.findData(initial.vertical_position)
+        )
+        form.addRow("垂直轨迹位置：", self.vertical_position_combo)
+
         self.effect_combo = QComboBox()
         self.effect_combo.addItem(
             "无",
@@ -1342,6 +1370,8 @@ class TrackingBallSetupDialog(QDialog):
             shape=self.shape_combo.currentData(),
             effect=self.effect_combo.currentData(),
             path=self.path_combo.currentData(),
+            horizontal_position=self.horizontal_position_combo.currentData(),
+            vertical_position=self.vertical_position_combo.currentData(),
             diameter_px=self.diameter_spin.value(),
             color=self.color_edit.text(),
             image_path=(self.image_edit.text().strip() or None),

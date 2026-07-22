@@ -158,6 +158,11 @@ def prepare_window(
         "critical",
         lambda *args: messages.append(args),
     )
+    monkeypatch.setattr(
+        AdminMainWindow,
+        "_show_timed_task_message",
+        lambda self, *args: messages.append(args),
+    )
 
     window = AdminMainWindow(
         settings,

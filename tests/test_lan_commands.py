@@ -64,3 +64,11 @@ def test_mobile_page_contains_desktop_commands() -> None:
     assert "open_patient_display" in html
     assert "start_task" in html
     assert "stop_task" in html
+    assert "replay_speech" in html
+    assert "binary_vertical" in html
+    assert "multiple_choice" in html
+    assert "image_choice" in html
+    assert "question_template_ids" in html
+    assert "currentSignature === nextSignature" in html
+    assert "每次呈现随机交换选项位置" in html
+    assert "启用声调选择步骤" in html

@@ -1,7 +1,9 @@
 """Administrator desktop dashboard."""
 
+import json
 import mimetypes
 import os
+import sys
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
@@ -10,6 +12,7 @@ from uuid import UUID
 from PySide6.QtCore import (
     QProcess,
     QProcessEnvironment,
+    Qt,
     QTimer,
 )
 from PySide6.QtGui import QCloseEvent
@@ -44,7 +47,8 @@ from oculidoc.application.gaze_task_session import (
 from oculidoc.branding import (
     brand_mark_pixmap,
 )
-from oculidoc.config import Settings
+from oculidoc.config import GazeDeviceConfig, GazeDeviceConfigStore, Settings
+from oculidoc.devices.preflight import GazePreflightResult, GazePreflightStore
 from oculidoc.domain import Patient
 from oculidoc.domain.experiment_session import (
     ExperimentSessionStatus,
@@ -70,9 +74,12 @@ from oculidoc.lan_control import (
 from oculidoc.modules.registry import DEFAULT_MODULES, ModuleDefinition
 from oculidoc.process_launch import (
     gaze_task_process_command,
+    is_frozen_application,
     local_api_process_command,
 )
+from oculidoc.speech_replay import SpeechReplayStore
 from oculidoc.task_configs import TaskConfigStore
+from oculidoc.ui.device_settings import DeviceSettingsDialog
 from oculidoc.ui.lan_pairing import (
     HoverPairingButton,
     LanPairingDialog,
@@ -83,11 +90,12 @@ from oculidoc.ui.patient_management import (
 )
 from oculidoc.ui.patient_window import PatientDisplayWindow
 from oculidoc.ui.session_history import PatientSessionHistoryDialog
+from oculidoc.updater import find_repository_root
 from oculidoc.vision.camera_preview_window import (
     CameraPreviewWindow,
 )
 
-RESULT_DISPLAY_MILLISECONDS = 1_500
+RESULT_DISPLAY_MILLISECONDS = 6_000
 
 
 class AdminMainWindow(QMainWindow):
@@ -118,6 +126,7 @@ class AdminMainWindow(QMainWindow):
         ] = {}
         self._active_gaze_module_ids: set[str] = set()
         self._backend_process: QProcess | None = None
+        self._update_process: QProcess | None = None
         self._pairing_dialog: LanPairingDialog | None = None
         self._pairing_pinned = False
         self._backend_status_name = "准备启动"
@@ -135,8 +144,15 @@ class AdminMainWindow(QMainWindow):
             self.settings.data_dir.expanduser() / "runtime" / "lan_commands"
         ).resolve()
         self._lan_command_store = LanCommandStore(self._lan_command_directory)
+        self._speech_replay_store = SpeechReplayStore(
+            self.settings.data_dir.expanduser() / "runtime" / "speech_replay.json"
+        )
         self._task_config_store = TaskConfigStore(
             self.settings.data_dir.expanduser() / "runtime" / "task_configs.json"
+        )
+        self._gaze_device_config_store = GazeDeviceConfigStore.for_settings(self.settings)
+        self._gaze_preflight_store = GazePreflightStore(
+            self.settings.data_dir.expanduser() / "runtime" / "gaze_preflight.json"
         )
         self._lan_control_url = build_control_url(
             self._lan_host,
@@ -265,16 +281,74 @@ class AdminMainWindow(QMainWindow):
         return f"患者数据：已初始化 · 总计 {total_count} · 启用 {active_count}"
 
     def _gaze_source_status_text(self) -> str:
-        """Return the configured gaze source without pretending it is live."""
+        """Return configured source plus the latest measured live quality."""
+        preflight = self._current_gaze_preflight()
+
+        if self.settings.gaze_source == "mock":
+            if preflight is None:
+                return "眼动源：模拟模式（仅工程测试）"
+
+            return (
+                "眼动源：模拟模式（仅工程测试）"
+                f" · {preflight.sample_rate_hz:.0f} Hz"
+                f" · 有效率 {preflight.valid_ratio:.0%}"
+            )
+
         labels = {
-            "mock": "眼动源：模拟数据源",
-            "tobii_stream_engine": ("眼动源：Tobii Eye Tracker 5 · 原生 Stream Engine"),
-            "tobii_legacy_bridge": "眼动源：Tobii 兼容桥接",
+            "tobii_stream_engine": "Tobii Eye Tracker 5",
+            "tobii_legacy_bridge": "Tobii 兼容桥接",
         }
-        return labels.get(
-            self.settings.gaze_source,
-            f"眼动源：{self.settings.gaze_source}",
+        source_name = labels.get(self.settings.gaze_source, self.settings.gaze_source)
+
+        if preflight is None:
+            return f"眼动源：{source_name} · 尚未预检"
+
+        connection = "已连接" if self._active_gaze_module_ids else "最近预检"
+        suffix = (
+            f"{connection} · {preflight.sample_rate_hz:.0f} Hz · 有效率 {preflight.valid_ratio:.0%}"
         )
+        if preflight.error and preflight.sample_count == 0:
+            suffix = f"预检失败 · {preflight.error}"
+        elif not preflight.passed:
+            suffix = (
+                f"有效率不足 · {preflight.sample_rate_hz:.0f} Hz"
+                f" · 有效率 {preflight.valid_ratio:.0%}"
+            )
+        return f"眼动源：{source_name} · {suffix}"
+
+    def _current_gaze_preflight(self) -> GazePreflightResult | None:
+        result = self._gaze_preflight_store.load()
+        if result is None or result.source != self.settings.gaze_source:
+            return None
+        return result
+
+    def _refresh_gaze_status(self) -> None:
+        if not hasattr(self, "gaze_status_label"):
+            return
+
+        result = self._current_gaze_preflight()
+        color = "#6b7280"
+        if self.settings.gaze_source != "mock":
+            if result is None or (result.error and result.sample_count == 0):
+                color = "#b42318"
+            elif result.passed:
+                color = "#176b36"
+            else:
+                color = "#8a5a00"
+        self.gaze_status_label.setText(self._gaze_source_status_text())
+        self.gaze_status_label.setStyleSheet(f"color:{color}; font-weight:700;")
+
+    def _show_timed_task_message(
+        self,
+        icon: QMessageBox.Icon,
+        title: str,
+        message: str,
+    ) -> None:
+        """Show a non-blocking task result message that cannot cover the next setup dialog."""
+        box = QMessageBox(icon, title, message, QMessageBox.StandardButton.NoButton, self)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        box.show()
+        QTimer.singleShot(RESULT_DISPLAY_MILLISECONDS, box.close)
 
     def _build_header(
         self,
@@ -310,11 +384,119 @@ class AdminMainWindow(QMainWindow):
         emergency_button.setObjectName("dangerButton")
         emergency_button.clicked.connect(self._request_application_exit)
 
+        self.update_button = QPushButton("检查更新")
+        self.update_button.setObjectName("secondaryButton")
+        self.update_button.clicked.connect(self._check_for_updates)
+
         header.addWidget(logo_label)
         header.addLayout(titles)
         header.addStretch(1)
+        header.addWidget(self.update_button)
         header.addWidget(emergency_button)
         return header
+
+    def _check_for_updates(self, checked: bool = False) -> None:
+        """Run the clean fast-forward updater without blocking the administrator UI."""
+        del checked
+
+        if self._update_process is not None:
+            return
+
+        if self._active_gaze_module_ids:
+            QMessageBox.information(
+                self,
+                "任务进行中",
+                "请先结束当前眼动任务，再检查软件更新。",
+            )
+            return
+
+        root_hint = os.environ.get("OCULIDOC_REPOSITORY_ROOT", "").strip() or __file__
+        repository_root = find_repository_root(root_hint)
+
+        if repository_root is None:
+            QMessageBox.information(
+                self,
+                "当前安装方式不支持一键更新",
+                "未找到 OculiDoC 源码仓库。请使用安装包更新，或在源码仓库中运行程序。",
+            )
+            return
+
+        confirmation = QMessageBox.question(
+            self,
+            "检查并更新 OculiDoC",
+            "将从官方仓库检查当前分支，并且只在工作区干净且可快进时更新。继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+
+        if confirmation != QMessageBox.StandardButton.Yes:
+            return
+
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        process.setProgram(sys.executable)
+        process.setArguments(
+            ["--update", "--repo", str(repository_root)]
+            if is_frozen_application()
+            else ["-m", "oculidoc.updater", "--repo", str(repository_root)]
+        )
+        process.finished.connect(self._finish_update_check)
+        self._update_process = process
+        self.update_button.setEnabled(False)
+        self.update_button.setText("正在检查更新…")
+        process.start()
+
+        if not process.waitForStarted(5_000):
+            self._update_process = None
+            self.update_button.setEnabled(True)
+            self.update_button.setText("检查更新")
+            QMessageBox.warning(self, "无法检查更新", process.errorString())
+            process.deleteLater()
+
+    def _finish_update_check(self, exit_code: int, exit_status: object) -> None:
+        del exit_status
+        process = self._update_process
+        self._update_process = None
+        self.update_button.setEnabled(True)
+        self.update_button.setText("检查更新")
+
+        if process is None:
+            return
+
+        output = bytes(process.readAllStandardOutput())  # type: ignore[call-overload]
+        text_output = output.decode("utf-8", errors="replace").strip()
+        process.deleteLater()
+
+        try:
+            payload = json.loads(text_output.splitlines()[-1])
+        except (IndexError, json.JSONDecodeError):
+            payload = {"status": "error", "message": text_output or f"退出码 {exit_code}"}
+
+        status = payload.get("status") if isinstance(payload, dict) else "error"
+
+        if exit_code != 0 or status == "error":
+            message = (
+                str(payload.get("message", text_output))
+                if isinstance(payload, dict)
+                else text_output
+            )
+            QMessageBox.warning(self, "OculiDoC 更新未完成", message)
+            return
+
+        if status == "up_to_date":
+            QMessageBox.information(self, "OculiDoC 已是最新版本", "当前分支无需更新。")
+            return
+
+        restart = QMessageBox.question(
+            self,
+            "OculiDoC 更新完成",
+            "更新已安全快进完成。需要退出并重新启动后生效。现在退出吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+
+        if restart == QMessageBox.StandardButton.Yes:
+            QApplication.quit()
 
     def _build_patient_panel(
         self,
@@ -461,6 +643,9 @@ class AdminMainWindow(QMainWindow):
 
         self.gaze_status_label = QLabel(self._gaze_source_status_text())
         self.gaze_status_label.setObjectName("subtitle")
+        self.device_settings_button = QPushButton("设备设置")
+        self.device_settings_button.setObjectName("secondaryButton")
+        self.device_settings_button.clicked.connect(self._open_device_settings)
 
         self.backend_status_button = HoverPairingButton(self._backend_status_text())
         self.backend_status_button.setObjectName("backendStatusButton")
@@ -473,11 +658,37 @@ class AdminMainWindow(QMainWindow):
         self.patient_status_label.setObjectName("subtitle")
 
         layout.addWidget(self.gaze_status_label)
+        layout.addWidget(self.device_settings_button)
         layout.addStretch(1)
         layout.addWidget(self.backend_status_button)
         layout.addStretch(1)
         layout.addWidget(self.patient_status_label)
+        self._refresh_gaze_status()
         return panel
+
+    def _open_device_settings(self, checked: bool = False) -> None:
+        del checked
+
+        if self._active_gaze_module_ids:
+            QMessageBox.information(
+                self,
+                "任务进行中",
+                "请先结束当前眼动任务，再修改设备设置。",
+            )
+            return
+
+        dialog = DeviceSettingsDialog(
+            self.settings,
+            self._gaze_device_config_store,
+            self._current_gaze_preflight(),
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        config = self._gaze_device_config_store.load(GazeDeviceConfig.from_settings(self.settings))
+        self.settings = config.apply(self.settings)
+        self._refresh_gaze_status()
 
     def _backend_status_text(self) -> str:
         return (
@@ -670,6 +881,8 @@ class AdminMainWindow(QMainWindow):
             self._pairing_dialog.show_near(self.backend_status_button)
 
     def _poll_lan_control_state(self) -> None:
+        self._refresh_gaze_status()
+
         try:
             state = self._lan_state_store.load()
         except (
@@ -786,6 +999,9 @@ class AdminMainWindow(QMainWindow):
         if command.command_type is LanCommandType.STOP_TASK:
             return self._execute_remote_task_stop(command)
 
+        if command.command_type is LanCommandType.REPLAY_SPEECH:
+            return self._execute_remote_speech_replay(command)
+
         raise LanCommandRejected("未知桌面命令。")
 
     def _execute_remote_task_start(self, command: LanCommand) -> str:
@@ -859,6 +1075,21 @@ class AdminMainWindow(QMainWindow):
 
         self._reset_patient_display()
         return f"已向 {len(matches)} 个任务进程发送终止命令。"
+
+    def _execute_remote_speech_replay(self, command: LanCommand) -> str:
+        module_id = command.module_id
+
+        if module_id is not None:
+            if module_id not in self._active_gaze_module_ids:
+                raise LanCommandRejected("指定任务当前没有运行。")
+            active_module = module_id
+        elif len(self._active_gaze_module_ids) == 1:
+            active_module = next(iter(self._active_gaze_module_ids))
+        else:
+            raise LanCommandRejected("当前没有可重播语音的运行中任务。")
+
+        request = self._speech_replay_store.request(active_module)
+        return f"已请求重播当前任务语音（版本 {request.revision}）。"
 
     def _open_patient_display(self, checked: bool = False) -> None:
         del checked
@@ -960,6 +1191,10 @@ class AdminMainWindow(QMainWindow):
         if module.module_id in {
             "tracking_ball",
             "binary_horizontal",
+            "binary_vertical",
+            "screen_keyboard",
+            "multiple_choice",
+            "image_choice",
         }:
             self._open_gaze_task_module(module)
             return
@@ -1146,6 +1381,11 @@ class AdminMainWindow(QMainWindow):
         else:
             self._active_gaze_module_ids.discard(module_id)
 
+        self._refresh_gaze_status()
+
+        if self._update_process is None:
+            self.update_button.setEnabled(not self._active_gaze_module_ids)
+
         button = self.module_buttons.get(module_id)
 
         if button is None:
@@ -1278,14 +1518,21 @@ class AdminMainWindow(QMainWindow):
                         )
 
             with suppress(Exception):
-                self._publish_patient_display(
+                result_state = self._publish_patient_display(
                     f"{module.title}启动失败\n请联系管理员",
                     mode=PatientDisplayMode.ERROR,
                     task_id=module.module_id,
                 )
+                QTimer.singleShot(
+                    RESULT_DISPLAY_MILLISECONDS,
+                    partial(
+                        self._reset_patient_display_after_result,
+                        result_state.revision,
+                    ),
+                )
 
-            QMessageBox.critical(
-                self,
+            self._show_timed_task_message(
+                QMessageBox.Icon.Critical,
                 "无法启动眼动任务",
                 str(error),
             )
@@ -1317,7 +1564,7 @@ class AdminMainWindow(QMainWindow):
         if process is None or launch is None or self.experiment_session_service is None:
             return
 
-        raw_output = bytes(process.readAllStandardOutput())
+        raw_output = bytes(process.readAllStandardOutput())  # type: ignore[call-overload]
         process_output = raw_output.decode(
             "utf-8",
             errors="replace",
@@ -1341,14 +1588,21 @@ class AdminMainWindow(QMainWindow):
                     )
 
             with suppress(Exception):
-                self._publish_patient_display(
+                result_state = self._publish_patient_display(
                     "任务记录处理失败\n请联系管理员",
                     mode=PatientDisplayMode.ERROR,
                     task_id=launch.module_id,
                 )
+                QTimer.singleShot(
+                    RESULT_DISPLAY_MILLISECONDS,
+                    partial(
+                        self._reset_patient_display_after_result,
+                        result_state.revision,
+                    ),
+                )
 
-            QMessageBox.warning(
-                self,
+            self._show_timed_task_message(
+                QMessageBox.Icon.Warning,
                 "眼动任务会话结束失败",
                 str(error),
             )
@@ -1367,32 +1621,39 @@ class AdminMainWindow(QMainWindow):
                     result_state.revision,
                 ),
             )
-            QMessageBox.information(
-                self,
+            self._show_timed_task_message(
+                QMessageBox.Icon.Information,
                 "眼动任务已保存",
                 (f"任务记录已关联到当前患者的实验会话。\n目录：{launch.session_directory}"),
             )
         elif status is ExperimentSessionStatus.ABORTED:
             self._reset_patient_display()
-            QMessageBox.information(
-                self,
+            self._show_timed_task_message(
+                QMessageBox.Icon.Information,
                 "眼动任务已取消",
                 "设置窗口关闭，未产生正式任务记录。",
             )
         else:
             message = "任务进程未正常完成。"
 
-            self._publish_patient_display(
+            result_state = self._publish_patient_display(
                 "任务运行异常\n请联系管理员",
                 mode=PatientDisplayMode.ERROR,
                 task_id=launch.module_id,
+            )
+            QTimer.singleShot(
+                RESULT_DISPLAY_MILLISECONDS,
+                partial(
+                    self._reset_patient_display_after_result,
+                    result_state.revision,
+                ),
             )
 
             if process_output.strip():
                 message += "\n\n进程输出：\n" + process_output.strip()[-2_000:]
 
-            QMessageBox.warning(
-                self,
+            self._show_timed_task_message(
+                QMessageBox.Icon.Warning,
                 "眼动任务失败",
                 message,
             )
@@ -1400,7 +1661,10 @@ class AdminMainWindow(QMainWindow):
     def _reset_patient_display_after_result(self, result_revision: int) -> None:
         state = self._lan_state_store.load()
 
-        if state.revision == result_revision and state.mode is PatientDisplayMode.RESULT:
+        if state.revision == result_revision and state.mode in {
+            PatientDisplayMode.RESULT,
+            PatientDisplayMode.ERROR,
+        }:
             self._reset_patient_display()
 
     def _show_module_placeholder(

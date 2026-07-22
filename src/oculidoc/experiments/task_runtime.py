@@ -118,7 +118,11 @@ class RecordedTaskRuntime(QObject):
             return "tracking_ball"
 
         if "binary" in lowered or "question" in lowered:
-            return "binary_horizontal"
+            return (
+                "binary_vertical"
+                if getattr(task, "layout_orientation", "horizontal") == "vertical"
+                else "binary_horizontal"
+            )
 
         return (
             re.sub(

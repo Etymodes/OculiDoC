@@ -254,6 +254,42 @@ def test_completed_run_registers_artifacts(
     runtime.dispose()
 
 
+def test_vertical_binary_uses_distinct_patient_session_command(tmp_path: Path) -> None:
+    runtime = initialize_database(
+        tmp_path / "oculidoc.sqlite3",
+        data_root=tmp_path / "data",
+    )
+    patient = create_patient(runtime)
+
+    launch = create_gaze_task_launch(
+        runtime.experiment_session_service,
+        patient_id=patient.patient_id,
+        module_id="binary_vertical",
+    )
+
+    assert launch.module_id == "binary_vertical"
+    assert launch.command == "binary-vertical"
+    runtime.dispose()
+
+
+def test_multiple_choice_uses_distinct_patient_session_command(tmp_path: Path) -> None:
+    runtime = initialize_database(
+        tmp_path / "oculidoc.sqlite3",
+        data_root=tmp_path / "data",
+    )
+    patient = create_patient(runtime)
+
+    launch = create_gaze_task_launch(
+        runtime.experiment_session_service,
+        patient_id=patient.patient_id,
+        module_id="multiple_choice",
+    )
+
+    assert launch.module_id == "multiple_choice"
+    assert launch.command == "multiple-choice"
+    runtime.dispose()
+
+
 def test_cancelled_setup_aborts_session(
     tmp_path: Path,
 ) -> None:

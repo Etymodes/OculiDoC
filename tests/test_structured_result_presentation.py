@@ -159,6 +159,39 @@ def test_report_loads_binary_and_tracking_results(
     assert "75.0%" in rendered
 
 
+def test_report_and_history_format_multiple_choice_without_scoring(
+    tmp_path: Path,
+) -> None:
+    run_directory = tmp_path / "tasks" / "run-multiple"
+    write_result(
+        run_directory,
+        task_kind="multiple_choice",
+        result={
+            "completion_status": "selected",
+            "completion_reason": "manual_exit",
+            "question": "您现在需要什么？",
+            "selected_option_ids": ["option_1", "option_3"],
+            "selected_answers": ["喝水", "翻身"],
+            "selected_count": 2,
+            "toggle_count": 4,
+            "layout": "grid",
+            "is_scored": False,
+            "first_selection_reaction_time_ms": 650.0,
+        },
+        event_types=("option_selected", "option_cancelled", "task_completed"),
+    )
+
+    records = _load_task_results(tmp_path)
+    rendered = _task_result_sections(records)
+    lines = format_task_result_lines(tuple(records))
+
+    assert "您现在需要什么？" in rendered
+    assert "喝水、翻身" in rendered
+    assert "评分结果</th><td>不评分" in rendered
+    assert "患者选择：喝水、翻身" in lines
+    assert "首次选择反应时间：650 ms" in lines
+
+
 def test_history_exposes_structured_result_lines(
     tmp_path: Path,
 ) -> None:

@@ -30,7 +30,8 @@ DEFAULT_MODULES: tuple[ModuleDefinition, ...] = (
     ModuleDefinition(
         "screen_keyboard",
         "屏幕打字",
-        "通过停留选择进行文字输入和辅助沟通。",
+        "通过大字声母、韵母、韵尾和可选声调分步停留输入拼音。",
+        "available",
     ),
     ModuleDefinition(
         "binary_horizontal",
@@ -42,16 +43,19 @@ DEFAULT_MODULES: tuple[ModuleDefinition, ...] = (
         "binary_vertical",
         "上下二分问答",
         "上下排列两个答案，支持停留确认和评分。",
+        "available",
     ),
     ModuleDefinition(
         "multiple_choice",
         "多选项问答",
-        "显示多个文字选项并保存回答、反应时间和评分。",
+        "显示 2–6 个文字选项，支持多选、再次选择取消和手动结束。",
+        "available",
     ),
     ModuleDefinition(
         "image_choice",
         "语音图片选择",
         "播报图片内容，从左右图片中选择正确目标。",
+        "available",
     ),
     ModuleDefinition(
         "instruction_fixation",
