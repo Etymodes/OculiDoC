@@ -346,6 +346,34 @@ def _task_result_rows(
         )
     )
 
+    sequence_questions = result.get("questions")
+
+    if isinstance(sequence_questions, list):
+        rows.extend(
+            (
+                (
+                    "连续题完成",
+                    f"{result.get('completed_question_count', 0)}/"
+                    f"{result.get('question_count', len(sequence_questions))}",
+                ),
+                ("答对题数", _display_value(result.get("correct_count"))),
+            )
+        )
+
+        for question in sequence_questions:
+            if not isinstance(question, dict):
+                continue
+
+            correct = question.get("correct")
+            correctness = "正确" if correct is True else "错误" if correct is False else "不评分"
+            rows.append(
+                (
+                    f"第 {question.get('question_number', '-')} 题",
+                    f"{question.get('question', '-')} · "
+                    f"选择 {question.get('selected_answer') or '未作答'} · {correctness}",
+                )
+            )
+
     is_multiple_choice = task_kind == "multiple_choice" or "selected_answers" in result
 
     if is_multiple_choice:

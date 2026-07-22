@@ -19,6 +19,7 @@ def test_task_config_store_round_trip_and_preserves_modules(tmp_path: Path) -> N
     vertical = store.load("binary_vertical")
     keyboard = store.load("screen_keyboard")
     multiple = store.load("multiple_choice")
+    image_choice = store.load("image_choice")
 
     assert tracking.revision == 0
     assert tracking.config["diameter_px"] == 300
@@ -28,6 +29,7 @@ def test_task_config_store_round_trip_and_preserves_modules(tmp_path: Path) -> N
     assert keyboard.config["output_font_size_pt"] == 48
     assert multiple.config["option_count"] == 4
     assert multiple.config["randomize_positions"] is True
+    assert image_choice.config["question_ids"] == ["image-banana", "image-apple"]
 
     tracking_config = dict(tracking.config)
     tracking_config["diameter_px"] = 180

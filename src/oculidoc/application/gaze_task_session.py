@@ -26,6 +26,7 @@ _GAZE_TASK_COMMANDS = {
     "binary_vertical": "binary-vertical",
     "screen_keyboard": "typing",
     "multiple_choice": "multiple-choice",
+    "image_choice": "image-choice",
 }
 
 

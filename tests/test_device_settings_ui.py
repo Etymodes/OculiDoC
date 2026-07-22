@@ -7,6 +7,7 @@ from oculidoc.config import GazeDeviceConfig, GazeDeviceConfigStore, Settings
 from oculidoc.ui.device_settings import (
     DeviceSettingsDialog,
     find_tobii_experience_shortcut,
+    find_tobii_ghost_shortcut,
 )
 
 
@@ -78,3 +79,16 @@ def test_find_tobii_experience_start_menu_shortcut(
     monkeypatch.delenv("ProgramData", raising=False)
 
     assert find_tobii_experience_shortcut() == shortcut
+
+
+def test_find_tobii_ghost_start_menu_shortcut(tmp_path: Path, monkeypatch) -> None:
+    program_data = tmp_path / "ProgramData"
+    shortcut = (
+        program_data / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Tobii Ghost.lnk"
+    )
+    shortcut.parent.mkdir(parents=True)
+    shortcut.write_bytes(b"test")
+    monkeypatch.setenv("ProgramData", str(program_data))
+    monkeypatch.delenv("APPDATA", raising=False)
+
+    assert find_tobii_ghost_shortcut() == shortcut

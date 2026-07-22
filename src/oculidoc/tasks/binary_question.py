@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QProgressBar,
     QPushButton,
@@ -69,6 +71,7 @@ class BinaryQuestionConfig:
     neutral_zone_width: float
     randomize_sides: bool
     randomization_seed: int | None
+    question_template_ids: tuple[str, ...]
 
     def __init__(
         self,
@@ -86,6 +89,7 @@ class BinaryQuestionConfig:
         neutral_zone_width: float = 0.08,
         randomize_sides: bool = True,
         randomization_seed: int | None = None,
+        question_template_ids: tuple[str, ...] | list[str] = (),
         left_answer: str | None = None,
         right_answer: str | None = None,
         correct_side: str | None = None,
@@ -164,6 +168,17 @@ class BinaryQuestionConfig:
         if randomization_seed is not None and randomization_seed < 0:
             raise ValueError("randomization_seed cannot be negative.")
 
+        normalized_template_ids = tuple(str(value).strip() for value in question_template_ids)
+
+        if any(not value for value in normalized_template_ids):
+            raise ValueError("question_template_ids cannot contain empty identifiers.")
+
+        if len(set(normalized_template_ids)) != len(normalized_template_ids):
+            raise ValueError("question_template_ids cannot contain duplicates.")
+
+        if len(normalized_template_ids) > 50:
+            raise ValueError("question_template_ids cannot contain more than 50 questions.")
+
         object.__setattr__(self, "question", normalized_question)
         object.__setattr__(self, "option_1", normalized_option_1)
         object.__setattr__(self, "option_2", normalized_option_2)
@@ -201,6 +216,7 @@ class BinaryQuestionConfig:
             "randomization_seed",
             randomization_seed,
         )
+        object.__setattr__(self, "question_template_ids", normalized_template_ids)
 
     @property
     def is_scored(self) -> bool:
@@ -301,6 +317,16 @@ class BinaryQuestionTask(QWidget):
             QPushButton#answerButton[active="true"] {
                 border-color: #ffe66d;
                 background: #285c85;
+            }
+            QPushButton#answerButton[correct="true"] {
+                border-color: #6ee7a2;
+                background: #176b36;
+                color: white;
+            }
+            QPushButton#answerButton[incorrect="true"] {
+                border-color: #ffb4ad;
+                background: #8f231d;
+                color: white;
             }
             QProgressBar {
                 min-height: 28px;
@@ -1081,6 +1107,35 @@ class BinaryQuestionTask(QWidget):
             answer,
         )
 
+    def _refresh_feedback_button(self, button: QPushButton) -> None:
+        button.style().unpolish(button)
+        button.style().polish(button)
+        button.update()
+
+    def show_correct_feedback(self) -> None:
+        """Mark the selected option with a green check while awaiting manual advance."""
+        if self._result is None:
+            return
+
+        side, answer = self._result
+        button = self._button_by_side[side]
+        button.setProperty("correct", True)
+        button.setText(f"✓\n{answer}")
+        self.question_label.setText("回答正确 · 按空格或 Enter 进入下一题")
+        self._refresh_feedback_button(button)
+
+    def show_incorrect_feedback(self) -> None:
+        """Mark an incorrect option before the same question is retried."""
+        if self._result is None:
+            return
+
+        side, answer = self._result
+        button = self._button_by_side[side]
+        button.setProperty("incorrect", True)
+        button.setText(f"✕\n{answer}")
+        self.question_label.setText("答案不正确 · 即将重新呈现本题")
+        self._refresh_feedback_button(button)
+
 
 class BinaryQuestionSetupDialog(QDialog):
     """Configure a reusable two-option question."""
@@ -1112,6 +1167,7 @@ class BinaryQuestionSetupDialog(QDialog):
 
         self.question_store = CommonQuestionStore(question_bank_path)
         self._templates: dict[str, CommonQuestionTemplate] = {}
+        self._initial_sequence_ids = set(initial.question_template_ids)
         form = QFormLayout()
 
         self.common_question_combo = QComboBox()
@@ -1131,6 +1187,11 @@ class BinaryQuestionSetupDialog(QDialog):
         common_row.addWidget(self.edit_common_button)
         common_row.addWidget(self.add_common_button)
         form.addRow("常用问题：", common_row)
+
+        self.sequence_question_list = QListWidget()
+        self.sequence_question_list.setObjectName("binarySequenceQuestionList")
+        self.sequence_question_list.setMinimumHeight(150)
+        form.addRow("连续题目（可勾选多题）：", self.sequence_question_list)
 
         self.question_type_group = QButtonGroup(self)
         self.question_type_group.setExclusive(True)
@@ -1258,9 +1319,15 @@ class BinaryQuestionSetupDialog(QDialog):
         self,
         selected_id: str | None = None,
     ) -> None:
+        checked_ids = self.selected_question_template_ids()
+
+        if not checked_ids and self.sequence_question_list.count() == 0:
+            checked_ids = tuple(self._initial_sequence_ids)
+
         self.common_question_combo.blockSignals(True)
         self.common_question_combo.clear()
         self.common_question_combo.addItem("选择常用问题…", None)
+        self.sequence_question_list.clear()
 
         try:
             templates = self.question_store.load()
@@ -1286,9 +1353,33 @@ class BinaryQuestionSetupDialog(QDialog):
             if template.template_id == selected_id:
                 selected_index = self.common_question_combo.count() - 1
 
+            sequence_item = QListWidgetItem(
+                f"[{prefix}] {template.question}",
+                self.sequence_question_list,
+            )
+            sequence_item.setData(Qt.ItemDataRole.UserRole, template.template_id)
+            sequence_item.setFlags(sequence_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            sequence_item.setCheckState(
+                Qt.CheckState.Checked
+                if template.template_id in checked_ids
+                else Qt.CheckState.Unchecked
+            )
+
         self.common_question_combo.setCurrentIndex(selected_index)
         self.common_question_combo.blockSignals(False)
         self._refresh_common_question_actions()
+
+    def selected_question_template_ids(self) -> tuple[str, ...]:
+        """Return checked common-question identifiers in visible order."""
+        selected: list[str] = []
+
+        for index in range(self.sequence_question_list.count()):
+            item = self.sequence_question_list.item(index)
+
+            if item.checkState() == Qt.CheckState.Checked:
+                selected.append(str(item.data(Qt.ItemDataRole.UserRole)))
+
+        return tuple(selected)
 
     def _refresh_common_question_actions(
         self,
@@ -1439,4 +1530,46 @@ class BinaryQuestionSetupDialog(QDialog):
             neutral_zone_width=self.neutral_zone_spin.value(),
             randomize_sides=self.randomize_sides_check.isChecked(),
             randomization_seed=self._randomization_seed,
+            question_template_ids=self.selected_question_template_ids(),
         )
+
+
+def binary_question_sequence(
+    config: BinaryQuestionConfig,
+    store: CommonQuestionStore,
+) -> tuple[tuple[str, BinaryQuestionConfig], ...]:
+    """Resolve checked common questions while preserving display and dwell settings."""
+    if not config.question_template_ids:
+        return (("binary-question-1", config),)
+
+    templates = {template.template_id: template for template in store.load()}
+    resolved: list[tuple[str, BinaryQuestionConfig]] = []
+
+    for template_id in config.question_template_ids:
+        template = templates.get(template_id)
+
+        if template is None:
+            raise ValueError(f"连续题目已不存在：{template_id}")
+
+        resolved.append(
+            (
+                template.template_id,
+                BinaryQuestionConfig(
+                    question=template.question,
+                    option_1=template.option_1,
+                    option_2=template.option_2,
+                    question_type=template.question_type,
+                    correct_option_id=template.correct_option_id,
+                    dwell_time_ms=config.dwell_time_ms,
+                    duration_seconds=config.duration_seconds,
+                    question_font_family=config.question_font_family,
+                    question_font_size_pt=config.question_font_size_pt,
+                    option_font_size_pt=config.option_font_size_pt,
+                    neutral_zone_width=config.neutral_zone_width,
+                    randomize_sides=config.randomize_sides,
+                    randomization_seed=config.randomization_seed,
+                ),
+            )
+        )
+
+    return tuple(resolved)

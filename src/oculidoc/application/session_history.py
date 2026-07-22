@@ -253,6 +253,29 @@ def format_task_result_lines(
         if completion_status is not None:
             lines.append(f"完成状态：{completion_status}")
 
+        sequence_questions = result.get("questions")
+
+        if isinstance(sequence_questions, list):
+            lines.append(
+                "连续题完成："
+                f"{result.get('completed_question_count', 0)}/"
+                f"{result.get('question_count', len(sequence_questions))}"
+            )
+            lines.append(f"答对题数：{result.get('correct_count', 0)}")
+
+            for question in sequence_questions:
+                if not isinstance(question, dict):
+                    continue
+
+                question_number = question.get("question_number", "-")
+                prompt = question.get("question", "-")
+                answer = question.get("selected_answer") or "未作答"
+                correct = question.get("correct")
+                correctness = (
+                    "正确" if correct is True else "错误" if correct is False else "不评分"
+                )
+                lines.append(f"第 {question_number} 题：{prompt} · 选择 {answer} · {correctness}")
+
         is_multiple_choice = task_kind == "multiple_choice" or "selected_answers" in result
 
         if is_multiple_choice:

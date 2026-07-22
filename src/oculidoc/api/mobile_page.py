@@ -101,6 +101,7 @@ let currentRecord = null;
 let formDirty = false;
 
 const binaryFields = [
+  {name: "question_template_ids", label: "连续题目（可多选；不选则只运行下方单题）", type: "multi-select", options: []},
   {name: "question_type", label: "问题类型", type: "select", options: [["yes_no", "是否题"], ["question_answer", "问答题"], ["inquiry", "询问题"], ["other", "其他"]]},
   {name: "question", label: "问题文本", type: "textarea"},
   {name: "option_1", label: "选项 1", type: "text"},
@@ -119,6 +120,8 @@ const fields = {
   tracking_ball: [
     {name: "shape", label: "目标形状", type: "select", options: [["circle", "圆形"], ["square", "方形"], ["diamond", "菱形"], ["star", "星形"]]},
     {name: "path", label: "运动轨迹", type: "select", options: [["horizontal", "水平往返"], ["vertical", "垂直往返"], ["circle", "圆周"], ["z", "Z 型"], ["figure_eight", "8 字"], ["random", "平滑随机"]]},
+    {name: "horizontal_position", label: "水平轨迹高度", type: "select", options: [["top", "屏幕上方"], ["middle", "屏幕中间"], ["bottom", "屏幕下方"]]},
+    {name: "vertical_position", label: "垂直轨迹位置", type: "select", options: [["left", "屏幕左侧"], ["center", "屏幕中间"], ["right", "屏幕右侧"]]},
     {name: "effect", label: "动画效果", type: "select", options: [["none", "无"], ["pulse", "呼吸缩放"], ["spin", "旋转"]]},
     {name: "diameter_px", label: "目标直径（px）", type: "number", min: 16, max: 600, step: 1},
     {name: "color", label: "目标颜色", type: "color"},
@@ -150,6 +153,20 @@ const fields = {
     {name: "option_font_size_pt", label: "选项字号（pt）", type: "number", min: 20, max: 120, step: 1},
     {name: "randomize_positions", label: "每次呈现随机交换选项位置", type: "checkbox"}
   ],
+  image_choice: [
+    {name: "question_ids", label: "连续图片题", type: "multi-select", options: [
+      ["image-banana", "请看香蕉（香蕉 / 狮子）"],
+      ["image-apple", "请看苹果（小狗 / 苹果）"],
+      ["image-cup", "请看水杯（水杯 / 床）"],
+      ["image-sun", "请看太阳（月亮 / 太阳）"],
+      ["image-car", "请看汽车（汽车 / 花）"],
+      ["image-cat", "请看小猫（鞋 / 小猫）"]
+    ]},
+    {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
+    {name: "duration_seconds", label: "每题最长时长（秒）", type: "number", min: 5, max: 600, step: 1},
+    {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "randomize_sides", label: "每题随机交换左右图片", type: "checkbox"}
+  ],
   screen_keyboard: [
     {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
     {name: "duration_seconds", label: "任务时长（秒）", type: "number", min: 5, max: 3600, step: 1},
@@ -179,8 +196,14 @@ async function request(path, options = {}) {
 
 function refillSelect(select, modules, predicate) {
   const selected = select.value;
+  const choices = modules.filter(predicate);
+  const currentSignature = [...select.options]
+    .map((option) => option.value + "\u0000" + option.textContent).join("\u0001");
+  const nextSignature = choices
+    .map((module) => module.module_id + "\u0000" + module.title).join("\u0001");
+  if (currentSignature === nextSignature) return;
   select.innerHTML = "";
-  modules.filter(predicate).forEach((module) => {
+  choices.forEach((module) => {
     const option = document.createElement("option");
     option.value = module.module_id;
     option.textContent = module.title;
@@ -208,11 +231,14 @@ function renderConfig(record) {
     const label = document.createElement("label");
     label.textContent = definition.label;
     const input = definition.type === "textarea" ? document.createElement("textarea") :
-      definition.type === "select" ? document.createElement("select") : document.createElement("input");
+      ["select", "multi-select"].includes(definition.type) ? document.createElement("select") :
+      document.createElement("input");
     input.dataset.field = definition.name;
     input.dataset.kind = definition.type;
     input.dataset.nullable = definition.nullable ? "true" : "false";
-    if (definition.type === "select") {
+    if (["select", "multi-select"].includes(definition.type)) {
+      input.multiple = definition.type === "multi-select";
+      if (input.multiple) input.size = Math.min(8, Math.max(3, definition.options.length));
       definition.options.forEach(([value, text]) => {
         const option = document.createElement("option");
         option.value = value;
@@ -232,6 +258,12 @@ function renderConfig(record) {
       label.textContent = "";
       label.appendChild(input);
       label.appendChild(document.createTextNode(definition.label));
+    } else if (definition.type === "multi-select") {
+      const selectedValues = Array.isArray(value) ? value : [];
+      [...input.options].forEach((option) => {
+        option.selected = selectedValues.includes(option.value);
+      });
+      label.appendChild(input);
     } else {
       input.value = value === null || value === undefined ? "" : value;
       label.appendChild(input);
@@ -256,6 +288,8 @@ function collectConfig() {
     const name = input.dataset.field;
     if (input.dataset.kind === "checkbox") {
       config[name] = input.checked;
+    } else if (input.dataset.kind === "multi-select") {
+      config[name] = [...input.selectedOptions].map((option) => option.value);
     } else if (input.dataset.kind === "number") {
       config[name] = Number(input.value);
     } else if (input.dataset.nullable === "true" && !input.value.trim()) {
@@ -316,6 +350,12 @@ function renderLatestCommand(commands) {
 async function refresh() {
   try {
     const runtime = await request("/api/v1/runtime");
+    const sequenceField = binaryFields.find((definition) =>
+      definition.name === "question_template_ids"
+    );
+    sequenceField.options = (runtime.question_bank || []).map((question) => [
+      question.template_id, question.display_label
+    ]);
     const displayLabels = {
       closed: "已关闭", idle: "待机", ready: "准备", preview: "提示",
       running: "任务进行中", paused: "已暂停", result: "任务结束", error: "异常"

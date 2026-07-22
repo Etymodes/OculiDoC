@@ -19,6 +19,7 @@ TASK_CONFIG_MODULE_IDS = frozenset(
         "binary_vertical",
         "screen_keyboard",
         "multiple_choice",
+        "image_choice",
     }
 )
 
@@ -44,6 +45,11 @@ def _config_type(module_id: str) -> Any:
 
         return MultipleChoiceConfig
 
+    if module_id == "image_choice":
+        from oculidoc.tasks.image_choice import ImageChoiceConfig
+
+        return ImageChoiceConfig
+
     raise KeyError(f"Unsupported task configuration module: {module_id}")
 
 
@@ -53,7 +59,12 @@ def task_config_to_dict(config: object) -> dict[str, object]:
 
     for field in fields(config):  # type: ignore[arg-type]
         value = getattr(config, field.name)
-        values[field.name] = value.value if isinstance(value, Enum) else value
+        if isinstance(value, Enum):
+            values[field.name] = value.value
+        elif isinstance(value, tuple):
+            values[field.name] = list(value)
+        else:
+            values[field.name] = value
 
     return values
 
@@ -77,6 +88,14 @@ def task_config_from_dict(module_id: str, value: object) -> object:
     seed = normalized.get("randomization_seed")
     if seed is not None and (not isinstance(seed, int) or isinstance(seed, bool)):
         raise TypeError("randomization_seed must be an integer or null.")
+
+    for name in {"question_template_ids", "question_ids"} & normalized.keys():
+        identifiers = normalized[name]
+
+        if not isinstance(identifiers, (list, tuple)) or any(
+            not isinstance(value, str) for value in identifiers
+        ):
+            raise TypeError(f"{name} must be a list of strings.")
 
     return _config_type(module_id)(**normalized)
 

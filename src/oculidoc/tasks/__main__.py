@@ -30,20 +30,29 @@ from oculidoc.tasks.binary_question import (
     BinaryQuestionConfig,
     BinaryQuestionSetupDialog,
     BinaryQuestionTask,
+    binary_question_sequence,
 )
 from oculidoc.tasks.gaze_stream import (
     GazeStreamWorker,
+)
+from oculidoc.tasks.image_choice import (
+    ImageChoiceConfig,
+    ImageChoiceSetupDialog,
+    ImageChoiceTask,
+    image_question_sequence,
 )
 from oculidoc.tasks.multiple_choice import (
     MultipleChoiceConfig,
     MultipleChoiceSetupDialog,
     MultipleChoiceTask,
 )
+from oculidoc.tasks.question_bank import CommonQuestionStore
 from oculidoc.tasks.screen_keyboard import (
     ScreenKeyboardConfig,
     ScreenKeyboardSetupDialog,
     ScreenKeyboardTask,
 )
+from oculidoc.tasks.sequential_choice import SequentialChoiceTask
 from oculidoc.tasks.task_window import (
     TimedTaskWindow,
 )
@@ -54,6 +63,7 @@ from oculidoc.tasks.tracking_ball import (
 )
 
 TASK_START_COUNTDOWN_SECONDS = 3
+TASK_RESULT_MESSAGE_MILLISECONDS = 6_000
 
 
 def main(
@@ -68,6 +78,7 @@ def main(
             "binary-vertical",
             "typing",
             "multiple-choice",
+            "image-choice",
         ),
     )
     parser.add_argument("--direct", action="store_true")
@@ -86,6 +97,7 @@ def main(
         "binary-vertical": "binary_vertical",
         "typing": "screen_keyboard",
         "multiple-choice": "multiple_choice",
+        "image-choice": "image_choice",
     }[args.task]
     config_store = TaskConfigStore(settings.data_dir / "runtime" / "task_configs.json")
     record = config_store.load(module_id)
@@ -132,11 +144,21 @@ def main(
             return 0
 
         config = setup.build_config()
-    else:
+    elif args.task == "multiple-choice":
         if not isinstance(config, MultipleChoiceConfig):
             raise TypeError("Multiple-choice task configuration type mismatch.")
 
         setup = MultipleChoiceSetupDialog(config=config)
+
+        if setup.exec() != QDialog.DialogCode.Accepted:
+            return 0
+
+        config = setup.build_config()
+    else:
+        if not isinstance(config, ImageChoiceConfig):
+            raise TypeError("Image-choice task configuration type mismatch.")
+
+        setup = ImageChoiceSetupDialog(config=config)
 
         if setup.exec() != QDialog.DialogCode.Accepted:
             return 0
@@ -159,7 +181,13 @@ def main(
             return 2
 
     question_to_speak = ""
-    task: TrackingBallTask | BinaryQuestionTask | ScreenKeyboardTask | MultipleChoiceTask
+    task: (
+        TrackingBallTask
+        | BinaryQuestionTask
+        | ScreenKeyboardTask
+        | MultipleChoiceTask
+        | SequentialChoiceTask
+    )
 
     if args.task == "tracking":
         if not isinstance(config, TrackingBallConfig):
@@ -176,14 +204,32 @@ def main(
             raise TypeError("Binary task configuration type mismatch.")
 
         vertical = args.task == "binary-vertical"
-        task = BinaryQuestionTask(
+        layout = "vertical" if vertical else "horizontal"
+        sequence = binary_question_sequence(
             config,
-            allow_mouse_fallback=(allow_mouse_fallback),
-            layout=("vertical" if vertical else "horizontal"),
+            CommonQuestionStore(settings.data_dir / "common_questions.json"),
         )
+
+        if config.question_template_ids:
+            task = SequentialChoiceTask(
+                config=config,
+                question_ids=[question_id for question_id, _question in sequence],
+                task_factory=lambda index: BinaryQuestionTask(
+                    sequence[index][1],
+                    allow_mouse_fallback=allow_mouse_fallback,
+                    layout=layout,
+                ),
+                layout_orientation=layout,
+            )
+        else:
+            task = BinaryQuestionTask(
+                config,
+                allow_mouse_fallback=allow_mouse_fallback,
+                layout=layout,
+            )
         title = "上下二分问答" if vertical else "左右二分问答"
-        duration_seconds = config.duration_seconds
-        question_to_speak = config.question
+        duration_seconds = min(3_600, config.duration_seconds * len(sequence))
+        question_to_speak = sequence[0][1].question
     elif args.task == "typing":
         if not isinstance(config, ScreenKeyboardConfig):
             raise TypeError("Typing task configuration type mismatch.")
@@ -194,7 +240,7 @@ def main(
         )
         title = "屏幕打字"
         duration_seconds = config.duration_seconds
-    else:
+    elif args.task == "multiple-choice":
         if not isinstance(config, MultipleChoiceConfig):
             raise TypeError("Multiple-choice task configuration type mismatch.")
 
@@ -205,6 +251,24 @@ def main(
         title = "多选项问答"
         duration_seconds = config.duration_seconds
         question_to_speak = config.question
+    else:
+        if not isinstance(config, ImageChoiceConfig):
+            raise TypeError("Image-choice task configuration type mismatch.")
+
+        image_questions = image_question_sequence(config)
+        task = SequentialChoiceTask(
+            config=config,
+            question_ids=[question.question_id for question in image_questions],
+            task_factory=lambda index: ImageChoiceTask(
+                image_questions[index],
+                config,
+                allow_mouse_fallback=allow_mouse_fallback,
+            ),
+            layout_orientation="horizontal",
+        )
+        title = "语音图片选择"
+        duration_seconds = min(3_600, config.duration_seconds * len(image_questions))
+        question_to_speak = image_questions[0].prompt
 
     window = TimedTaskWindow(
         task,
@@ -240,6 +304,10 @@ def main(
             )
         )
 
+    if isinstance(task, SequentialChoiceTask):
+        task.question_changed.connect(speak)
+        task.sequence_completed.connect(lambda: window.finish("answered"))
+
     preflight_seconds = 0 if settings.environment == "test" else settings.gaze_preflight_seconds
     preflight_store = GazePreflightStore(settings.data_dir / "runtime" / "gaze_preflight.json")
     worker = GazeStreamWorker(
@@ -251,6 +319,7 @@ def main(
     recorded_runtime = RecordedTaskRuntime(
         task=task,
         sample_sink=task.consume_sample,
+        task_kind=module_id,
         announce=True,
         parent=task,
     )
@@ -322,6 +391,21 @@ def main(
 
         multiple_choice_task.selection_changed.connect(sync_multiple_choice_text)
 
+    if isinstance(task, SequentialChoiceTask):
+        sequential_task = task
+
+        def sync_sequential_question(text: str) -> None:
+            state = display_state_store.load()
+
+            if state.mode is PatientDisplayMode.RUNNING and state.task_id == module_id:
+                display_state_store.set_display(
+                    sequential_task.patient_display_text,
+                    mode=PatientDisplayMode.RUNNING,
+                    task_id=module_id,
+                )
+
+        sequential_task.question_changed.connect(sync_sequential_question)
+
     countdown_seconds = 0 if settings.environment == "test" else TASK_START_COUNTDOWN_SECONDS
     source_hint = "\n模拟模式" if settings.gaze_source == "mock" else ""
     display_state_store.set_display(
@@ -347,12 +431,16 @@ def main(
             )
         except LanControlTransitionError:
             pass
-        QMessageBox.warning(
-            window,
+        box = QMessageBox(
+            QMessageBox.Icon.Warning,
             "眼动设备预检失败",
             message + "\n\n任务已阻止，不会回退到模拟眼动源。",
+            QMessageBox.StandardButton.NoButton,
+            window,
         )
-        app.exit(3)
+        box.show()
+        QTimer.singleShot(TASK_RESULT_MESSAGE_MILLISECONDS, box.close)
+        QTimer.singleShot(TASK_RESULT_MESSAGE_MILLISECONDS, lambda: app.exit(3))
 
     worker.stream_error.connect(fail_preflight)
 
@@ -374,7 +462,12 @@ def main(
 
         if args.task == "tracking":
             speak("请保持注视标志物，并让视线跟随它移动。")
-        elif args.task in {"binary", "binary-vertical", "multiple-choice"}:
+        elif not isinstance(task, SequentialChoiceTask) and args.task in {
+            "binary",
+            "binary-vertical",
+            "multiple-choice",
+            "image-choice",
+        }:
             speak(question_to_speak)
 
     def begin_countdown(result: GazePreflightResult) -> None:

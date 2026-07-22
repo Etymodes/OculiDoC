@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     gaze_source: GazeSource = "mock"
     tobii_stream_engine_dll: Path | None = None
     gaze_preflight_seconds: int = Field(default=3, ge=3, le=10)
-    gaze_minimum_valid_ratio: float = Field(default=0.60, ge=0.0, le=1.0)
+    gaze_minimum_valid_ratio: float = Field(default=0.35, ge=0.0, le=1.0)
     tobii_bridge_mode: Literal[
         "hospital_server",
         "client",
@@ -145,7 +145,14 @@ class GazeDeviceConfigStore:
             if not isinstance(payload, dict):
                 raise TypeError("Saved gaze-device configuration must be an object.")
             value = payload.get("config", payload)
-            return GazeDeviceConfig.model_validate(value)
+            config = GazeDeviceConfig.model_validate(value)
+
+            # M3D12D lowers the former default threshold for low-validity DoC patients.
+            # Preserve every explicitly different administrator setting.
+            if config.gaze_minimum_valid_ratio == 0.60:
+                config = config.model_copy(update={"gaze_minimum_valid_ratio": 0.35})
+
+            return config
         except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError) as error:
             raise ValueError(f"已保存的眼动设备配置无效：{self.path}") from error
 

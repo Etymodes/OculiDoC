@@ -36,8 +36,7 @@ _SOURCE_ITEMS = (
 )
 
 
-def find_tobii_experience_shortcut() -> Path | None:
-    """Find an installed Start-menu shortcut without relying on a private app ID."""
+def _find_tobii_shortcut(pattern: str) -> Path | None:
     roots = []
 
     for name in ("APPDATA", "ProgramData"):
@@ -50,7 +49,7 @@ def find_tobii_experience_shortcut() -> Path | None:
             continue
 
         try:
-            matches = sorted(root.rglob("*Tobii*Experience*.lnk"))
+            matches = sorted(root.rglob(pattern))
         except OSError:
             continue
 
@@ -58,6 +57,16 @@ def find_tobii_experience_shortcut() -> Path | None:
             return matches[0]
 
     return None
+
+
+def find_tobii_experience_shortcut() -> Path | None:
+    """Find an installed Start-menu shortcut without relying on a private app ID."""
+    return _find_tobii_shortcut("*Tobii*Experience*.lnk")
+
+
+def find_tobii_ghost_shortcut() -> Path | None:
+    """Find Tobii Ghost in either the user or system Start menu."""
+    return _find_tobii_shortcut("*Tobii*Ghost*.lnk")
 
 
 class DeviceSettingsDialog(QDialog):
@@ -135,6 +144,16 @@ class DeviceSettingsDialog(QDialog):
         calibration_row.addWidget(calibration_tip, 1)
         root.addLayout(calibration_row)
 
+        ghost_row = QHBoxLayout()
+        open_ghost_button = QPushButton("打开 Tobii Ghost / 视线检查")
+        open_ghost_button.setObjectName("openTobiiGhostButton")
+        open_ghost_button.clicked.connect(self._open_tobii_ghost)
+        ghost_tip = QLabel("在正式任务前显示视线气泡，辅助管理员检查实时目光追踪。")
+        ghost_tip.setWordWrap(True)
+        ghost_row.addWidget(open_ghost_button)
+        ghost_row.addWidget(ghost_tip, 1)
+        root.addLayout(ghost_row)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
@@ -201,6 +220,29 @@ class DeviceSettingsDialog(QDialog):
                 self,
                 "无法打开 Tobii Experience",
                 "请从 Windows 开始菜单手动搜索 Tobii Experience。",
+            )
+
+    def _open_tobii_ghost(self) -> None:
+        if sys.platform != "win32":
+            QMessageBox.information(
+                self,
+                "Tobii Ghost",
+                "Tobii Ghost 需要在连接眼动仪的 Windows 电脑上打开。",
+            )
+            return
+
+        shortcut = find_tobii_ghost_shortcut()
+        opened = (
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(shortcut)))
+            if shortcut is not None
+            else QDesktopServices.openUrl(QUrl("ms-search:query=Tobii%20Ghost"))
+        )
+
+        if not opened:
+            QMessageBox.warning(
+                self,
+                "无法打开 Tobii Ghost",
+                "请从 Windows 开始菜单手动搜索 Tobii Ghost。",
             )
 
     def build_config(self) -> GazeDeviceConfig:

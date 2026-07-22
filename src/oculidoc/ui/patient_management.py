@@ -1,6 +1,8 @@
 """Patient registration, editing, and selection dialogs."""
 
+import json
 from datetime import date
+from pathlib import Path
 from uuid import UUID
 
 from PySide6.QtCore import QDate, Qt
@@ -10,6 +12,7 @@ from PySide6.QtWidgets import (
     QDateEdit,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -28,6 +31,11 @@ from oculidoc.application import (
     PatientService,
     RegisterPatientRequest,
     UpdatePatientRequest,
+)
+from oculidoc.application.patient_transfer import (
+    import_patient_records,
+    read_patient_transfer,
+    write_patient_transfer,
 )
 from oculidoc.domain import ClinicalDiagnosis, Patient, Sex
 from oculidoc.domain.patient_audit import PatientAuditAction
@@ -378,6 +386,14 @@ class PatientManagementDialog(QDialog):
         self.status_button.setObjectName("togglePatientStatusButton")
         self.status_button.clicked.connect(self._toggle_patient_status)
 
+        self.export_button = QPushButton("一键导出患者资料")
+        self.export_button.setObjectName("exportPatientDataButton")
+        self.export_button.clicked.connect(self._export_patient_data)
+
+        self.import_button = QPushButton("一键录入患者资料")
+        self.import_button.setObjectName("importPatientDataButton")
+        self.import_button.clicked.connect(self._import_patient_data)
+
         self.select_button = QPushButton("\u9009\u4e3a\u5f53\u524d\u60a3\u8005")
         self.select_button.setObjectName("selectPatientButton")
         self.select_button.clicked.connect(self._select_patient)
@@ -393,13 +409,84 @@ class PatientManagementDialog(QDialog):
         actions.addWidget(self.select_button)
         actions.addWidget(close_button)
 
+        transfer_actions = QHBoxLayout()
+        transfer_tip = QLabel("跨电脑转移患者基本资料（不含实验记录）")
+        transfer_tip.setStyleSheet("color:#5a7184;")
+        transfer_actions.addWidget(transfer_tip)
+        transfer_actions.addStretch(1)
+        transfer_actions.addWidget(self.export_button)
+        transfer_actions.addWidget(self.import_button)
+
         root = QVBoxLayout(self)
         root.addWidget(title)
         root.addWidget(self.patient_list, 1)
         root.addWidget(self.patient_detail_label)
+        root.addLayout(transfer_actions)
         root.addLayout(actions)
 
         self.refresh_patients()
+
+    def _export_patient_data(self, checked: bool = False) -> None:
+        """Export all registered patient demographics to one versioned JSON file."""
+        del checked
+        default_name = f"OculiDoC_患者资料_{date.today().isoformat()}.json"
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出患者资料",
+            str(Path.home() / "Documents" / default_name),
+            "OculiDoC 患者资料 (*.json)",
+        )
+
+        if not filename:
+            return
+
+        try:
+            patients = self.patient_service.list_patients()
+            path = write_patient_transfer(filename, patients)
+        except OSError as error:
+            QMessageBox.warning(self, "患者资料导出失败", str(error))
+            return
+
+        QMessageBox.information(
+            self,
+            "患者资料已导出",
+            f"已导出 {len(patients)} 名患者资料。\n{path}",
+        )
+
+    def _import_patient_data(self, checked: bool = False) -> None:
+        """Validate and import patient demographics without overwriting duplicates."""
+        del checked
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "录入患者资料",
+            str(Path.home() / "Documents"),
+            "OculiDoC 患者资料 (*.json)",
+        )
+
+        if not filename:
+            return
+
+        try:
+            records = read_patient_transfer(filename)
+            summary = import_patient_records(self.patient_service, records)
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as error:
+            QMessageBox.warning(self, "患者资料录入失败", str(error))
+            return
+
+        self.refresh_patients()
+        QMessageBox.information(
+            self,
+            "患者资料录入完成",
+            f"新增 {summary.imported_count} 名；"
+            f"同编号已存在并跳过 {summary.skipped_duplicate_count} 名。",
+        )
 
     def refresh_patients(
         self,

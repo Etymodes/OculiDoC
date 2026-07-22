@@ -20,6 +20,7 @@ REMOTE_GAZE_MODULE_IDS = frozenset(
         "binary_vertical",
         "screen_keyboard",
         "multiple_choice",
+        "image_choice",
     }
 )
 

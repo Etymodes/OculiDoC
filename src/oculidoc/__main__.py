@@ -34,6 +34,23 @@ def dispatch(
         run_api()
         return 0
 
+    if arguments[:1] == ["--update"]:
+        if len(arguments) != 3 or arguments[1] != "--repo":
+            raise SystemExit("--update requires --repo and one repository path.")
+
+        import json
+
+        from oculidoc.updater import perform_update
+
+        try:
+            result = perform_update(Path(arguments[2]))
+        except Exception as error:  # noqa: BLE001 -- command boundary returns structured failure.
+            print(json.dumps({"status": "error", "message": str(error)}, ensure_ascii=False))
+            return 1
+
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
+
     if arguments[:1] == ["--task"]:
         if len(arguments) < 2:
             raise SystemExit("--task requires a task command.")

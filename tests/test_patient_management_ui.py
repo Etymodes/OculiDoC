@@ -111,6 +111,20 @@ def test_inactive_patient_cannot_be_selected(
     runtime.dispose()
 
 
+def test_patient_management_exposes_import_and_export_buttons(
+    qtbot: QtBot,
+    tmp_path,
+) -> None:
+    runtime = initialize_database(tmp_path / "patients.sqlite3", data_root=tmp_path)
+    dialog = PatientManagementDialog(runtime.patient_service)
+    qtbot.addWidget(dialog)
+
+    assert dialog.export_button.text() == "一键导出患者资料"
+    assert dialog.import_button.text() == "一键录入患者资料"
+
+    runtime.dispose()
+
+
 def test_main_window_refreshes_and_clears_current_patient(
     qtbot: QtBot,
     tmp_path,

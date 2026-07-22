@@ -31,6 +31,7 @@ from oculidoc.task_configs import (
     TaskConfigConflict,
     TaskConfigStore,
 )
+from oculidoc.tasks.question_bank import BUILT_IN_QUESTION_TEMPLATES, CommonQuestionStore
 
 
 class DisplayTextRequest(BaseModel):
@@ -84,6 +85,7 @@ def create_api(
     preflight_store = GazePreflightStore(
         active_settings.data_dir / "runtime" / "gaze_preflight.json"
     )
+    question_store = CommonQuestionStore(active_settings.data_dir / "common_questions.json")
     modules = {module.module_id: module for module in DEFAULT_MODULES}
 
     api = FastAPI(
@@ -104,6 +106,20 @@ def create_api(
 
     def current_settings() -> Settings:
         return apply_saved_gaze_device_config(active_settings)
+
+    def common_questions() -> list[dict[str, object]]:
+        try:
+            templates = question_store.load()
+        except (OSError, KeyError, TypeError, ValueError):
+            templates = BUILT_IN_QUESTION_TEMPLATES
+
+        return [
+            {
+                **template.to_dict(),
+                "display_label": (f"[{template.question_type.display_label}] {template.question}"),
+            }
+            for template in templates
+        ]
 
     @api.get("/health", tags=["system"])
     def health() -> dict[str, str]:
@@ -135,6 +151,7 @@ def create_api(
             "gaze_preflight": preflight.to_dict() if preflight is not None else None,
             "patient_display": state.to_dict(),
             "commands": [command.to_dict() for command in commands.list_commands(limit=10)],
+            "question_bank": common_questions(),
             "modules": [
                 {
                     "module_id": module.module_id,

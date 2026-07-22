@@ -140,18 +140,19 @@ class MultipleChoiceTask(QWidget):
         self.setStyleSheet(
             """
             QWidget#multipleChoiceTask {
-                background: #eef7ff;
-                color: #17324d;
+                background: #f8fcff;
+                color: #12304a;
                 font-family: "Microsoft YaHei UI";
             }
+            QWidget#multipleChoiceOptions { background: #f8fcff; }
             QLabel#multipleChoiceQuestion { color: #102f4b; font-weight: 800; padding: 12px; }
             QLabel#multipleChoiceSummary { color: #245b78; font-weight: 700; padding: 4px 12px; }
             QLabel#multipleChoiceCenter { color: #52728a; font-weight: 700; }
             QPushButton#multipleChoiceOption {
-                min-height: 130px;
-                background: white;
-                color: #17324d;
-                border: 5px solid #4e8db8;
+                min-height: 180px;
+                background: #ffffff;
+                color: #12304a;
+                border: 5px solid #78add0;
                 border-radius: 22px;
                 font-weight: 800;
                 padding: 12px;
@@ -183,17 +184,20 @@ class MultipleChoiceTask(QWidget):
         self.question_label.setObjectName("multipleChoiceQuestion")
         self.question_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.question_label.setWordWrap(True)
+        self.question_label.setMaximumHeight(110)
         self.question_label.setFont(self._font(config.question_font_size_pt))
 
         self.summary_label = QLabel("尚未选择 · 可选择多个，再次选择可取消")
         self.summary_label.setObjectName("multipleChoiceSummary")
         self.summary_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.summary_label.setWordWrap(True)
+        self.summary_label.setMaximumHeight(70)
         self.summary_label.setFont(self._font(max(20, config.option_font_size_pt - 8)))
 
         self.options_widget = QWidget()
+        self.options_widget.setObjectName("multipleChoiceOptions")
         self.options_layout = QGridLayout(self.options_widget)
-        self.options_layout.setContentsMargins(18, 8, 18, 8)
+        self.options_layout.setContentsMargins(18, 2, 18, 8)
         self.options_layout.setSpacing(12)
         self._render_options()
 
@@ -203,7 +207,7 @@ class MultipleChoiceTask(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 10)
-        root.setSpacing(6)
+        root.setSpacing(2)
         root.addWidget(self.question_label)
         root.addWidget(self.summary_label)
         root.addWidget(self.options_widget, 1)

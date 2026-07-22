@@ -124,6 +124,22 @@ def test_tracking_paths_remain_normalized(
         assert 0.0 <= y <= 1.0
 
 
+def test_horizontal_and_vertical_paths_support_three_screen_positions(
+    qtbot: QtBot,
+) -> None:
+    horizontal = TrackingBallTask(
+        TrackingBallConfig(path=TargetPath.HORIZONTAL, horizontal_position="top")
+    )
+    vertical = TrackingBallTask(
+        TrackingBallConfig(path=TargetPath.VERTICAL, vertical_position="right")
+    )
+    qtbot.addWidget(horizontal)
+    qtbot.addWidget(vertical)
+
+    assert horizontal.target_center_normalized(0.0)[1] == 0.20
+    assert vertical.target_center_normalized(0.0)[0] == 0.80
+
+
 def test_binary_question_selects_by_dwell(
     qtbot: QtBot,
 ) -> None:

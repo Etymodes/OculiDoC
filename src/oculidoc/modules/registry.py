@@ -55,6 +55,7 @@ DEFAULT_MODULES: tuple[ModuleDefinition, ...] = (
         "image_choice",
         "语音图片选择",
         "播报图片内容，从左右图片中选择正确目标。",
+        "available",
     ),
     ModuleDefinition(
         "instruction_fixation",
