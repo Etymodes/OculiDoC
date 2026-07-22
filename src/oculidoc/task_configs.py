@@ -20,6 +20,7 @@ TASK_CONFIG_MODULE_IDS = frozenset(
         "screen_keyboard",
         "multiple_choice",
         "image_choice",
+        "instruction_fixation",
     }
 )
 
@@ -49,6 +50,11 @@ def _config_type(module_id: str) -> Any:
         from oculidoc.tasks.image_choice import ImageChoiceConfig
 
         return ImageChoiceConfig
+
+    if module_id == "instruction_fixation":
+        from oculidoc.tasks.instruction_fixation import InstructionFixationConfig
+
+        return InstructionFixationConfig
 
     raise KeyError(f"Unsupported task configuration module: {module_id}")
 
@@ -82,6 +88,7 @@ def task_config_from_dict(module_id: str, value: object) -> object:
         "randomize_positions",
         "randomize_question_order",
         "enable_tone_step",
+        "randomize_trial_order",
     } & normalized.keys():
         if not isinstance(normalized[name], bool):
             raise TypeError(f"{name} must be a boolean.")
@@ -95,6 +102,7 @@ def task_config_from_dict(module_id: str, value: object) -> object:
         "question_ids",
         "category_filters",
         "style_filters",
+        "position_ids",
     } & normalized.keys():
         identifiers = normalized[name]
 

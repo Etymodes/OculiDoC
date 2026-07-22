@@ -17,6 +17,10 @@ def test_required_modules_are_registered() -> None:
     keyboard = next(module for module in DEFAULT_MODULES if module.module_id == "screen_keyboard")
     vertical = next(module for module in DEFAULT_MODULES if module.module_id == "binary_vertical")
     multiple = next(module for module in DEFAULT_MODULES if module.module_id == "multiple_choice")
+    fixation = next(
+        module for module in DEFAULT_MODULES if module.module_id == "instruction_fixation"
+    )
     assert keyboard.status == "available"
     assert vertical.status == "available"
     assert multiple.status == "available"
+    assert fixation.status == "available"

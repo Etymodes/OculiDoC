@@ -26,7 +26,9 @@ def test_admin_window_builds(qtbot: QtBot, tmp_path: Path) -> None:
     assert window.update_button.text() == "检查更新"
 
     image_button = window.findChild(QPushButton, "moduleButton_image_choice")
+    fixation_button = window.findChild(QPushButton, "moduleButton_instruction_fixation")
     assert image_button is not None
+    assert fixation_button is not None
     assert image_button.isEnabled()
 
 

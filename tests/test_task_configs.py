@@ -22,6 +22,7 @@ def test_task_config_store_round_trip_and_preserves_modules(tmp_path: Path) -> N
     keyboard = store.load("screen_keyboard")
     multiple = store.load("multiple_choice")
     image_choice = store.load("image_choice")
+    instruction_fixation = store.load("instruction_fixation")
 
     assert tracking.revision == 0
     assert tracking.config["diameter_px"] == 300
@@ -35,6 +36,15 @@ def test_task_config_store_round_trip_and_preserves_modules(tmp_path: Path) -> N
     assert image_choice.config["category_filters"] == []
     assert image_choice.config["style_filters"] == []
     assert image_choice.config["question_count"] == 6
+    assert instruction_fixation.config["target_description"] == "黄色圆形"
+    assert instruction_fixation.config["no_target_trial_count"] == 2
+    assert instruction_fixation.config["position_ids"] == [
+        "top_left",
+        "top_right",
+        "center",
+        "bottom_left",
+        "bottom_right",
+    ]
 
     tracking_config = dict(tracking.config)
     tracking_config["diameter_px"] = 180

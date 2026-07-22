@@ -192,6 +192,52 @@ def test_report_and_history_format_multiple_choice_without_scoring(
     assert "首次选择反应时间：650 ms" in lines
 
 
+def test_report_and_history_format_instruction_fixation_without_diagnosis(
+    tmp_path: Path,
+) -> None:
+    run_directory = tmp_path / "tasks" / "run-fixation"
+    write_result(
+        run_directory,
+        task_kind="instruction_fixation",
+        result={
+            "completion_status": "completed",
+            "completion_reason": "completed",
+            "trial_count": 4,
+            "completed_trial_count": 4,
+            "target_present_trial_count": 3,
+            "target_acquired_trial_count": 2,
+            "target_acquisition_ratio": 2 / 3,
+            "no_target_trial_count": 1,
+            "no_target_false_fixation_count": 1,
+            "distractor_fixation_count": 2,
+            "valid_sample_ratio": 0.8,
+            "mean_first_target_entry_ms": 420.0,
+            "mean_first_target_acquired_ms": 1_280.0,
+            "longest_continuous_target_fixation_ms": 2_000.0,
+            "trials": [
+                {
+                    "trial_number": 1,
+                    "condition": "target_only",
+                    "outcome": "target_acquired",
+                    "first_target_entry_ms": 300.0,
+                    "first_target_acquired_ms": 1_200.0,
+                }
+            ],
+        },
+        event_types=("stimulus_presented", "selection_committed", "trial_completed"),
+    )
+
+    records = _load_task_results(tmp_path)
+    rendered = _task_result_sections(records)
+    lines = format_task_result_lines(tuple(records))
+
+    assert "目标稳定注视比例" in rendered
+    assert "66.7%" in rendered
+    assert "不自动判定意识状态" in rendered
+    assert "目标稳定注视比例：66.7%" in lines
+    assert "无目标试次干扰稳定注视：1/1" in lines
+
+
 def test_history_exposes_structured_result_lines(
     tmp_path: Path,
 ) -> None:

@@ -4,7 +4,15 @@ import sys
 from pathlib import Path
 
 _TASK_COMMANDS = frozenset(
-    {"tracking", "binary", "binary-vertical", "typing", "multiple-choice", "image-choice"}
+    {
+        "tracking",
+        "binary",
+        "binary-vertical",
+        "typing",
+        "multiple-choice",
+        "image-choice",
+        "instruction-fixation",
+    }
 )
 
 

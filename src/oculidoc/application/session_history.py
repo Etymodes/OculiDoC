@@ -319,6 +319,22 @@ def format_task_result_lines(
             lines.append("反应时间：" + milliseconds_text(result.get("reaction_time_ms")))
             lines.append("确认停留：" + milliseconds_text(result.get("confirmation_dwell_ms")))
 
+        if task_kind == "instruction_fixation" or "target_acquisition_ratio" in result:
+            lines.extend(
+                (
+                    "目标稳定注视比例：" + ratio_text(result.get("target_acquisition_ratio")),
+                    "平均首次进入目标："
+                    + milliseconds_text(result.get("mean_first_target_entry_ms")),
+                    "平均稳定注视潜伏期："
+                    + milliseconds_text(result.get("mean_first_target_acquired_ms")),
+                    "无目标试次干扰稳定注视："
+                    + str(result.get("no_target_false_fixation_count", 0))
+                    + "/"
+                    + str(result.get("no_target_trial_count", 0)),
+                    "解释边界：仅描述指令后注视证据，不自动判定意识状态",
+                )
+            )
+
         is_tracking = task_kind == "tracking_ball" or "target_hit_ratio" in result
 
         if is_tracking:

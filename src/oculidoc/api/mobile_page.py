@@ -164,6 +164,25 @@ const fields = {
     {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 20, max: 120, step: 1},
     {name: "randomize_sides", label: "每题随机交换左右图片", type: "checkbox"}
   ],
+  instruction_fixation: [
+    {name: "target_description", label: "指令中的目标描述", type: "text"},
+    {name: "target_shape", label: "目标形状", type: "select", options: [["circle", "圆形"], ["square", "方形"], ["diamond", "菱形"], ["star", "星形"]]},
+    {name: "target_color", label: "目标颜色", type: "color"},
+    {name: "distractor_shape", label: "干扰形状", type: "select", options: [["circle", "圆形"], ["square", "方形"], ["diamond", "菱形"], ["star", "星形"]]},
+    {name: "distractor_color", label: "干扰颜色", type: "color"},
+    {name: "background_color", label: "背景颜色", type: "color"},
+    {name: "position_ids", label: "可用屏幕 AOI（可多选）", type: "multi-select", options: [["top_left", "左上"], ["top_center", "上中"], ["top_right", "右上"], ["middle_left", "左中"], ["center", "中央"], ["middle_right", "右中"], ["bottom_left", "左下"], ["bottom_center", "下中"], ["bottom_right", "右下"]]},
+    {name: "target_only_trial_count", label: "仅目标试次数", type: "number", min: 0, max: 100, step: 1},
+    {name: "distractor_trial_count", label: "目标 + 干扰试次数", type: "number", min: 0, max: 100, step: 1},
+    {name: "no_target_trial_count", label: "无目标试次数", type: "number", min: 0, max: 100, step: 1},
+    {name: "distractor_count", label: "每试次干扰数", type: "number", min: 1, max: 6, step: 1},
+    {name: "target_size_px", label: "刺激大小（px）", type: "number", min: 40, max: 600, step: 1},
+    {name: "dwell_time_ms", label: "持续注视阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
+    {name: "trial_duration_seconds", label: "每试次最长时长（秒）", type: "number", min: 3, max: 120, step: 1},
+    {name: "instruction_font_size_pt", label: "指令字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "randomize_trial_order", label: "随机试次顺序并平衡目标位置", type: "checkbox"},
+    {name: "show_gaze_cursor", label: "患者屏幕显示实时视线光标", type: "checkbox"}
+  ],
   screen_keyboard: [
     {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
     {name: "duration_seconds", label: "任务时长（秒）", type: "number", min: 5, max: 3600, step: 1},

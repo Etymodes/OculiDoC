@@ -464,6 +464,70 @@ def _task_result_rows(
             )
         )
 
+    if task_kind == "instruction_fixation" or "target_acquisition_ratio" in result:
+        rows.extend(
+            (
+                (
+                    "已完成试次",
+                    f"{result.get('completed_trial_count', 0)}/{result.get('trial_count', 0)}",
+                ),
+                (
+                    "目标稳定注视",
+                    f"{result.get('target_acquired_trial_count', 0)}/"
+                    f"{result.get('target_present_trial_count', 0)}",
+                ),
+                (
+                    "目标稳定注视比例",
+                    _display_ratio(result.get("target_acquisition_ratio")),
+                ),
+                (
+                    "平均首次进入目标",
+                    _display_ms(result.get("mean_first_target_entry_ms")),
+                ),
+                (
+                    "平均稳定注视潜伏期",
+                    _display_ms(result.get("mean_first_target_acquired_ms")),
+                ),
+                (
+                    "最长连续目标注视",
+                    _display_ms(result.get("longest_continuous_target_fixation_ms")),
+                ),
+                (
+                    "无目标试次干扰稳定注视",
+                    f"{result.get('no_target_false_fixation_count', 0)}/"
+                    f"{result.get('no_target_trial_count', 0)}",
+                ),
+                (
+                    "全部干扰稳定注视次数",
+                    _display_value(result.get("distractor_fixation_count")),
+                ),
+                (
+                    "有效样本率",
+                    _display_ratio(result.get("valid_sample_ratio")),
+                ),
+                (
+                    "解释边界",
+                    "仅描述指令后目标与干扰区注视证据，不自动判定意识状态",
+                ),
+            )
+        )
+
+        fixation_trials = result.get("trials")
+
+        if isinstance(fixation_trials, list):
+            for trial in fixation_trials:
+                if not isinstance(trial, dict):
+                    continue
+
+                rows.append(
+                    (
+                        f"试次 {trial.get('trial_number', '-')} · {trial.get('condition', '-')}",
+                        f"结果 {trial.get('outcome', '-')} · "
+                        f"首次进入 {_display_ms(trial.get('first_target_entry_ms'))} · "
+                        f"稳定注视 {_display_ms(trial.get('first_target_acquired_ms'))}",
+                    )
+                )
+
     is_tracking = task_kind == "tracking_ball" or any(
         key in result
         for key in (

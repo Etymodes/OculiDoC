@@ -1195,6 +1195,7 @@ class AdminMainWindow(QMainWindow):
             "screen_keyboard",
             "multiple_choice",
             "image_choice",
+            "instruction_fixation",
         }:
             self._open_gaze_task_module(module)
             return
