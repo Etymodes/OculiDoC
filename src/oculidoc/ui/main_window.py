@@ -295,13 +295,17 @@ class AdminMainWindow(QMainWindow):
             )
 
         labels = {
+            "auto": "自动检测传感器",
             "tobii_stream_engine": "Tobii Eye Tracker 5",
-            "tobii_legacy_bridge": "Tobii 兼容桥接",
+            "tobii_legacy_bridge": "兼容眼动传感器桥接",
         }
         source_name = labels.get(self.settings.gaze_source, self.settings.gaze_source)
 
         if preflight is None:
             return f"眼动源：{source_name} · 尚未预检"
+
+        if self.settings.gaze_source == "auto":
+            source_name = f"自动检测 → {preflight.device_name}"
 
         connection = "已连接" if self._active_gaze_module_ids else "最近预检"
         suffix = (
@@ -1167,6 +1171,7 @@ class AdminMainWindow(QMainWindow):
         dialog = PatientManagementDialog(
             self.patient_service,
             self,
+            experiment_session_service=self.experiment_session_service,
         )
         result = dialog.exec()
 
@@ -1195,6 +1200,7 @@ class AdminMainWindow(QMainWindow):
             "screen_keyboard",
             "multiple_choice",
             "image_choice",
+            "instruction_fixation",
         }:
             self._open_gaze_task_module(module)
             return

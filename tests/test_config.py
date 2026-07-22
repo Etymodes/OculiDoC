@@ -33,8 +33,10 @@ def test_saved_gaze_device_config_overrides_next_launch(tmp_path: Path) -> None:
     dll_path = tmp_path / "tobii_stream_engine.dll"
     store.save(
         GazeDeviceConfig(
-            gaze_source="tobii_stream_engine",
+            gaze_source="auto",
             tobii_stream_engine_dll=dll_path,
+            tobii_bridge_host="192.168.10.5",
+            tobii_bridge_port=8765,
             gaze_preflight_seconds=7,
             gaze_minimum_valid_ratio=0.75,
         )
@@ -42,8 +44,10 @@ def test_saved_gaze_device_config_overrides_next_launch(tmp_path: Path) -> None:
 
     applied = apply_saved_gaze_device_config(settings)
 
-    assert applied.gaze_source == "tobii_stream_engine"
+    assert applied.gaze_source == "auto"
     assert applied.tobii_stream_engine_dll == dll_path
+    assert applied.tobii_bridge_host == "192.168.10.5"
+    assert applied.tobii_bridge_port == 8765
     assert applied.gaze_preflight_seconds == 7
     assert applied.gaze_minimum_valid_ratio == 0.75
     assert not list((tmp_path / "runtime").glob(".gaze_device_config.json.*.tmp"))

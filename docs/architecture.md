@@ -23,7 +23,8 @@ PySide6 管理员端 / 患者端 / 手机后台
                   |
                   v
 Infrastructure Adapters
-  - Tobii bridge
+  - Tobii Stream Engine / generic gaze bridge
+  - hardware auto-detection
   - mock gaze source
   - SQLite
   - Parquet
@@ -54,6 +55,27 @@ Infrastructure Adapters
 - 选择集合通过 `LanControlStateStore` 同步，问题由任务进程自动播报；手机端只写入重播请求或终止命令。
 - 记录选择/取消事件、显示位置、随机化种子、首次选择反应时间和每个选项 AOI；报告明确标为不评分。
 
+## 随指令注视
+
+- `InstructionFixationTask` 复用统一预检、语音重播、患者显示状态、全屏计时、患者会话和 `RecordedTaskRuntime`。
+- 目标与干扰刺激使用稳定的九宫格位置标识；随机化只改变试次顺序、目标位置和干扰位置，不改变条件语义。
+- 目标存在时记录首次进入、持续注视与稳定获得；无目标试次只记录干扰区稳定注视，不自动推断“正确抑制”或意识状态。
+- 每个试次把目标 AOI 标为 `target`、干扰 AOI 标为 `incorrect_option`，并保存条件、指令、位置和阈值元数据。
+- 任务设置继续通过 `task_configs.json` 做版本校验和原子保存，电脑端与手机端不维护两套协议定义。
+
+## 完整患者数据迁移
+
+- `patient_transfer` 只生成一个 UTF-8 CSV；患者、会话与清单使用结构化 JSON 单元格，会话目录内的所有普通文件使用 24,000 字节 Base64 分块。
+- 导出只接受终态实验，写入临时文件并在完成后原子替换；导入先把全部文件暂存并核对分块顺序、大小和 SHA-256，完整验证成功后才写入患者与会话服务。
+- 导入保留原患者、会话和清单标识；患者编号已存在时整名跳过其会话和文件，避免重复实验。系统生成的 `session.json` 由导入后的会话模型重新写入。
+- CSV 是受控迁移包而不是 Git 工件；其中可能包含 Parquet、图像、视频和患者敏感信息。
+
+## 眼动传感器自动检测
+
+- `AutoDetectEyeTrackerDevice` 复用现有 `EyeTrackerDevice` 协议，依次尝试 Stream Engine、通用 TCP NDJSON 桥接，以及已配置帮助程序的医院桥接。
+- 候选接口必须完成连接、启动并产出一个眼动样本才算检测成功；失败候选会停止并断开，所有硬件均失败时明确报错，禁止切换到模拟源。
+- 通用桥接接受第三方或自制传感器程序输出的逐行 JSON，至少包含归一化 `x`、`y` 与 `valid`；也支持带屏幕尺寸的像素坐标。USB/COM 设备枚举本身不等于视线数据。
+
 ## 依赖规则
 
 - UI 不直接读取 TCP socket；
@@ -65,17 +87,17 @@ Infrastructure Adapters
 
 ## 眼动接口
 
-每一种眼动数据源实现：
+每一种眼动设备实现：
 
 ```text
-start()
-stop()
-read() -> GazeSample | None
+connect()
+start_stream()
+read_sample() -> EyeTrackerSample
+stop_stream()
+disconnect()
 ```
 
-第一阶段使用 `MockGazeSource`。后续加入旧桥接器、官方 SDK 和回放数据源。
-
-旧桥接器必须处理 TCP 分包、粘包、半包、断连、有限重连、超时、无效 JSON 和时间戳。
+自动模式只组合真实硬件适配器；`SimulatedEyeTrackerDevice` 保留为显式工程测试源。通用桥接必须处理 TCP 分包、粘包、半包、断连、超时、无效 JSON 和时间戳。
 
 ## 端口
 

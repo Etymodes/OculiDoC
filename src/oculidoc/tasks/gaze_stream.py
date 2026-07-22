@@ -8,6 +8,7 @@ from time import monotonic
 from PySide6.QtCore import QObject, QThread, Signal
 
 from oculidoc.config import Settings
+from oculidoc.devices.auto_detect import AutoDetectEyeTrackerDevice, EyeTrackerFactory
 from oculidoc.devices.contracts import (
     DeviceState,
     EyeTrackerDevice,
@@ -45,6 +46,27 @@ def create_eye_tracker(
             sample_rate_hz=60.0,
             realtime=True,
         )
+
+    if settings.gaze_source == "auto":
+        candidates: list[EyeTrackerFactory] = [
+            lambda: TobiiStreamEngineDevice(library_path=settings.tobii_stream_engine_dll),
+            lambda: TobiiLegacyBridgeDevice(
+                host=settings.tobii_bridge_host,
+                port=settings.tobii_bridge_port,
+                connect_timeout_seconds=0.75,
+            ),
+        ]
+        if settings.tobii_helper_executable is not None:
+            candidates.append(
+                lambda: TobiiHospitalBridgeDevice(
+                    host=settings.tobii_bridge_bind_host,
+                    port=settings.tobii_bridge_port,
+                    screen_width_px=settings.tobii_screen_width_px,
+                    screen_height_px=settings.tobii_screen_height_px,
+                    helper_executable=settings.tobii_helper_executable,
+                )
+            )
+        return AutoDetectEyeTrackerDevice(tuple(candidates))
 
     if settings.gaze_source == "tobii_stream_engine":
         return TobiiStreamEngineDevice(library_path=(settings.tobii_stream_engine_dll))

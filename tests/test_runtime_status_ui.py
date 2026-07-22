@@ -43,6 +43,37 @@ def test_main_window_marks_mock_source(
     assert "#6b7280" in window.gaze_status_label.styleSheet()
 
 
+def test_main_window_displays_auto_detect_source(qtbot: QtBot, tmp_path) -> None:
+    window = AdminMainWindow(Settings(environment="test", data_dir=tmp_path, gaze_source="auto"))
+    qtbot.addWidget(window)
+
+    assert window.gaze_status_label.text() == "眼动源：自动检测传感器 · 尚未预检"
+
+
+def test_auto_detect_status_names_the_selected_sensor(qtbot: QtBot, tmp_path) -> None:
+    GazePreflightStore(tmp_path / "runtime" / "gaze_preflight.json").save(
+        GazePreflightResult(
+            source="auto",
+            device_name="第三方眼动传感器",
+            device_url=None,
+            library_path=None,
+            duration_seconds=3.0,
+            sample_count=90,
+            valid_sample_count=80,
+            sample_rate_hz=30.0,
+            valid_ratio=80 / 90,
+            minimum_valid_ratio=0.35,
+            passed=True,
+            error=None,
+            updated_at_utc="2026-07-22T00:00:00+00:00",
+        )
+    )
+    window = AdminMainWindow(Settings(environment="test", data_dir=tmp_path, gaze_source="auto"))
+    qtbot.addWidget(window)
+
+    assert "自动检测 → 第三方眼动传感器" in window.gaze_status_label.text()
+
+
 def test_main_window_displays_latest_live_gaze_quality(qtbot: QtBot, tmp_path) -> None:
     GazePreflightStore(tmp_path / "runtime" / "gaze_preflight.json").save(
         GazePreflightResult(

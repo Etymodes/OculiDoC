@@ -120,6 +120,7 @@ def test_mobile_api_controls_patient_display(
     assert control_page.status_code == 200
     assert "OculiDoC 手机管理员端" in control_page.text
     assert "保存并直接启动" in control_page.text
+    assert "自动检测传感器" in control_page.text
 
     sent = client.post(
         "/api/v1/patient-display/text",
@@ -145,6 +146,11 @@ def test_mobile_api_controls_patient_display(
     assert runtime.status_code == 200
     assert runtime.json()["gaze_source"] == "mock"
     assert runtime.json()["patient_display"]["mode"] == "preview"
+    assert len(runtime.json()["question_bank"]) >= 66
+    assert {asset["category"] for asset in runtime.json()["image_library"]} >= {
+        "水果",
+        "动物",
+    }
 
     idle = client.post(
         "/api/v1/patient-display/idle",
@@ -254,6 +260,17 @@ def test_mobile_api_submits_desktop_commands(
     )
     assert multiple.status_code == 200
 
+    fixation = client.post(
+        "/api/v1/commands",
+        params=parameters,
+        json={
+            "command_type": "start_task",
+            "module_id": "instruction_fixation",
+            "config_revision": 0,
+        },
+    )
+    assert fixation.status_code == 200
+
     replayed = client.post(
         "/api/v1/commands",
         params=parameters,
@@ -266,7 +283,7 @@ def test_mobile_api_submits_desktop_commands(
         params=parameters,
     )
     assert listed.status_code == 200
-    assert len(listed.json()) == 6
+    assert len(listed.json()) == 7
 
 
 def test_mobile_api_synchronizes_versioned_task_configs(tmp_path: Path) -> None:

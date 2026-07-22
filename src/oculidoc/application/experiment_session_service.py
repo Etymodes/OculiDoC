@@ -172,6 +172,56 @@ class ExperimentSessionService:
         """Return sessions belonging to one patient."""
         return self._session_repository.list_for_patient(patient_id)
 
+    def restore_session(
+        self,
+        session: ExperimentSession,
+        artifacts: tuple[SessionArtifact, ...] = (),
+    ) -> Path:
+        """Restore a validated session and its manifest while preserving identifiers."""
+        if self._patient_repository.get(session.patient_id) is None:
+            raise LookupError(f"Patient not found: {session.patient_id}")
+        if self._workspace is None:
+            raise SessionWorkspaceUnavailableError("No session workspace is configured.")
+
+        session_directory = self.validate_restore_destination(session, artifacts)
+        saved_session = self._session_repository.add(session)
+        self._workspace.initialize(saved_session)
+
+        for artifact in artifacts:
+            self._artifact_repository.add(artifact)
+
+        if "session.json" not in {artifact.relative_path for artifact in artifacts}:
+            self._register_metadata_artifact(saved_session)
+
+        self._write_metadata(saved_session)
+        return session_directory
+
+    def validate_restore_destination(
+        self,
+        session: ExperimentSession,
+        artifacts: tuple[SessionArtifact, ...] = (),
+    ) -> Path:
+        """Validate a transfer destination without writing any state."""
+        if self._session_repository.get(session.session_id) is not None:
+            raise ValueError(f"Experiment session already exists: {session.session_id}")
+
+        if self._workspace is None:
+            raise SessionWorkspaceUnavailableError("No session workspace is configured.")
+
+        session_directory = self._workspace.resolve_session_directory(session)
+        if session_directory.exists() and any(session_directory.iterdir()):
+            raise FileExistsError(f"Session directory already contains data: {session_directory}")
+
+        relative_paths: set[str] = set()
+        for artifact in artifacts:
+            if artifact.session_id != session.session_id:
+                raise ValueError("Transferred artifact belongs to a different session.")
+            if artifact.relative_path in relative_paths:
+                raise ValueError(f"Duplicate transferred artifact path: {artifact.relative_path}")
+            relative_paths.add(artifact.relative_path)
+
+        return session_directory
+
     def start_session(
         self,
         session_id: UUID,

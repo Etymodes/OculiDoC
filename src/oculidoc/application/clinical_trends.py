@@ -46,6 +46,9 @@ _COMPARABLE_METRICS = (
     "tracking_error_mean_normalized",
     "reaction_time_ms",
     "confirmation_dwell_ms",
+    "target_acquisition_ratio",
+    "mean_first_target_acquired_ms",
+    "no_target_false_fixation_count",
 )
 
 
@@ -289,6 +292,33 @@ def _build_point(
                     _safe_integer(result.get("target_reacquisition_count"))
                 ),
                 "tracking_error_mean_normalized": (_normalized_error_mean(result)),
+            }
+        )
+
+    if task_kind == "instruction_fixation" or "target_acquisition_ratio" in result:
+        metric_family = "instruction_fixation"
+        metrics.update(
+            {
+                "target_acquisition_ratio": _metric(
+                    result,
+                    "target_acquisition_ratio",
+                ),
+                "mean_first_target_entry_ms": _metric(
+                    result,
+                    "mean_first_target_entry_ms",
+                ),
+                "mean_first_target_acquired_ms": _metric(
+                    result,
+                    "mean_first_target_acquired_ms",
+                ),
+                "longest_continuous_target_fixation_ms": _metric(
+                    result,
+                    "longest_continuous_target_fixation_ms",
+                ),
+                "no_target_false_fixation_count": _safe_integer(
+                    result.get("no_target_false_fixation_count")
+                ),
+                "distractor_fixation_count": _safe_integer(result.get("distractor_fixation_count")),
             }
         )
 
@@ -980,6 +1010,20 @@ def _point_summary(
                     metrics.get("reaction_time_ms"),
                     suffix=" ms",
                 ),
+            )
+        )
+
+    if family == "instruction_fixation":
+        return "；".join(
+            (
+                "目标稳定注视 " + _ratio_text(metrics.get("target_acquisition_ratio")),
+                "平均稳定注视潜伏期 "
+                + _number_text(
+                    metrics.get("mean_first_target_acquired_ms"),
+                    suffix=" ms",
+                ),
+                "无目标试次干扰稳定注视 "
+                + _number_text(metrics.get("no_target_false_fixation_count")),
             )
         )
 

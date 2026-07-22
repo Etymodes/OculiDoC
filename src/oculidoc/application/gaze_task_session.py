@@ -27,6 +27,7 @@ _GAZE_TASK_COMMANDS = {
     "screen_keyboard": "typing",
     "multiple_choice": "multiple-choice",
     "image_choice": "image-choice",
+    "instruction_fixation": "instruction-fixation",
 }
 
 

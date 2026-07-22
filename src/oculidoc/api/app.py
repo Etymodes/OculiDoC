@@ -15,6 +15,7 @@ from oculidoc import __version__
 from oculidoc.api.mobile_page import mobile_control_html
 from oculidoc.config import Settings, apply_saved_gaze_device_config, get_settings
 from oculidoc.devices.preflight import GazePreflightStore
+from oculidoc.image_library import BUILT_IN_IMAGE_ASSETS, ImageLibraryStore
 from oculidoc.lan_commands import (
     REMOTE_GAZE_MODULE_IDS,
     LanCommandStore,
@@ -86,6 +87,7 @@ def create_api(
         active_settings.data_dir / "runtime" / "gaze_preflight.json"
     )
     question_store = CommonQuestionStore(active_settings.data_dir / "common_questions.json")
+    image_store = ImageLibraryStore(active_settings.data_dir / "image_library")
     modules = {module.module_id: module for module in DEFAULT_MODULES}
 
     api = FastAPI(
@@ -121,6 +123,23 @@ def create_api(
             for template in templates
         ]
 
+    def image_assets() -> list[dict[str, object]]:
+        try:
+            assets = image_store.load()
+        except (OSError, KeyError, TypeError, ValueError):
+            assets = BUILT_IN_IMAGE_ASSETS
+
+        return [
+            {
+                "image_id": asset.image_id,
+                "label": asset.label,
+                "category": asset.category,
+                "style": asset.style,
+                "built_in": asset.built_in,
+            }
+            for asset in assets
+        ]
+
     @api.get("/health", tags=["system"])
     def health() -> dict[str, str]:
         settings_snapshot = current_settings()
@@ -152,6 +171,7 @@ def create_api(
             "patient_display": state.to_dict(),
             "commands": [command.to_dict() for command in commands.list_commands(limit=10)],
             "question_bank": common_questions(),
+            "image_library": image_assets(),
             "modules": [
                 {
                     "module_id": module.module_id,

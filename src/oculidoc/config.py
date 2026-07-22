@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 GazeSource = Literal[
+    "auto",
     "mock",
     "tobii_stream_engine",
     "tobii_legacy_bridge",
@@ -90,6 +91,8 @@ class GazeDeviceConfig(BaseModel):
 
     gaze_source: GazeSource
     tobii_stream_engine_dll: Path | None = None
+    tobii_bridge_host: str = "127.0.0.1"
+    tobii_bridge_port: int = Field(default=9999, ge=1, le=65535)
     gaze_preflight_seconds: int = Field(ge=3, le=10)
     gaze_minimum_valid_ratio: float = Field(ge=0.0, le=1.0)
 
@@ -98,6 +101,8 @@ class GazeDeviceConfig(BaseModel):
         return cls(
             gaze_source=settings.gaze_source,
             tobii_stream_engine_dll=settings.tobii_stream_engine_dll,
+            tobii_bridge_host=settings.tobii_bridge_host,
+            tobii_bridge_port=settings.tobii_bridge_port,
             gaze_preflight_seconds=settings.gaze_preflight_seconds,
             gaze_minimum_valid_ratio=settings.gaze_minimum_valid_ratio,
         )
@@ -108,6 +113,8 @@ class GazeDeviceConfig(BaseModel):
             update={
                 "gaze_source": self.gaze_source,
                 "tobii_stream_engine_dll": self.tobii_stream_engine_dll,
+                "tobii_bridge_host": self.tobii_bridge_host,
+                "tobii_bridge_port": self.tobii_bridge_port,
                 "gaze_preflight_seconds": self.gaze_preflight_seconds,
                 "gaze_minimum_valid_ratio": self.gaze_minimum_valid_ratio,
             }
@@ -121,6 +128,8 @@ class GazeDeviceConfig(BaseModel):
                 if self.tobii_stream_engine_dll is not None
                 else None
             ),
+            "tobii_bridge_host": self.tobii_bridge_host,
+            "tobii_bridge_port": self.tobii_bridge_port,
             "gaze_preflight_seconds": self.gaze_preflight_seconds,
             "gaze_minimum_valid_ratio": self.gaze_minimum_valid_ratio,
         }

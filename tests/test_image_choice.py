@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from pytestqt.qtbot import QtBot
 
+from oculidoc.image_library import ImageLibraryStore
 from oculidoc.tasks.binary_question import BinaryQuestionConfig, BinaryQuestionTask
 from oculidoc.tasks.image_choice import (
     ImageChoiceConfig,
@@ -13,16 +16,38 @@ from oculidoc.tasks.question_bank import BinaryQuestionType
 from oculidoc.tasks.sequential_choice import SequentialChoiceTask
 
 
-def test_built_in_image_questions_use_equal_size_cards(qtbot: QtBot) -> None:
-    config = ImageChoiceConfig(question_ids=("image-banana",))
-    question = image_question_sequence(config)[0]
-    task = ImageChoiceTask(question, config)
+def test_image_questions_are_generated_from_category_without_visible_names(
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    store = ImageLibraryStore(tmp_path / "image_library")
+    config = ImageChoiceConfig(
+        category_filters=("水果",),
+        style_filters=("彩色图标",),
+        question_count=2,
+        randomization_seed=7,
+    )
+    questions = image_question_sequence(config, store)
+    question = questions[0]
+    assets = {asset.image_id: asset for asset in store.load()}
+    task = ImageChoiceTask(question, config, store, assets=assets)
     qtbot.addWidget(task)
 
-    assert task.image_question.prompt == "请看香蕉"
-    assert render_image_card("banana").size() == render_image_card("lion").size()
+    assert questions == image_question_sequence(config, store)
+    assert len(questions) == 2
+    assert question.prompt.startswith("请看")
+    assert (
+        render_image_card(assets["banana"], store).size()
+        == render_image_card(assets["apple"], store).size()
+    )
     assert task.left_button.icon().isNull() is False
     assert task.right_button.icon().isNull() is False
+    assert task.left_button.text() == ""
+    assert task.right_button.text() == ""
+    result = task.recording_result("time_limit")
+    assert result["correct_image_id"] in {"banana", "apple"}
+    assert result["option_1_image_category"] == "水果"
+    assert result["option_2_image_style"] == "彩色图标"
 
 
 def test_sequential_questions_require_correct_answer_and_manual_advance(

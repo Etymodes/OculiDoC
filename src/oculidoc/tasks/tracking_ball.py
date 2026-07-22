@@ -29,10 +29,11 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
-    QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -41,6 +42,12 @@ from PySide6.QtWidgets import (
 
 from oculidoc.devices.contracts import (
     EyeTrackerSample,
+)
+from oculidoc.image_library import (
+    IMAGE_UPLOAD_GUIDE,
+    ImageAssetDialog,
+    ImageLibraryDialog,
+    ImageLibraryStore,
 )
 from oculidoc.tasks.tracking_dwell import (
     DwellPhase,
@@ -1149,9 +1156,13 @@ class TrackingBallSetupDialog(QDialog):
         parent: QWidget | None = None,
         *,
         config: TrackingBallConfig | None = None,
+        image_library_path: str | Path | None = None,
     ) -> None:
         super().__init__(parent)
         initial = config or TrackingBallConfig()
+        self.image_store = ImageLibraryStore(
+            image_library_path or (Path.home() / ".oculidoc" / "data" / "image_library")
+        )
         self.setWindowTitle("追踪球设置")
         self.resize(560, 700)
 
@@ -1304,15 +1315,23 @@ class TrackingBallSetupDialog(QDialog):
         )
 
         image_row = QHBoxLayout()
-        self.image_edit = QLineEdit(initial.image_path or "")
-        image_button = QPushButton("选择图片")
+        self.image_combo = QComboBox()
+        image_button = QPushButton("上传到图片库…")
+        library_button = QPushButton("管理图片库…")
         image_button.clicked.connect(self._select_image)
-        image_row.addWidget(self.image_edit, 1)
+        library_button.clicked.connect(self._manage_images)
+        image_row.addWidget(self.image_combo, 1)
         image_row.addWidget(image_button)
+        image_row.addWidget(library_button)
         form.addRow(
             "填充图片：",
             image_row,
         )
+        image_guide = QLabel(IMAGE_UPLOAD_GUIDE)
+        image_guide.setWordWrap(True)
+        image_guide.setStyleSheet("color:#365269; background:#eef7ff; padding:8px;")
+        form.addRow("上传指引：", image_guide)
+        self._reload_image_library(initial.image_path)
 
         self.hit_radius_spin = QDoubleSpinBox()
         self.hit_radius_spin.setRange(0.5, 2.5)
@@ -1355,15 +1374,60 @@ class TrackingBallSetupDialog(QDialog):
             self.color_edit.setText(selected.name())
 
     def _select_image(self) -> None:
-        filename, _ = QFileDialog.getOpenFileName(
+        dialog = ImageAssetDialog(
             self,
-            "选择目标填充图片",
-            "",
-            ("Images (*.png *.jpg *.jpeg *.bmp *.webp *.gif)"),
+            default_category="追踪球",
+            default_style="自定义图片",
         )
 
-        if filename:
-            self.image_edit.setText(filename)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        filename, label, category, style = dialog.values()
+
+        try:
+            asset = self.image_store.add_file(
+                filename,
+                label=label,
+                category=category,
+                style=style,
+            )
+        except (OSError, TypeError, ValueError) as error:
+            QMessageBox.warning(self, "无法保存追踪球图片", str(error))
+            return
+
+        path = self.image_store.resolve_path(asset)
+        self._reload_image_library(str(path) if path is not None else None)
+
+    def _manage_images(self) -> None:
+        selected = self.image_combo.currentData()
+        ImageLibraryDialog(self.image_store, self).exec()
+        self._reload_image_library(str(selected) if selected else None)
+
+    def _reload_image_library(self, selected_path: str | None = None) -> None:
+        self.image_combo.clear()
+        self.image_combo.addItem("不使用图片（显示形状和颜色）", None)
+        matched = False
+
+        for asset in self.image_store.load():
+            path = self.image_store.resolve_path(asset)
+
+            if path is None:
+                continue
+
+            path_text = str(path)
+            self.image_combo.addItem(
+                f"{asset.label} · {asset.category} · {asset.style}",
+                path_text,
+            )
+
+            if selected_path and Path(path_text) == Path(selected_path):
+                self.image_combo.setCurrentIndex(self.image_combo.count() - 1)
+                matched = True
+
+        if selected_path and not matched and Path(selected_path).is_file():
+            self.image_combo.addItem("当前外部图片（旧设置）", selected_path)
+            self.image_combo.setCurrentIndex(self.image_combo.count() - 1)
 
     def build_config(self) -> TrackingBallConfig:
         return TrackingBallConfig(
@@ -1374,7 +1438,9 @@ class TrackingBallSetupDialog(QDialog):
             vertical_position=self.vertical_position_combo.currentData(),
             diameter_px=self.diameter_spin.value(),
             color=self.color_edit.text(),
-            image_path=(self.image_edit.text().strip() or None),
+            image_path=(
+                str(self.image_combo.currentData()) if self.image_combo.currentData() else None
+            ),
             period_seconds=(self.period_spin.value()),
             duration_seconds=self.duration_spin.value(),
             dwell_time_ms=(self.dwell_time_spin.value()),

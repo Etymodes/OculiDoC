@@ -72,6 +72,8 @@ class BinaryQuestionConfig:
     randomize_sides: bool
     randomization_seed: int | None
     question_template_ids: tuple[str, ...]
+    question_count: int
+    randomize_question_order: bool
 
     def __init__(
         self,
@@ -90,6 +92,8 @@ class BinaryQuestionConfig:
         randomize_sides: bool = True,
         randomization_seed: int | None = None,
         question_template_ids: tuple[str, ...] | list[str] = (),
+        question_count: int = 0,
+        randomize_question_order: bool = True,
         left_answer: str | None = None,
         right_answer: str | None = None,
         correct_side: str | None = None,
@@ -176,8 +180,14 @@ class BinaryQuestionConfig:
         if len(set(normalized_template_ids)) != len(normalized_template_ids):
             raise ValueError("question_template_ids cannot contain duplicates.")
 
-        if len(normalized_template_ids) > 50:
-            raise ValueError("question_template_ids cannot contain more than 50 questions.")
+        if len(normalized_template_ids) > 200:
+            raise ValueError("question_template_ids cannot contain more than 200 questions.")
+
+        if not 0 <= question_count <= 200:
+            raise ValueError("question_count must be between 0 and 200.")
+
+        if not isinstance(randomize_question_order, bool):
+            raise TypeError("randomize_question_order must be a boolean.")
 
         object.__setattr__(self, "question", normalized_question)
         object.__setattr__(self, "option_1", normalized_option_1)
@@ -217,6 +227,8 @@ class BinaryQuestionConfig:
             randomization_seed,
         )
         object.__setattr__(self, "question_template_ids", normalized_template_ids)
+        object.__setattr__(self, "question_count", int(question_count))
+        object.__setattr__(self, "randomize_question_order", randomize_question_order)
 
     @property
     def is_scored(self) -> bool:
@@ -1160,7 +1172,7 @@ class BinaryQuestionSetupDialog(QDialog):
         self.setWindowTitle(
             "上下二分问答设置" if self.layout_orientation == "vertical" else "左右二分问答设置"
         )
-        self.resize(680, 680)
+        self.resize(760, 820)
 
         if question_bank_path is None:
             question_bank_path = Path.home() / ".oculidoc" / "data" / "common_questions.json"
@@ -1190,8 +1202,30 @@ class BinaryQuestionSetupDialog(QDialog):
 
         self.sequence_question_list = QListWidget()
         self.sequence_question_list.setObjectName("binarySequenceQuestionList")
-        self.sequence_question_list.setMinimumHeight(150)
-        form.addRow("连续题目（可勾选多题）：", self.sequence_question_list)
+        self.sequence_question_list.setMinimumHeight(230)
+        self.sequence_question_list.itemChanged.connect(self._refresh_question_count_limit)
+        select_all_button = QPushButton("全选")
+        clear_all_button = QPushButton("清空")
+        select_all_button.clicked.connect(lambda: self._set_all_sequence_questions(True))
+        clear_all_button.clicked.connect(lambda: self._set_all_sequence_questions(False))
+        sequence_actions = QHBoxLayout()
+        sequence_actions.addWidget(select_all_button)
+        sequence_actions.addWidget(clear_all_button)
+        sequence_actions.addStretch(1)
+        sequence_box = QVBoxLayout()
+        sequence_box.addWidget(self.sequence_question_list)
+        sequence_box.addLayout(sequence_actions)
+        form.addRow("连续题目候选池：", sequence_box)
+
+        self.question_count_spin = QSpinBox()
+        self.question_count_spin.setRange(0, 200)
+        self.question_count_spin.setSpecialValueText("全部已选题目")
+        self.question_count_spin.setValue(initial.question_count)
+        form.addRow("随机抽取题数：", self.question_count_spin)
+
+        self.randomize_question_order_check = QCheckBox("每次任务随机抽题并排列题目")
+        self.randomize_question_order_check.setChecked(initial.randomize_question_order)
+        form.addRow("题目顺序：", self.randomize_question_order_check)
 
         self.question_type_group = QButtonGroup(self)
         self.question_type_group.setExclusive(True)
@@ -1327,6 +1361,7 @@ class BinaryQuestionSetupDialog(QDialog):
         self.common_question_combo.blockSignals(True)
         self.common_question_combo.clear()
         self.common_question_combo.addItem("选择常用问题…", None)
+        self.sequence_question_list.blockSignals(True)
         self.sequence_question_list.clear()
 
         try:
@@ -1367,7 +1402,24 @@ class BinaryQuestionSetupDialog(QDialog):
 
         self.common_question_combo.setCurrentIndex(selected_index)
         self.common_question_combo.blockSignals(False)
+        self.sequence_question_list.blockSignals(False)
         self._refresh_common_question_actions()
+        self._refresh_question_count_limit()
+
+    def _set_all_sequence_questions(self, checked: bool) -> None:
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+
+        for index in range(self.sequence_question_list.count()):
+            self.sequence_question_list.item(index).setCheckState(state)
+
+        self._refresh_question_count_limit()
+
+    def _refresh_question_count_limit(self, *_args: object) -> None:
+        selected_count = len(self.selected_question_template_ids())
+        self.question_count_spin.setMaximum(max(0, selected_count))
+
+        if self.question_count_spin.value() > selected_count:
+            self.question_count_spin.setValue(selected_count)
 
     def selected_question_template_ids(self) -> tuple[str, ...]:
         """Return checked common-question identifiers in visible order."""
@@ -1388,10 +1440,7 @@ class BinaryQuestionSetupDialog(QDialog):
         template = self._templates.get(str(template_id)) if template_id is not None else None
         self.edit_common_button.setEnabled(template is not None)
 
-        if template is not None and template.built_in:
-            self.edit_common_button.setText("另存为自定义")
-        else:
-            self.edit_common_button.setText("保存修改")
+        self.edit_common_button.setText("保存修改")
 
     def _load_selected_template(
         self,
@@ -1459,19 +1508,14 @@ class BinaryQuestionSetupDialog(QDialog):
             return
 
         try:
-            if selected.built_in:
-                template = self._template_from_fields()
-                self.question_store.add(template)
-                title = "已另存为自定义问题"
-            else:
-                template = self._template_from_fields(
-                    template_id=selected.template_id,
-                )
-                self.question_store.update(
-                    selected.template_id,
-                    template,
-                )
-                title = "常用问题已更新"
+            template = self._template_from_fields(
+                template_id=selected.template_id,
+            )
+            self.question_store.update(
+                selected.template_id,
+                template,
+            )
+            title = "常用问题已更新"
         except Exception as error:  # noqa: BLE001
             QMessageBox.warning(
                 self,
@@ -1531,6 +1575,8 @@ class BinaryQuestionSetupDialog(QDialog):
             randomize_sides=self.randomize_sides_check.isChecked(),
             randomization_seed=self._randomization_seed,
             question_template_ids=self.selected_question_template_ids(),
+            question_count=self.question_count_spin.value(),
+            randomize_question_order=(self.randomize_question_order_check.isChecked()),
         )
 
 
@@ -1543,9 +1589,26 @@ def binary_question_sequence(
         return (("binary-question-1", config),)
 
     templates = {template.template_id: template for template in store.load()}
+    template_ids = list(config.question_template_ids)
+    seed = (
+        config.randomization_seed if config.randomization_seed is not None else secrets.randbits(63)
+    )
+    rng = random.Random(seed)
+
+    if config.randomize_question_order:
+        rng.shuffle(template_ids)
+
+    if config.question_count:
+        if config.question_count > len(template_ids):
+            raise ValueError(
+                f"随机抽取题数 {config.question_count} 超过已选候选题 {len(template_ids)}。"
+            )
+
+        template_ids = template_ids[: config.question_count]
+
     resolved: list[tuple[str, BinaryQuestionConfig]] = []
 
-    for template_id in config.question_template_ids:
+    for template_id in template_ids:
         template = templates.get(template_id)
 
         if template is None:
@@ -1567,7 +1630,7 @@ def binary_question_sequence(
                     option_font_size_pt=config.option_font_size_pt,
                     neutral_zone_width=config.neutral_zone_width,
                     randomize_sides=config.randomize_sides,
-                    randomization_seed=config.randomization_seed,
+                    randomization_seed=rng.getrandbits(63),
                 ),
             )
         )

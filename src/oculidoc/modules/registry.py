@@ -61,5 +61,6 @@ DEFAULT_MODULES: tuple[ModuleDefinition, ...] = (
         "instruction_fixation",
         "随指令注视",
         "根据语音或文字指令观察指定区域和目标。",
+        "available",
     ),
 )

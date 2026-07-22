@@ -44,6 +44,26 @@ def test_device_settings_dialog_marks_mock_as_engineering_mode(
     assert dialog.dll_path_edit.isEnabled() is False
 
 
+def test_device_settings_dialog_exposes_auto_detection_and_bridge_address(
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    settings = Settings(environment="test", data_dir=tmp_path, gaze_source="auto")
+    store = GazeDeviceConfigStore.for_settings(settings)
+    dialog = DeviceSettingsDialog(settings, store)
+    qtbot.addWidget(dialog)
+
+    assert dialog.source_combo.currentData() == "auto"
+    assert "自动检测传感器" in dialog.source_combo.currentText()
+    assert dialog.bridge_host_edit.isEnabled() is True
+    dialog.bridge_host_edit.setText("192.168.20.8")
+    dialog.bridge_port_spin.setValue(7788)
+
+    config = dialog.build_config()
+    assert config.tobii_bridge_host == "192.168.20.8"
+    assert config.tobii_bridge_port == 7788
+
+
 def test_device_settings_dialog_wires_stream_engine_discovery(
     qtbot: QtBot,
     tmp_path: Path,

@@ -14,6 +14,7 @@ from oculidoc.app import create_qt_application
 from oculidoc.config import apply_saved_gaze_device_config, get_settings
 from oculidoc.devices.preflight import GazePreflightResult, GazePreflightStore
 from oculidoc.experiments.task_runtime import RecordedTaskRuntime
+from oculidoc.image_library import ImageLibraryStore
 from oculidoc.lan_control import (
     LanControlStateStore,
     LanControlTransitionError,
@@ -40,6 +41,11 @@ from oculidoc.tasks.image_choice import (
     ImageChoiceSetupDialog,
     ImageChoiceTask,
     image_question_sequence,
+)
+from oculidoc.tasks.instruction_fixation import (
+    InstructionFixationConfig,
+    InstructionFixationSetupDialog,
+    InstructionFixationTask,
 )
 from oculidoc.tasks.multiple_choice import (
     MultipleChoiceConfig,
@@ -79,6 +85,7 @@ def main(
             "typing",
             "multiple-choice",
             "image-choice",
+            "instruction-fixation",
         ),
     )
     parser.add_argument("--direct", action="store_true")
@@ -98,6 +105,7 @@ def main(
         "typing": "screen_keyboard",
         "multiple-choice": "multiple_choice",
         "image-choice": "image_choice",
+        "instruction-fixation": "instruction_fixation",
     }[args.task]
     config_store = TaskConfigStore(settings.data_dir / "runtime" / "task_configs.json")
     record = config_store.load(module_id)
@@ -114,7 +122,10 @@ def main(
         if not isinstance(config, TrackingBallConfig):
             raise TypeError("Tracking task configuration type mismatch.")
 
-        setup = TrackingBallSetupDialog(config=config)
+        setup = TrackingBallSetupDialog(
+            config=config,
+            image_library_path=(settings.data_dir / "image_library"),
+        )
 
         if setup.exec() != QDialog.DialogCode.Accepted:
             return 0
@@ -154,11 +165,24 @@ def main(
             return 0
 
         config = setup.build_config()
-    else:
+    elif args.task == "image-choice":
         if not isinstance(config, ImageChoiceConfig):
             raise TypeError("Image-choice task configuration type mismatch.")
 
-        setup = ImageChoiceSetupDialog(config=config)
+        setup = ImageChoiceSetupDialog(
+            config=config,
+            image_library_path=(settings.data_dir / "image_library"),
+        )
+
+        if setup.exec() != QDialog.DialogCode.Accepted:
+            return 0
+
+        config = setup.build_config()
+    else:
+        if not isinstance(config, InstructionFixationConfig):
+            raise TypeError("Instruction-fixation task configuration type mismatch.")
+
+        setup = InstructionFixationSetupDialog(config=config)
 
         if setup.exec() != QDialog.DialogCode.Accepted:
             return 0
@@ -187,6 +211,7 @@ def main(
         | ScreenKeyboardTask
         | MultipleChoiceTask
         | SequentialChoiceTask
+        | InstructionFixationTask
     )
 
     if args.task == "tracking":
@@ -251,17 +276,21 @@ def main(
         title = "多选项问答"
         duration_seconds = config.duration_seconds
         question_to_speak = config.question
-    else:
+    elif args.task == "image-choice":
         if not isinstance(config, ImageChoiceConfig):
             raise TypeError("Image-choice task configuration type mismatch.")
 
-        image_questions = image_question_sequence(config)
+        image_store = ImageLibraryStore(settings.data_dir / "image_library")
+        image_assets = {asset.image_id: asset for asset in image_store.load()}
+        image_questions = image_question_sequence(config, image_store)
         task = SequentialChoiceTask(
             config=config,
             question_ids=[question.question_id for question in image_questions],
             task_factory=lambda index: ImageChoiceTask(
                 image_questions[index],
                 config,
+                image_store,
+                assets=image_assets,
                 allow_mouse_fallback=allow_mouse_fallback,
             ),
             layout_orientation="horizontal",
@@ -269,6 +298,20 @@ def main(
         title = "语音图片选择"
         duration_seconds = min(3_600, config.duration_seconds * len(image_questions))
         question_to_speak = image_questions[0].prompt
+    else:
+        if not isinstance(config, InstructionFixationConfig):
+            raise TypeError("Instruction-fixation task configuration type mismatch.")
+
+        task = InstructionFixationTask(
+            config,
+            allow_mouse_fallback=allow_mouse_fallback,
+        )
+        title = "随指令注视"
+        duration_seconds = min(
+            3_600,
+            config.trial_count * config.trial_duration_seconds + config.trial_count,
+        )
+        question_to_speak = f"请注视{config.target_description}"
 
     window = TimedTaskWindow(
         task,
@@ -307,6 +350,10 @@ def main(
     if isinstance(task, SequentialChoiceTask):
         task.question_changed.connect(speak)
         task.sequence_completed.connect(lambda: window.finish("answered"))
+
+    if isinstance(task, InstructionFixationTask):
+        task.instruction_changed.connect(speak)
+        task.protocol_completed.connect(lambda: window.finish("completed"))
 
     preflight_seconds = 0 if settings.environment == "test" else settings.gaze_preflight_seconds
     preflight_store = GazePreflightStore(settings.data_dir / "runtime" / "gaze_preflight.json")
@@ -405,6 +452,22 @@ def main(
                 )
 
         sequential_task.question_changed.connect(sync_sequential_question)
+
+    if isinstance(task, InstructionFixationTask):
+        fixation_task = task
+
+        def sync_fixation_instruction(text: str) -> None:
+            del text
+            state = display_state_store.load()
+
+            if state.mode is PatientDisplayMode.RUNNING and state.task_id == module_id:
+                display_state_store.set_display(
+                    fixation_task.patient_display_text,
+                    mode=PatientDisplayMode.RUNNING,
+                    task_id=module_id,
+                )
+
+        fixation_task.instruction_changed.connect(sync_fixation_instruction)
 
     countdown_seconds = 0 if settings.environment == "test" else TASK_START_COUNTDOWN_SECONDS
     source_hint = "\n模拟模式" if settings.gaze_source == "mock" else ""

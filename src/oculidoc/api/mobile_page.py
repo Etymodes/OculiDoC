@@ -102,6 +102,8 @@ let formDirty = false;
 
 const binaryFields = [
   {name: "question_template_ids", label: "连续题目（可多选；不选则只运行下方单题）", type: "multi-select", options: []},
+  {name: "question_count", label: "随机抽取题数（0 = 全部已选）", type: "number", min: 0, max: 200, step: 1},
+  {name: "randomize_question_order", label: "每次任务随机抽题并排列", type: "checkbox"},
   {name: "question_type", label: "问题类型", type: "select", options: [["yes_no", "是否题"], ["question_answer", "问答题"], ["inquiry", "询问题"], ["other", "其他"]]},
   {name: "question", label: "问题文本", type: "textarea"},
   {name: "option_1", label: "选项 1", type: "text"},
@@ -154,18 +156,32 @@ const fields = {
     {name: "randomize_positions", label: "每次呈现随机交换选项位置", type: "checkbox"}
   ],
   image_choice: [
-    {name: "question_ids", label: "连续图片题", type: "multi-select", options: [
-      ["image-banana", "请看香蕉（香蕉 / 狮子）"],
-      ["image-apple", "请看苹果（小狗 / 苹果）"],
-      ["image-cup", "请看水杯（水杯 / 床）"],
-      ["image-sun", "请看太阳（月亮 / 太阳）"],
-      ["image-car", "请看汽车（汽车 / 花）"],
-      ["image-cat", "请看小猫（鞋 / 小猫）"]
-    ]},
+    {name: "category_filters", label: "图片类别（可多选；不选 = 全部）", type: "multi-select", options: []},
+    {name: "style_filters", label: "图片风格（可多选；不选 = 全部）", type: "multi-select", options: []},
+    {name: "question_count", label: "本次随机题数", type: "number", min: 1, max: 100, step: 1},
     {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
     {name: "duration_seconds", label: "每题最长时长（秒）", type: "number", min: 5, max: 600, step: 1},
     {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 20, max: 120, step: 1},
     {name: "randomize_sides", label: "每题随机交换左右图片", type: "checkbox"}
+  ],
+  instruction_fixation: [
+    {name: "target_description", label: "指令中的目标描述", type: "text"},
+    {name: "target_shape", label: "目标形状", type: "select", options: [["circle", "圆形"], ["square", "方形"], ["diamond", "菱形"], ["star", "星形"]]},
+    {name: "target_color", label: "目标颜色", type: "color"},
+    {name: "distractor_shape", label: "干扰形状", type: "select", options: [["circle", "圆形"], ["square", "方形"], ["diamond", "菱形"], ["star", "星形"]]},
+    {name: "distractor_color", label: "干扰颜色", type: "color"},
+    {name: "background_color", label: "背景颜色", type: "color"},
+    {name: "position_ids", label: "可用屏幕 AOI（可多选）", type: "multi-select", options: [["top_left", "左上"], ["top_center", "上中"], ["top_right", "右上"], ["middle_left", "左中"], ["center", "中央"], ["middle_right", "右中"], ["bottom_left", "左下"], ["bottom_center", "下中"], ["bottom_right", "右下"]]},
+    {name: "target_only_trial_count", label: "仅目标试次数", type: "number", min: 0, max: 100, step: 1},
+    {name: "distractor_trial_count", label: "目标 + 干扰试次数", type: "number", min: 0, max: 100, step: 1},
+    {name: "no_target_trial_count", label: "无目标试次数", type: "number", min: 0, max: 100, step: 1},
+    {name: "distractor_count", label: "每试次干扰数", type: "number", min: 1, max: 6, step: 1},
+    {name: "target_size_px", label: "刺激大小（px）", type: "number", min: 40, max: 600, step: 1},
+    {name: "dwell_time_ms", label: "持续注视阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
+    {name: "trial_duration_seconds", label: "每试次最长时长（秒）", type: "number", min: 3, max: 120, step: 1},
+    {name: "instruction_font_size_pt", label: "指令字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "randomize_trial_order", label: "随机试次顺序并平衡目标位置", type: "checkbox"},
+    {name: "show_gaze_cursor", label: "患者屏幕显示实时视线光标", type: "checkbox"}
   ],
   screen_keyboard: [
     {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
@@ -356,14 +372,26 @@ async function refresh() {
     sequenceField.options = (runtime.question_bank || []).map((question) => [
       question.template_id, question.display_label
     ]);
+    const imageAssets = runtime.image_library || [];
+    const imageFields = fields.image_choice;
+    const categoryField = imageFields.find((definition) => definition.name === "category_filters");
+    const styleField = imageFields.find((definition) => definition.name === "style_filters");
+    categoryField.options = [...new Set(imageAssets.map((asset) => asset.category))]
+      .sort().map((value) => [value, value]);
+    styleField.options = [...new Set(imageAssets.map((asset) => asset.style))]
+      .sort().map((value) => [value, value]);
     const displayLabels = {
       closed: "已关闭", idle: "待机", ready: "准备", preview: "提示",
       running: "任务进行中", paused: "已暂停", result: "任务结束", error: "异常"
     };
     document.getElementById("online").textContent = "本地后台在线";
     const preflight = runtime.gaze_preflight;
-    let gazeText = "眼动源：" +
-      (runtime.gaze_source === "mock" ? "模拟模式（仅工程测试）" : runtime.gaze_source);
+    const gazeLabels = {
+      auto: "自动检测传感器", mock: "模拟模式（仅工程测试）",
+      tobii_stream_engine: "Tobii Eye Tracker 5",
+      tobii_legacy_bridge: "兼容眼动传感器桥接"
+    };
+    let gazeText = "眼动源：" + (gazeLabels[runtime.gaze_source] || runtime.gaze_source);
     if (preflight && preflight.source === runtime.gaze_source) {
       gazeText += " · " + Math.round(preflight.sample_rate_hz) + " Hz" +
         " · 有效率 " + Math.round(preflight.valid_ratio * 100) + "%";

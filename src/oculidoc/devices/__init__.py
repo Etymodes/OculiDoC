@@ -1,5 +1,6 @@
 """Hardware diagnostics and acquisition device interfaces."""
 
+from oculidoc.devices.auto_detect import AutoDetectEyeTrackerDevice
 from oculidoc.devices.contracts import (
     AcquisitionDevice,
     CameraDevice,
@@ -71,6 +72,7 @@ from oculidoc.devices.tobii_stream_engine import (
 
 __all__ = [
     "AcquisitionDevice",
+    "AutoDetectEyeTrackerDevice",
     "CameraDevice",
     "CameraFramePacket",
     "CameraProbeResult",
