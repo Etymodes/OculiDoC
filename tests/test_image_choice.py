@@ -46,6 +46,16 @@ def test_image_questions_are_generated_from_category_without_visible_names(
     assert task.right_button.icon().isNull() is False
     assert task.left_button.text() == ""
     assert task.right_button.text() == ""
+
+    task.resize(3_840, 2_160)
+    task.show()
+    qtbot.wait(10)
+
+    assert task.left_button.iconSize().height() > 760
+    assert task.left_button.icon().actualSize(task.left_button.iconSize()) == (
+        task.left_button.iconSize()
+    )
+    assert task.left_button.iconSize().height() <= task.left_button.height()
     result = task.recording_result("time_limit")
     assert result["correct_image_id"] in {"banana", "apple"}
     assert result["option_1_image_category"] == "水果"

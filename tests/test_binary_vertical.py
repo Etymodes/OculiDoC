@@ -82,6 +82,30 @@ def test_vertical_binary_registers_top_and_bottom_aois(qtbot: QtBot) -> None:
     assert aois["top_answer"]["bottom"] <= aois["bottom_answer"]["top"]
 
 
+def test_vertical_binary_options_expand_with_high_resolution(qtbot: QtBot) -> None:
+    task = BinaryQuestionTask(
+        BinaryQuestionConfig(
+            question="上面还是下面？",
+            option_1="上面",
+            option_2="下面",
+            randomize_sides=False,
+        ),
+        layout="vertical",
+    )
+    qtbot.addWidget(task)
+    task.resize(1_280, 720)
+    task.show()
+    qtbot.wait(10)
+    small_height = task.left_button.height()
+
+    task.resize(3_840, 2_160)
+    qtbot.wait(10)
+
+    assert task.left_button.height() > small_height * 3
+    assert task.right_button.height() == task.left_button.height()
+    assert task.left_button.width() >= task.width() * 0.95
+
+
 def test_vertical_binary_reuses_settings_with_vertical_labels(qtbot: QtBot) -> None:
     dialog = BinaryQuestionSetupDialog(
         config=BinaryQuestionConfig(question="请选择"),

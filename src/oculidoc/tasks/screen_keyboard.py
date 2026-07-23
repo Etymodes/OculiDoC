@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -214,7 +215,6 @@ class ScreenKeyboardTask(QWidget):
         self._commit_count = 0
         self._final_event_recorded = False
 
-        self.setMinimumSize(960, 640)
         self.setStyleSheet(
             """
             QWidget#screenKeyboard {
@@ -390,6 +390,10 @@ class ScreenKeyboardTask(QWidget):
         button.setObjectName("keyboardAction" if action else "pinyinOption")
         button.setProperty("active", False)
         button.setFont(self._font(self.config.option_font_size_pt, bold=True))
+        button.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            (QSizePolicy.Policy.Fixed if action else QSizePolicy.Policy.Expanding),
+        )
         button.clicked.connect(lambda checked=False, key=option_id: self._activate(key, "mouse"))
 
         if not self.allow_mouse_fallback:

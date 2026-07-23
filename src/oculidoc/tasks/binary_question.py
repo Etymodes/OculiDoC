@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -313,8 +314,6 @@ class BinaryQuestionTask(QWidget):
         self._selection_method: str | None = None
         self._final_event_recorded = False
 
-        button_minimum_height = 260 if self.layout_orientation == "vertical" else 620
-        self.setMinimumSize(800, 720 if self.layout_orientation == "vertical" else 520)
         self.setStyleSheet(
             """
             QWidget {
@@ -398,7 +397,10 @@ class BinaryQuestionTask(QWidget):
         ):
             button.setObjectName("answerButton")
             button.setProperty("active", False)
-            button.setMinimumHeight(button_minimum_height)
+            button.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Expanding,
+            )
             button.setFont(option_font)
             button.setStyleSheet(f"font-size: {config.option_font_size_pt}pt;")
 

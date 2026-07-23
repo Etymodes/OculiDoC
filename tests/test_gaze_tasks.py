@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 from time import monotonic_ns
 
+from PySide6.QtWidgets import QSizePolicy
 from pytestqt.qtbot import QtBot
 
 from oculidoc.config import Settings
@@ -248,8 +249,8 @@ def test_binary_question_uses_question_font(
     assert task.config.question_font_size_pt == 48
     assert "Arial" in task.question_label.styleSheet()
     assert "48pt" in task.question_label.styleSheet()
-    assert task.left_button.minimumHeight() >= 620
-    assert task.right_button.minimumHeight() >= 620
+    assert task.left_button.sizePolicy().verticalPolicy() is QSizePolicy.Policy.Expanding
+    assert task.right_button.sizePolicy().verticalPolicy() is QSizePolicy.Policy.Expanding
 
 
 def test_create_hospital_tobii_bridge() -> None:

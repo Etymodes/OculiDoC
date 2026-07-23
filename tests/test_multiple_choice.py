@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
+from PySide6.QtWidgets import QSizePolicy
 from pytestqt.qtbot import QtBot
 
 from oculidoc.experiments.task_runtime import RecordedTaskRuntime
@@ -92,6 +93,30 @@ def test_grid_shapes_use_large_option_rows_and_narrow_question_strips(
             1,
             columns,
         )
+
+
+def test_grid_options_fill_high_resolution_cells(qtbot: QtBot) -> None:
+    task = MultipleChoiceTask(
+        MultipleChoiceConfig(
+            option_count=12,
+            grid_shape="3x4",
+            randomize_positions=False,
+        )
+    )
+    qtbot.addWidget(task)
+    task.resize(1_280, 720)
+    task.show()
+    qtbot.wait(10)
+    small_height = task._buttons["option_1"].height()
+
+    task.resize(3_840, 2_160)
+    qtbot.wait(10)
+    first = task._buttons["option_1"]
+
+    assert first.sizePolicy().verticalPolicy() is QSizePolicy.Policy.Expanding
+    assert first.height() > small_height * 4
+    assert first.width() >= task.width() * 0.20
+    assert all(label.height() < task.height() * 0.05 for label in task.question_labels)
 
 
 def test_dwell_toggles_selection_only_after_gaze_leaves(qtbot: QtBot) -> None:

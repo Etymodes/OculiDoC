@@ -38,7 +38,6 @@ class TimedTaskWindow(QMainWindow):
         self._finished = False
 
         self.setWindowTitle(title)
-        self.setMinimumSize(960, 640)
         self.setStyleSheet(
             """
             QMainWindow {

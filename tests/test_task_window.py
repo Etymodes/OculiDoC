@@ -65,6 +65,17 @@ def test_binary_answers_use_large_regions(
         )
     )
     qtbot.addWidget(task)
+    task.resize(1_280, 720)
+    task.show()
+    qtbot.wait(10)
 
-    assert task.left_button.minimumHeight() >= 460
-    assert task.right_button.minimumHeight() >= 460
+    small_height = task.left_button.height()
+
+    assert task.left_button.width() >= task.width() * 0.45
+    assert small_height >= task.height() * 0.70
+
+    task.resize(3_840, 2_160)
+    qtbot.wait(10)
+
+    assert task.left_button.height() > small_height * 3
+    assert task.right_button.height() == task.left_button.height()

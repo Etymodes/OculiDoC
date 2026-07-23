@@ -234,7 +234,8 @@ class ImageChoiceTask(BinaryQuestionTask):
             "option_1": question.option_1_image_id,
             "option_2": question.option_2_image_id,
         }
-        self._icons: dict[str, QIcon] = {}
+        self._feedback_by_option: dict[str, str] = {}
+        self._rendered_icon_sizes: dict[str, int] = {}
         self._apply_image_icons()
 
     def _layout_payload(self) -> dict[str, object]:
@@ -252,29 +253,45 @@ class ImageChoiceTask(BinaryQuestionTask):
         )
         return payload
 
-    def _render_icon(self, option_id: str, feedback: str | None = None) -> QIcon:
+    def _render_icon(
+        self,
+        option_id: str,
+        feedback: str | None = None,
+        *,
+        size: int = 900,
+    ) -> QIcon:
         image_id = self._image_id_by_option[option_id]
         return QIcon(
             render_image_card(
                 self._assets[image_id],
                 self.image_store,
+                size=size,
                 feedback=feedback,
             )
         )
 
     def _refresh_icon_sizes(self) -> None:
-        for button in self._button_by_side.values():
+        for side, button in self._button_by_side.items():
             available = min(button.width() - 28, button.height() - 28)
-            size = max(360, min(760, available if available > 0 else 620))
+            # ponytail: 2048 avoids resize-time memory spikes; raise only for 8K displays.
+            size = max(64, min(2_048, available if available > 0 else 620))
+            option_id = self._option_by_side[side]
+
+            if self._rendered_icon_sizes.get(option_id) != size:
+                button.setIcon(
+                    self._render_icon(
+                        option_id,
+                        self._feedback_by_option.get(option_id),
+                        size=size,
+                    )
+                )
+                self._rendered_icon_sizes[option_id] = size
+
             button.setIconSize(QSize(size, size))
 
     def _apply_image_icons(self) -> None:
-        for side, button in self._button_by_side.items():
-            option_id = self._option_by_side[side]
-            icon = self._render_icon(option_id)
-            self._icons[option_id] = icon
+        for button in self._button_by_side.values():
             button.setText("")
-            button.setIcon(icon)
 
         self._refresh_icon_sizes()
 
@@ -289,7 +306,8 @@ class ImageChoiceTask(BinaryQuestionTask):
         side, _answer = self.result
         option_id = self._option_by_side[side]
         button = self._button_by_side[side]
-        button.setIcon(self._render_icon(option_id, feedback))
+        self._feedback_by_option[option_id] = feedback
+        self._rendered_icon_sizes.pop(option_id, None)
         button.setText("")
         self._refresh_icon_sizes()
 

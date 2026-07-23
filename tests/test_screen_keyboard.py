@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PySide6.QtWidgets import QSizePolicy
 from pytestqt.qtbot import QtBot
 
 from oculidoc.tasks.screen_keyboard import (
@@ -76,3 +77,20 @@ def test_setup_preserves_large_font_settings(qtbot: QtBot) -> None:
     qtbot.addWidget(dialog)
 
     assert dialog.build_config() == config
+
+
+def test_stage_options_expand_with_high_resolution(qtbot: QtBot) -> None:
+    task = ScreenKeyboardTask(ScreenKeyboardConfig())
+    qtbot.addWidget(task)
+    task.resize(1_920, 1_080)
+    task.show()
+    qtbot.wait(10)
+    small_height = task._buttons["stage:0"].height()
+
+    task.resize(3_840, 2_160)
+    qtbot.wait(10)
+    first = task._buttons["stage:0"]
+
+    assert first.sizePolicy().verticalPolicy() is QSizePolicy.Policy.Expanding
+    assert first.height() > small_height * 2
+    assert first.width() > 600
