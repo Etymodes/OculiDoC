@@ -427,9 +427,7 @@ class PatientSessionHistoryDialog(QDialog):
             return
 
         target_status = next(
-            status
-            for status in _CORRECTABLE_STATUSES
-            if _STATUS_LABELS[status] == selected_label
+            status for status in _CORRECTABLE_STATUSES if _STATUS_LABELS[status] == selected_label
         )
         reason: str | None = None
 

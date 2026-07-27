@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -321,7 +322,6 @@ class MultipleChoiceTask(QWidget):
         self._final_event_recorded = False
 
         self.setObjectName("multipleChoiceTask")
-        self.setMinimumSize(960, 640)
         self.setStyleSheet(
             """
             QWidget#multipleChoiceTask {
@@ -437,7 +437,6 @@ class MultipleChoiceTask(QWidget):
             center.setFont(self._font(20))
             self.options_layout.addWidget(center, 1, 1)
             positions = self._ring_positions(len(self._displayed_options))
-            option_minimum_height = 150
             row_count = 3
             column_count = 3
         else:
@@ -446,7 +445,6 @@ class MultipleChoiceTask(QWidget):
                 ((index // columns) * 2, index % columns)
                 for index in range(len(self._displayed_options))
             )
-            option_minimum_height = 180 if rows == 2 else 110
             row_count = rows * 2 - 1
             column_count = columns
 
@@ -480,7 +478,10 @@ class MultipleChoiceTask(QWidget):
             button.setProperty("active", False)
             button.setProperty("selected", False)
             button.setFont(self._font(self.config.option_font_size_pt))
-            button.setMinimumHeight(option_minimum_height)
+            button.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Expanding,
+            )
             button.clicked.connect(
                 lambda checked=False, selected_id=option_id: self._toggle(
                     selected_id,

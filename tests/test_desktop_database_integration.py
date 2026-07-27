@@ -6,6 +6,7 @@ from pytestqt.qtbot import QtBot
 
 from oculidoc.app import create_admin_window
 from oculidoc.application import RegisterPatientRequest
+from oculidoc.application.builtin_test_patient import BUILTIN_TEST_PATIENT_CODE
 from oculidoc.config import Settings
 from oculidoc.infrastructure.database import initialize_database
 from oculidoc.ui.main_window import AdminMainWindow
@@ -32,12 +33,10 @@ def test_create_admin_window_initializes_database(
     assert settings.database_path.exists()
     assert window.patient_service is (database_runtime.patient_service)
     assert window.experiment_session_service is (database_runtime.experiment_session_service)
-    assert window.patient_label.text() == (
-        "\u60a3\u8005\u6570\u636e\u5e93"
-        "\u5df2\u8fde\u63a5\uff0c"
-        "\u5c1a\u672a\u767b\u8bb0"
-        "\u60a3\u8005\u3002"
-    )
+    patients = database_runtime.patient_service.list_patients()
+
+    assert [patient.patient_code for patient in patients] == [BUILTIN_TEST_PATIENT_CODE]
+    assert window.patient_label.text() == ("已登记 1 名患者，其中 1 名启用；尚未选择当前患者。")
 
     window.close()
     database_runtime.dispose()

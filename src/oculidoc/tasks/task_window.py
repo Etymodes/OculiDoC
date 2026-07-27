@@ -2,6 +2,7 @@
 
 from PySide6.QtCore import (
     QElapsedTimer,
+    Qt,
     QTimer,
     Signal,
 )
@@ -38,7 +39,6 @@ class TimedTaskWindow(QMainWindow):
         self._finished = False
 
         self.setWindowTitle(title)
-        self.setMinimumSize(960, 640)
         self.setStyleSheet(
             """
             QMainWindow {
@@ -102,6 +102,7 @@ class TimedTaskWindow(QMainWindow):
 
         self.exit_button = QPushButton("✕ 退出")
         self.exit_button.setObjectName("taskEmergencyExitButton")
+        self.exit_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.exit_button.clicked.connect(self.request_exit)
 
         header_layout.addWidget(self.title_label)
@@ -147,6 +148,7 @@ class TimedTaskWindow(QMainWindow):
         if callable(start_method):
             start_method()
 
+        self.task_widget.setFocus(Qt.FocusReason.OtherFocusReason)
         self._elapsed.start()
         self._timer.start()
         self._update_countdown()

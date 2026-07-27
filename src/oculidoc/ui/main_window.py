@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -47,7 +49,14 @@ from oculidoc.application.gaze_task_session import (
 from oculidoc.branding import (
     brand_mark_pixmap,
 )
-from oculidoc.config import GazeDeviceConfig, GazeDeviceConfigStore, Settings
+from oculidoc.config import (
+    AdminUiMode,
+    AdminUiPreferences,
+    AdminUiPreferencesStore,
+    GazeDeviceConfig,
+    GazeDeviceConfigStore,
+    Settings,
+)
 from oculidoc.devices.preflight import GazePreflightResult, GazePreflightStore
 from oculidoc.domain import Patient
 from oculidoc.domain.experiment_session import (
@@ -90,6 +99,15 @@ from oculidoc.ui.patient_management import (
 )
 from oculidoc.ui.patient_window import PatientDisplayWindow
 from oculidoc.ui.session_history import PatientSessionHistoryDialog
+from oculidoc.ui.test_plan import (
+    CLINICAL_TASK_ORDER,
+    TestPlan,
+    TestPlanConflict,
+    TestPlanDialog,
+    TestPlanStep,
+    TestPlanStepStatus,
+    TestPlanStore,
+)
 from oculidoc.updater import find_repository_root
 from oculidoc.vision.camera_preview_window import (
     CameraPreviewWindow,
@@ -112,6 +130,9 @@ class AdminMainWindow(QMainWindow):
         self.experiment_session_service = experiment_session_service
         self.current_patient: Patient | None = None
         self.module_buttons: dict[str, QPushButton] = {}
+        self._admin_ui_preferences_store = AdminUiPreferencesStore.for_settings(self.settings)
+        self.ui_mode = self._admin_ui_preferences_store.load().mode
+        self._test_plan_store = TestPlanStore.for_settings(self.settings)
         self._eye_windows: dict[
             UUID,
             CameraPreviewWindow,
@@ -150,6 +171,7 @@ class AdminMainWindow(QMainWindow):
         self._task_config_store = TaskConfigStore(
             self.settings.data_dir.expanduser() / "runtime" / "task_configs.json"
         )
+        self._task_config_store.set_active_patient(None)
         self._gaze_device_config_store = GazeDeviceConfigStore.for_settings(self.settings)
         self._gaze_preflight_store = GazePreflightStore(
             self.settings.data_dir.expanduser() / "runtime" / "gaze_preflight.json"
@@ -183,25 +205,62 @@ class AdminMainWindow(QMainWindow):
             QLabel#sectionTitle { color: #17324d; font-size: 21px; font-weight: 700; }
             QLabel#moduleTitle { color: #18344c; font-size: 19px; font-weight: 700; }
             QLabel#moduleDescription { color: #577083; font-size: 14px; }
-            QFrame#panel, QFrame#moduleCard {
+            QFrame#panel, QFrame#moduleCard, QFrame#workbenchTaskStrip {
                 background: white;
                 border: 1px solid #d9e3ec;
                 border-radius: 14px;
             }
+            QListWidget#workbenchPatientList, QListWidget#workbenchRecentList {
+                background: #f8fbfe;
+                border: 1px solid #d9e3ec;
+                border-radius: 9px;
+                padding: 4px;
+                font-size: 14px;
+            }
             QPushButton {
                 min-height: 38px;
+                background: #f8fbfe;
+                color: #17324d;
+                border: 1px solid #bfd3e4;
                 border-radius: 9px;
                 padding: 4px 16px;
                 font-family: "Microsoft YaHei UI";
                 font-size: 14px;
                 font-weight: 600;
             }
-            QPushButton#primaryButton { background: #1565c0; color: white; border: none; }
+            QPushButton:hover {
+                background: #edf5fc;
+                border-color: #76a9cf;
+            }
+            QPushButton:pressed {
+                background: #d8eaf8;
+                border-color: #4b89b7;
+                padding-top: 6px;
+                padding-left: 17px;
+            }
+            QPushButton:disabled {
+                background: #f1f4f7;
+                color: #98a6b3;
+                border-color: #d9e3ec;
+            }
+            QPushButton#primaryButton, QPushButton#startNextPlanStepButton {
+                background: #1565c0;
+                color: white;
+                border: none;
+            }
+            QPushButton#primaryButton:hover, QPushButton#startNextPlanStepButton:hover {
+                background: #0f5ab0;
+            }
+            QPushButton#primaryButton:pressed, QPushButton#startNextPlanStepButton:pressed {
+                background: #0b4c96;
+            }
             QPushButton#secondaryButton {
                 background: #edf4fb;
                 color: #184e77;
                 border: 1px solid #bfd3e4;
             }
+            QPushButton#secondaryButton:hover { background: #dcecf9; }
+            QPushButton#secondaryButton:pressed { background: #c8e0f3; }
             QPushButton#backendStatusButton {
                 background: transparent;
                 color: #184e77;
@@ -214,6 +273,8 @@ class AdminMainWindow(QMainWindow):
                 border: 1px solid #bfd3e4;
             }
             QPushButton#dangerButton { background: #b42318; color: white; border: none; }
+            QPushButton#dangerButton:hover { background: #971d14; }
+            QPushButton#dangerButton:pressed { background: #7d180f; }
             """
         )
 
@@ -223,11 +284,15 @@ class AdminMainWindow(QMainWindow):
         root.setSpacing(18)
 
         root.addLayout(self._build_header())
-        root.addWidget(self._build_patient_panel())
-        root.addWidget(self._build_module_area(), 1)
+        if self.ui_mode is AdminUiMode.CLASSIC:
+            root.addWidget(self._build_patient_panel())
+            root.addWidget(self._build_module_area(), 1)
+        else:
+            root.addWidget(self._build_workbench_area(), 1)
         root.addWidget(self._build_status_panel())
 
         self.setCentralWidget(central)
+        self._refresh_patient_summary()
         self._lan_poll_timer.start()
         self._lan_command_timer.start()
         self._poll_lan_control_state()
@@ -240,7 +305,7 @@ class AdminMainWindow(QMainWindow):
             )
             QTimer.singleShot(
                 0,
-                self._open_patient_display,
+                self._show_patient_display_behind_admin,
             )
 
     def _patient_counts(self) -> tuple[int, int]:
@@ -286,20 +351,21 @@ class AdminMainWindow(QMainWindow):
 
         if self.settings.gaze_source == "mock":
             if preflight is None:
-                return "眼动源：模拟模式（仅工程测试）"
+                return "眼动源：工程模拟测试"
 
             return (
-                "眼动源：模拟模式（仅工程测试）"
+                "眼动源：工程模拟测试"
                 f" · {preflight.sample_rate_hz:.0f} Hz"
                 f" · 有效率 {preflight.valid_ratio:.0%}"
             )
 
         labels = {
-            "auto": "自动检测传感器",
-            "gaze_collect_legacy": "GazeCollect / HPF 旧系统兼容",
-            "just_need_to_see_bundle": "JustNeedToSee 内置 Tobii DLL 兼容",
-            "tobii_stream_engine": "Tobii Eye Tracker 5",
-            "tobii_legacy_bridge": "兼容眼动传感器桥接",
+            "auto": "硬件自动检测",
+            "gaze_collect_legacy": "第三方兼容",
+            "just_need_to_see_bundle": "Tobii DLL兼容",
+            "tobii_hospital_bridge": "原监听兼容",
+            "tobii_stream_engine": "Tobii 原生 Stream",
+            "tobii_legacy_bridge": "第三方兼容",
         }
         source_name = labels.get(self.settings.gaze_source, self.settings.gaze_source)
 
@@ -307,7 +373,7 @@ class AdminMainWindow(QMainWindow):
             return f"眼动源：{source_name} · 尚未预检"
 
         if self.settings.gaze_source == "auto":
-            source_name = f"自动检测 → {preflight.device_name}"
+            source_name = f"硬件自动检测 → {preflight.device_name}"
 
         connection = "已连接" if self._active_gaze_module_ids else "最近预检"
         suffix = (
@@ -394,12 +460,57 @@ class AdminMainWindow(QMainWindow):
         self.update_button.setObjectName("secondaryButton")
         self.update_button.clicked.connect(self._check_for_updates)
 
+        self.admin_settings_button = QPushButton("总设置")
+        self.admin_settings_button.setObjectName("adminSettingsButton")
+        self.admin_settings_button.clicked.connect(self._open_admin_settings)
+
+        self.stop_task_button = QPushButton("停止任务")
+        self.stop_task_button.setObjectName("stopTaskButton")
+        self.stop_task_button.setEnabled(False)
+        self.stop_task_button.clicked.connect(self._stop_active_tasks)
+
         header.addWidget(logo_label)
         header.addLayout(titles)
         header.addStretch(1)
+        header.addWidget(self.stop_task_button)
+        header.addWidget(self.admin_settings_button)
         header.addWidget(self.update_button)
         header.addWidget(emergency_button)
         return header
+
+    def _open_admin_settings(self, checked: bool = False) -> None:
+        """Persist the administrator shell to apply after the next restart."""
+        del checked
+        labels = {
+            AdminUiMode.CLINICAL_WORKBENCH: "患者工作台（默认）",
+            AdminUiMode.CLASSIC: "经典皮肤（原有界面）",
+        }
+        modes = tuple(labels)
+        current = modes.index(self._admin_ui_preferences_store.load().mode)
+        selected, accepted = QInputDialog.getItem(
+            self,
+            "总设置",
+            "管理端界面（保存后重启 OculiDoC 生效）：",
+            [labels[mode] for mode in modes],
+            current,
+            False,
+        )
+        if not accepted:
+            return
+        if self._task_in_progress():
+            QMessageBox.information(
+                self,
+                "任务进行中",
+                "当前可以查看界面设置，但请先结束任务后再保存切换。",
+            )
+            return
+        mode = next(mode for mode in modes if labels[mode] == selected)
+        self._admin_ui_preferences_store.save(AdminUiPreferences(mode=mode))
+        QMessageBox.information(
+            self,
+            "总设置已保存",
+            f"下次启动将使用“{labels[mode]}”。本次运行中的界面不会重建。",
+        )
 
     def _check_for_updates(self, checked: bool = False) -> None:
         """Run the clean fast-forward updater without blocking the administrator UI."""
@@ -408,7 +519,7 @@ class AdminMainWindow(QMainWindow):
         if self._update_process is not None:
             return
 
-        if self._active_gaze_module_ids:
+        if self._task_in_progress():
             QMessageBox.information(
                 self,
                 "任务进行中",
@@ -548,6 +659,148 @@ class AdminMainWindow(QMainWindow):
         layout.addWidget(display_button)
         return panel
 
+    def _build_workbench_area(self) -> QWidget:
+        """Build the default patient-first administrator home page."""
+        container = QWidget()
+        root = QVBoxLayout(container)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
+        panels = QHBoxLayout()
+        panels.setSpacing(14)
+
+        patient_panel = QFrame()
+        patient_panel.setObjectName("panel")
+        patient_panel.setMinimumWidth(220)
+        patient_panel.setMaximumWidth(270)
+        patient_layout = QVBoxLayout(patient_panel)
+        patient_layout.setContentsMargins(16, 16, 16, 16)
+        patient_layout.addWidget(self._section_label("患者"))
+
+        self.workbench_patient_list = QListWidget()
+        self.workbench_patient_list.setObjectName("workbenchPatientList")
+        self.workbench_patient_list.currentItemChanged.connect(self._select_workbench_patient)
+        patient_layout.addWidget(self.workbench_patient_list, 1)
+
+        manage_button = QPushButton("患者管理")
+        manage_button.setObjectName("workbenchPatientManagementButton")
+        manage_button.clicked.connect(self._show_patient_placeholder)
+        patient_layout.addWidget(manage_button)
+
+        current_panel = QFrame()
+        current_panel.setObjectName("panel")
+        current_panel.setMinimumWidth(390)
+        current_layout = QVBoxLayout(current_panel)
+        current_layout.setContentsMargins(18, 16, 18, 16)
+        current_layout.addWidget(self._section_label("当前患者工作区"))
+
+        self.patient_label = QLabel(self._patient_panel_text())
+        self.patient_label.setObjectName("workbenchCurrentPatient")
+        self.patient_label.setWordWrap(True)
+        self.patient_label.setStyleSheet("font-size:34px;font-weight:800;color:#123d63;")
+        current_layout.addWidget(self.patient_label)
+
+        self.plan_progress_label = QLabel("尚未选择患者")
+        self.plan_progress_label.setObjectName("workbenchPlanProgress")
+        self.plan_progress_label.setStyleSheet("font-size:18px;font-weight:700;color:#17324d;")
+        self.plan_progress_label.setWordWrap(True)
+        current_layout.addWidget(self.plan_progress_label)
+
+        self.next_task_label = QLabel("选择患者后可编排本次测试。")
+        self.next_task_label.setObjectName("workbenchNextTask")
+        self.next_task_label.setWordWrap(True)
+        self.next_task_label.setStyleSheet("font-size:26px;font-weight:800;color:#17324d;")
+        current_layout.addWidget(self.next_task_label)
+
+        self.recent_result_label = QLabel("最近结果：暂无")
+        self.recent_result_label.setObjectName("workbenchRecentResult")
+        self.recent_result_label.setWordWrap(True)
+        self.recent_result_label.setStyleSheet("color:#5a7184;")
+        current_layout.addWidget(self.recent_result_label)
+        current_layout.addStretch(1)
+
+        self.plan_button = QPushButton("编排本次测试")
+        self.plan_button.setObjectName("openTestPlanButton")
+        self.plan_button.clicked.connect(self._open_test_plan_dialog)
+        self.start_next_button = QPushButton("开始下一项")
+        self.start_next_button.setObjectName("startNextPlanStepButton")
+        self.start_next_button.clicked.connect(self._start_next_plan_step)
+        self.retry_plan_button = QPushButton("重试当前项")
+        self.retry_plan_button.setObjectName("retryPlanStepButton")
+        self.retry_plan_button.clicked.connect(self._retry_plan_step)
+        self.finish_plan_button = QPushButton("结束本次测试")
+        self.finish_plan_button.setObjectName("finishTestPlanButton")
+        self.finish_plan_button.clicked.connect(self._finish_current_test_plan)
+
+        plan_actions = QGridLayout()
+        plan_actions.addWidget(self.plan_button, 0, 0)
+        plan_actions.addWidget(self.start_next_button, 0, 1)
+        plan_actions.addWidget(self.retry_plan_button, 1, 0)
+        plan_actions.addWidget(self.finish_plan_button, 1, 1)
+        current_layout.addLayout(plan_actions)
+
+        self.history_button = QPushButton("查看完整记录")
+        self.history_button.setObjectName("patientSessionHistoryButton")
+        self.history_button.clicked.connect(self._open_session_history)
+        current_layout.addWidget(self.history_button)
+
+        tools_panel = QFrame()
+        tools_panel.setObjectName("panel")
+        tools_panel.setMinimumWidth(255)
+        tools_layout = QVBoxLayout(tools_panel)
+        tools_layout.setContentsMargins(16, 16, 16, 16)
+        tools_layout.addWidget(self._section_label("记录与工具"))
+
+        self.workbench_recent_list = QListWidget()
+        self.workbench_recent_list.setObjectName("workbenchRecentList")
+        self.workbench_recent_list.itemDoubleClicked.connect(
+            lambda _item: self._open_session_history()
+        )
+        tools_layout.addWidget(self.workbench_recent_list, 1)
+
+        project_text_button = QPushButton("投送文字")
+        project_text_button.clicked.connect(self._project_patient_text)
+        display_button = QPushButton("打开患者显示端")
+        display_button.clicked.connect(self._open_patient_display)
+        device_button = QPushButton("设备设置")
+        device_button.clicked.connect(self._open_device_settings)
+
+        tools_layout.addWidget(project_text_button)
+        tools_layout.addWidget(display_button)
+        tools_layout.addWidget(device_button)
+
+        panels.addWidget(patient_panel)
+        panels.addWidget(current_panel, 2)
+        panels.addWidget(tools_panel, 1)
+        root.addLayout(panels, 1)
+
+        task_strip = QFrame()
+        task_strip.setObjectName("workbenchTaskStrip")
+        task_strip_layout = QVBoxLayout(task_strip)
+        task_strip_layout.setContentsMargins(12, 9, 12, 10)
+        task_strip_layout.setSpacing(6)
+        task_grid = QGridLayout()
+        task_grid.setHorizontalSpacing(8)
+        task_grid.setVerticalSpacing(6)
+        self.module_buttons = {}
+        for index, module in enumerate(DEFAULT_MODULES):
+            button = QPushButton(module.title)
+            button.setObjectName(f"moduleButton_{module.module_id}")
+            button.setProperty("moduleId", module.module_id)
+            button.setProperty("idleText", module.title)
+            button.setToolTip(f"直接打开：{module.title}")
+            button.clicked.connect(partial(self._open_module, module))
+            self.module_buttons[module.module_id] = button
+            task_grid.addWidget(button, index // 5, index % 5)
+        task_strip_layout.addLayout(task_grid)
+        root.addWidget(task_strip)
+        return container
+
+    @staticmethod
+    def _section_label(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("sectionTitle")
+        return label
+
     def _open_session_history(
         self,
         checked: bool = False,
@@ -631,6 +884,7 @@ class AdminMainWindow(QMainWindow):
         button = QPushButton("打开项目")
         button.setObjectName(f"moduleButton_{module.module_id}")
         button.setProperty("moduleId", module.module_id)
+        button.setProperty("idleText", "打开项目")
         button.clicked.connect(
             partial(
                 self._open_module,
@@ -683,7 +937,7 @@ class AdminMainWindow(QMainWindow):
     def _open_device_settings(self, checked: bool = False) -> None:
         del checked
 
-        if self._active_gaze_module_ids:
+        if self._task_in_progress():
             QMessageBox.information(
                 self,
                 "任务进行中",
@@ -1021,6 +1275,7 @@ class AdminMainWindow(QMainWindow):
     def _execute_remote_task_start(self, command: LanCommand) -> str:
         module_id = command.module_id
         config_revision = command.config_revision
+        game_mode = command.game_mode
 
         if module_id not in REMOTE_GAZE_MODULE_IDS:
             raise LanCommandRejected("该模块尚不支持手机远程启动。")
@@ -1039,11 +1294,17 @@ class AdminMainWindow(QMainWindow):
         if self.experiment_session_service is None:
             raise LanCommandRejected("实验会话服务未连接。")
 
-        if self._active_gaze_module_ids:
+        if self._task_in_progress():
             raise LanCommandRejected("已有任务正在启动、设置或运行，请先结束当前任务。")
 
         if config_revision is None:
             raise LanCommandRejected("远程启动缺少任务设置版本。")
+
+        if module_id == "gaze_games" and game_mode is None:
+            raise LanCommandRejected("请选择游戏模式。")
+
+        if module_id != "gaze_games" and game_mode is not None:
+            raise LanCommandRejected("该任务不接受游戏模式。")
 
         current_config = self._task_config_store.load(module_id)
 
@@ -1057,12 +1318,29 @@ class AdminMainWindow(QMainWindow):
             mode=PatientDisplayMode.PREVIEW,
             task_id=module_id,
         )
-        self._open_gaze_task_module(module, config_revision=config_revision)
+        if game_mode is None:
+            self._open_gaze_task_module(
+                module,
+                config_revision=config_revision,
+            )
+        else:
+            self._open_gaze_task_module(
+                module,
+                config_revision=config_revision,
+                game_mode=game_mode,
+            )
 
         if module_id not in self._active_gaze_module_ids:
             raise LanCommandRejected("任务进程未能启动，请查看电脑端提示。")
 
-        return f"{module.title}已按设置版本 {config_revision} 直接启动。"
+        mode_text = (
+            " · 点亮花园"
+            if game_mode == "garden"
+            else " · 视觉寻宝"
+            if game_mode == "treasure_hunt"
+            else ""
+        )
+        return f"{module.title}{mode_text}已按设置版本 {config_revision} 直接启动。"
 
     def _execute_remote_task_stop(self, command: LanCommand) -> str:
         module_id = command.module_id
@@ -1118,6 +1396,17 @@ class AdminMainWindow(QMainWindow):
         self._patient_window.raise_()
         self._patient_window.activateWindow()
 
+    def _show_patient_display_behind_admin(self) -> None:
+        """Prepare the patient screen without covering the administrator."""
+        state = self._lan_state_store.load()
+        if state.mode is PatientDisplayMode.CLOSED:
+            state = self._lan_state_store.reset_idle()
+        self._last_lan_revision = state.revision
+        self._patient_window.apply_state(state)
+        self._patient_window.showFullScreen()
+        self._patient_window.lower()
+        self._restore_admin_window()
+
     def _handle_patient_display_exit(self) -> None:
         state = self._lan_state_store.load()
 
@@ -1139,6 +1428,10 @@ class AdminMainWindow(QMainWindow):
 
         if hasattr(self, "patient_status_label"):
             self.patient_status_label.setText(self._patient_status_text())
+        if hasattr(self, "workbench_patient_list"):
+            self._refresh_workbench_patient_list()
+            self._refresh_workbench_plan()
+            self._refresh_workbench_recent_sessions()
 
     def _reload_current_patient(self) -> None:
         """Reload or clear the current patient."""
@@ -1149,8 +1442,21 @@ class AdminMainWindow(QMainWindow):
 
         if patient.is_active:
             self.current_patient = patient
+            self._task_config_store.set_active_patient(
+                str(patient.patient_id),
+                inherit_legacy=self._patient_has_history(patient.patient_id),
+            )
         else:
             self.current_patient = None
+            self._task_config_store.set_active_patient(None)
+
+    def _patient_has_history(self, patient_id: UUID) -> bool:
+        if self._test_plan_store.load(str(patient_id)) is not None:
+            return True
+        return bool(
+            self.experiment_session_service is not None
+            and self.experiment_session_service.list_sessions_for_patient(patient_id)
+        )
 
     def _set_current_patient(
         self,
@@ -1159,8 +1465,462 @@ class AdminMainWindow(QMainWindow):
         """Set and display the current patient."""
         if not patient.is_active:
             return
+        if (
+            self._task_in_progress()
+            and self.current_patient is not None
+            and patient.patient_id != self.current_patient.patient_id
+        ):
+            QMessageBox.information(
+                self,
+                "任务进行中",
+                "请先结束当前任务，再切换患者。",
+            )
+            return
 
+        self._task_config_store.set_active_patient(
+            str(patient.patient_id),
+            inherit_legacy=self._patient_has_history(patient.patient_id),
+        )
         self.current_patient = patient
+        self._refresh_patient_summary()
+
+    def _refresh_workbench_patient_list(self) -> None:
+        patient_list = self.workbench_patient_list
+        patient_list.blockSignals(True)
+        try:
+            patient_list.clear()
+            patients = (
+                self.patient_service.list_patients(active_only=True)
+                if self.patient_service is not None
+                else []
+            )
+            if not patients:
+                item = QListWidgetItem("暂无启用患者")
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                patient_list.addItem(item)
+                return
+
+            selected_item: QListWidgetItem | None = None
+            for patient in patients:
+                item = QListWidgetItem(patient.display_label)
+                item.setData(
+                    Qt.ItemDataRole.UserRole,
+                    str(patient.patient_id),
+                )
+                patient_list.addItem(item)
+                if (
+                    self.current_patient is not None
+                    and patient.patient_id == self.current_patient.patient_id
+                ):
+                    selected_item = item
+            if selected_item is not None:
+                patient_list.setCurrentItem(selected_item)
+        finally:
+            patient_list.blockSignals(False)
+
+    def _select_workbench_patient(
+        self,
+        current: QListWidgetItem | None,
+        previous: QListWidgetItem | None,
+    ) -> None:
+        if current is None or self.patient_service is None:
+            return
+        raw_patient_id = current.data(Qt.ItemDataRole.UserRole)
+        if raw_patient_id is None:
+            return
+        if self._task_in_progress():
+            self.workbench_patient_list.blockSignals(True)
+            try:
+                if previous is None:
+                    self.workbench_patient_list.clearSelection()
+                    self.workbench_patient_list.setCurrentRow(-1)
+                else:
+                    self.workbench_patient_list.setCurrentItem(previous)
+            finally:
+                self.workbench_patient_list.blockSignals(False)
+            QMessageBox.information(
+                self,
+                "任务进行中",
+                "请先结束当前任务，再切换患者。",
+            )
+            return
+        patient = self.patient_service.get_patient(UUID(str(raw_patient_id)))
+        self._set_current_patient(patient)
+
+    def _task_config_revisions(self) -> dict[str, int]:
+        revisions: dict[str, int] = {}
+        for definition in CLINICAL_TASK_ORDER:
+            if definition.module_id == "eye_observation":
+                continue
+            revisions[definition.module_id] = self._task_config_store.load(
+                definition.module_id,
+                patient_id=(
+                    str(self.current_patient.patient_id)
+                    if self.current_patient is not None
+                    else None
+                ),
+            ).revision
+        return revisions
+
+    def _recent_completion_by_module(self) -> dict[str, str]:
+        if self.current_patient is None or self.experiment_session_service is None:
+            return {}
+        recent: dict[str, str] = {}
+        for session in self.experiment_session_service.list_sessions_for_patient(
+            self.current_patient.patient_id
+        ):
+            if (
+                session.status is ExperimentSessionStatus.COMPLETED
+                and session.module_id not in recent
+            ):
+                ended = session.ended_at or session.updated_at
+                recent[session.module_id] = ended.astimezone().strftime("%Y-%m-%d")
+        return recent
+
+    def _current_test_plan(self) -> TestPlan | None:
+        if self.current_patient is None:
+            return None
+        return self._test_plan_store.load(str(self.current_patient.patient_id))
+
+    def _set_next_task_text(self, text: str, *, prominent: bool = False) -> None:
+        self.next_task_label.setText(text)
+        self.next_task_label.setStyleSheet(
+            f"font-size:{'26px' if prominent else '22px'};font-weight:800;color:#17324d;"
+        )
+
+    @staticmethod
+    def _plan_retryable_step(plan: TestPlan) -> TestPlanStep | None:
+        return next(
+            (
+                step
+                for step in reversed(plan.steps)
+                if step.selected
+                and step.status
+                in {
+                    TestPlanStepStatus.ABORTED,
+                    TestPlanStepStatus.FAILED,
+                }
+            ),
+            None,
+        )
+
+    def _refresh_workbench_plan(self) -> None:
+        if not hasattr(self, "plan_progress_label"):
+            return
+        plan = self._current_test_plan()
+        patient_selected = self.current_patient is not None
+        busy = self._task_in_progress()
+
+        self.plan_button.setEnabled(patient_selected and not busy)
+        self.history_button.setEnabled(True)
+
+        if not patient_selected:
+            self.plan_progress_label.setText("尚未选择患者")
+            self._set_next_task_text(
+                "选择患者后可编排本次测试。",
+                prominent=True,
+            )
+            self.start_next_button.setEnabled(False)
+            self.retry_plan_button.setEnabled(False)
+            self.finish_plan_button.setEnabled(False)
+            return
+
+        if plan is None:
+            self.plan_progress_label.setText("本次测试：尚未编排")
+            self._set_next_task_text("点击“编排本次测试”选择项目；0 号眼动采集与复核默认不选。")
+            self.start_next_button.setEnabled(False)
+            self.retry_plan_button.setEnabled(False)
+            self.finish_plan_button.setEnabled(False)
+            return
+
+        terminal, selected = plan.progress
+        counts = {
+            status: sum(step.selected and step.status is status for step in plan.steps)
+            for status in TestPlanStepStatus
+        }
+        self.plan_progress_label.setText(
+            f"本次测试进度：{terminal}/{selected}　"
+            f"完成 {counts[TestPlanStepStatus.COMPLETED]} · "
+            f"跳过 {counts[TestPlanStepStatus.SKIPPED]} · "
+            f"取消 {counts[TestPlanStepStatus.ABORTED]} · "
+            f"失败 {counts[TestPlanStepStatus.FAILED]}"
+        )
+
+        running = next(
+            (
+                step
+                for step in plan.steps
+                if step.selected and step.status is TestPlanStepStatus.RUNNING
+            ),
+            None,
+        )
+        next_step = plan.next_pending_step
+        definitions = {definition.step_id: definition for definition in CLINICAL_TASK_ORDER}
+        if running is not None:
+            definition = definitions[running.step_id]
+            self._set_next_task_text(f"正在进行：{definition.clinical_number} · {definition.title}")
+        elif next_step is not None:
+            definition = definitions[next_step.step_id]
+            rest_note = (
+                "；完成后安排休息/警觉复核"
+                if next_step.block_id in plan.rest_after_step_ids
+                else ""
+            )
+            self._set_next_task_text(
+                f"下一项：{definition.clinical_number} · {definition.title}{rest_note}"
+            )
+        else:
+            self._set_next_task_text("本次所选步骤均已终止；请复核不同状态后结束本次测试。")
+
+        retryable = self._plan_retryable_step(plan)
+        self.start_next_button.setEnabled(not busy and running is None and next_step is not None)
+        self.retry_plan_button.setEnabled(not busy and running is None and retryable is not None)
+        self.finish_plan_button.setEnabled(
+            not busy and running is None and next_step is None and selected > 0
+        )
+
+    def _refresh_workbench_recent_sessions(self) -> None:
+        if not hasattr(self, "workbench_recent_list"):
+            return
+        self.workbench_recent_list.clear()
+        if self.current_patient is None or self.experiment_session_service is None:
+            self.workbench_recent_list.addItem("暂无实验记录")
+            self.recent_result_label.setText("最近结果：暂无")
+            return
+
+        sessions = self.experiment_session_service.list_sessions_for_patient(
+            self.current_patient.patient_id
+        )
+        if not sessions:
+            self.workbench_recent_list.addItem("暂无实验记录")
+            self.recent_result_label.setText("最近结果：暂无")
+            return
+
+        titles = {module.module_id: module.title for module in DEFAULT_MODULES}
+        status_labels = {
+            ExperimentSessionStatus.CREATED: "已创建",
+            ExperimentSessionStatus.RUNNING: "进行中",
+            ExperimentSessionStatus.COMPLETED: "已完成",
+            ExperimentSessionStatus.ABORTED: "已取消",
+            ExperimentSessionStatus.FAILED: "失败",
+        }
+        for session in sessions[:6]:
+            self.workbench_recent_list.addItem(
+                f"{session.created_at.astimezone().strftime('%m-%d %H:%M')} · "
+                f"{titles.get(session.module_id, session.module_id)} · "
+                f"{status_labels[session.status]}"
+            )
+        latest = sessions[0]
+        self.recent_result_label.setText(
+            "最近结果："
+            f"{titles.get(latest.module_id, latest.module_id)} · "
+            f"{status_labels[latest.status]}"
+        )
+
+    def _open_test_plan_dialog(self, checked: bool = False) -> None:
+        del checked
+        if self.current_patient is None:
+            QMessageBox.information(
+                self,
+                "尚未选择患者",
+                "请先从左栏选择一名启用患者。",
+            )
+            return
+        if self._task_in_progress():
+            QMessageBox.information(
+                self,
+                "任务进行中",
+                "请先结束当前任务，再修改本次测试编排。",
+            )
+            return
+
+        patient_id = str(self.current_patient.patient_id)
+        current = self._test_plan_store.load(patient_id)
+        if current is None:
+            current = TestPlan.default(
+                patient_id,
+                config_revisions=self._task_config_revisions(),
+            )
+        dialog = TestPlanDialog(
+            self.settings,
+            self.current_patient,
+            current,
+            self._task_config_store,
+            gaze_status_text=self._gaze_source_status_text(),
+            recent_completion_by_module=self._recent_completion_by_module(),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if dialog.saved_plan is None:
+            return
+        try:
+            self._test_plan_store.save(
+                dialog.saved_plan,
+                expected_revision=current.revision,
+            )
+        except TestPlanConflict:
+            QMessageBox.warning(
+                self,
+                "本次测试编排已更新",
+                "计划已被其他窗口修改。请重新打开后确认。",
+            )
+        self._refresh_patient_summary()
+
+    def _start_next_plan_step(self, checked: bool = False) -> None:
+        del checked
+        plan = self._current_test_plan()
+        if plan is None or self.current_patient is None:
+            return
+        if self._task_in_progress() or any(
+            step.status is TestPlanStepStatus.RUNNING for step in plan.steps
+        ):
+            QMessageBox.information(
+                self,
+                "任务进行中",
+                "请先结束当前任务，再开始下一项。",
+            )
+            return
+        step = plan.next_pending_step
+        if step is None:
+            return
+        if step.module_id != "eye_observation":
+            current_revision = self._task_config_store.load(
+                step.module_id,
+                patient_id=str(self.current_patient.patient_id),
+            ).revision
+            if current_revision != step.config_revision:
+                QMessageBox.warning(
+                    self,
+                    "设置已更新，请重新确认",
+                    "本任务的共享设置在编排后发生变化。请重新打开“编排本次测试”确认设置版本。",
+                )
+                return
+
+        module = next(item for item in DEFAULT_MODULES if item.module_id == step.module_id)
+        if step.module_id == "eye_observation":
+            self._open_eye_observation_module(
+                module,
+                plan_step_id=step.block_id,
+            )
+        else:
+            self._open_gaze_task_module(
+                module,
+                config_revision=step.config_revision,
+                game_mode=step.game_mode,
+                plan_step_id=step.block_id,
+            )
+
+    def _retry_plan_step(self, checked: bool = False) -> None:
+        del checked
+        plan = self._current_test_plan()
+        if plan is None or self._task_in_progress():
+            return
+        step = self._plan_retryable_step(plan)
+        if step is None:
+            return
+        updated = plan.replace_step(step.prepare_retry())
+        try:
+            self._test_plan_store.save(
+                updated,
+                expected_revision=plan.revision,
+            )
+        except TestPlanConflict:
+            QMessageBox.warning(
+                self,
+                "本次测试编排已更新",
+                "计划已被其他窗口修改。请刷新后重试。",
+            )
+        self._refresh_workbench_plan()
+
+    def _finish_current_test_plan(self, checked: bool = False) -> None:
+        del checked
+        plan = self._current_test_plan()
+        if plan is None or plan.next_pending_step is not None:
+            return
+        if any(step.status is TestPlanStepStatus.RUNNING for step in plan.steps):
+            return
+        result = QMessageBox.question(
+            self,
+            "结束本次测试",
+            "将关闭当前编排。实验会话、报告和历史记录仍完整保留。继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._test_plan_store.close(
+                plan.patient_id,
+                expected_revision=plan.revision,
+            )
+        except TestPlanConflict:
+            QMessageBox.warning(
+                self,
+                "本次测试编排已更新",
+                "计划已被其他窗口修改，未关闭。",
+            )
+        self._refresh_workbench_plan()
+
+    def _mark_plan_step_running(
+        self,
+        patient_id: UUID,
+        block_id: str,
+        session_id: UUID,
+    ) -> None:
+        plan = self._test_plan_store.load(str(patient_id))
+        if plan is None:
+            raise RuntimeError("当前患者的测试编排已不存在。")
+        step = next(
+            (item for item in plan.steps if item.block_id == block_id),
+            None,
+        )
+        if step is None:
+            raise RuntimeError("测试编排中找不到即将启动的步骤。")
+        updated = plan.replace_step(step.start(str(session_id)))
+        self._test_plan_store.save(
+            updated,
+            expected_revision=plan.revision,
+        )
+        self._refresh_workbench_plan()
+
+    def _finish_plan_step_for_session(
+        self,
+        patient_id: UUID,
+        session_id: UUID,
+        status: ExperimentSessionStatus,
+    ) -> None:
+        plan = self._test_plan_store.load(str(patient_id))
+        if plan is None:
+            return
+        step = next(
+            (
+                item
+                for item in plan.steps
+                if item.session_id == str(session_id) and item.status is TestPlanStepStatus.RUNNING
+            ),
+            None,
+        )
+        if step is None:
+            return
+        mapped = {
+            ExperimentSessionStatus.COMPLETED: TestPlanStepStatus.COMPLETED,
+            ExperimentSessionStatus.ABORTED: TestPlanStepStatus.ABORTED,
+            ExperimentSessionStatus.FAILED: TestPlanStepStatus.FAILED,
+        }.get(status)
+        if mapped is None:
+            return
+        try:
+            self._test_plan_store.save(
+                plan.replace_step(step.finish(mapped)),
+                expected_revision=plan.revision,
+            )
+        except TestPlanConflict:
+            QMessageBox.warning(
+                self,
+                "本次测试状态未同步",
+                "实验记录已保存，但测试编排被其他窗口修改。请重新打开编排核对。",
+            )
         self._refresh_patient_summary()
 
     def _show_patient_placeholder(
@@ -1182,6 +1942,7 @@ class AdminMainWindow(QMainWindow):
             self.patient_service,
             self,
             experiment_session_service=self.experiment_session_service,
+            is_patient_session_active=self._is_patient_task_active,
         )
         result = dialog.exec()
 
@@ -1211,6 +1972,8 @@ class AdminMainWindow(QMainWindow):
             "multiple_choice",
             "image_choice",
             "instruction_fixation",
+            "gaze_games",
+            "visual_preference",
         }:
             self._open_gaze_task_module(module)
             return
@@ -1220,8 +1983,17 @@ class AdminMainWindow(QMainWindow):
     def _open_eye_observation_module(
         self,
         module: ModuleDefinition,
+        *,
+        plan_step_id: str | None = None,
     ) -> None:
         """Create a session and open the eye workbench."""
+        if self._task_in_progress():
+            QMessageBox.information(
+                self,
+                "任务已在运行",
+                "已有任务正在运行，请先结束当前任务。",
+            )
+            return
         if self.current_patient is None:
             QMessageBox.warning(
                 self,
@@ -1260,6 +2032,12 @@ class AdminMainWindow(QMainWindow):
                 patient_display_label=self.current_patient.display_label,
                 dataset_directory=dataset_directory,
             )
+            if plan_step_id is not None:
+                self._mark_plan_step_running(
+                    self.current_patient.patient_id,
+                    plan_step_id,
+                    session_id,
+                )
         except Exception as error:
             if session_id is not None:
                 with suppress(Exception):
@@ -1290,6 +2068,7 @@ class AdminMainWindow(QMainWindow):
         )
 
         self._eye_windows[session_id] = workbench
+        self._refresh_task_controls()
 
         workbench.show()
         workbench.raise_()
@@ -1367,6 +2146,7 @@ class AdminMainWindow(QMainWindow):
         )
 
         if self.experiment_session_service is None:
+            self._refresh_task_controls()
             return
 
         try:
@@ -1379,12 +2159,81 @@ class AdminMainWindow(QMainWindow):
                     session_id,
                     "Workbench closed before acquisition started.",
                 )
+            session = self.experiment_session_service.get_session(session_id)
+            self._finish_plan_step_for_session(
+                session.patient_id,
+                session_id,
+                session.status,
+            )
         except Exception as error:
             QMessageBox.warning(
                 self,
                 "实验会话结束失败",
                 str(error),
             )
+        self._refresh_task_controls()
+        self._refresh_patient_summary()
+
+    def _task_in_progress(self) -> bool:
+        return bool(self._active_gaze_module_ids or self._eye_windows)
+
+    def _is_patient_task_active(self, patient_id: UUID) -> bool:
+        if any(launch.patient_id == patient_id for launch in self._gaze_launches.values()):
+            return True
+        if self.experiment_session_service is None:
+            return False
+        for session_id in self._eye_windows:
+            with suppress(Exception):
+                session = self.experiment_session_service.get_session(session_id)
+                if session.patient_id == patient_id and not session.is_terminal:
+                    return True
+        return False
+
+    def _refresh_task_controls(self) -> None:
+        busy = self._task_in_progress()
+        if self._update_process is None:
+            self.update_button.setEnabled(not busy)
+        self.stop_task_button.setEnabled(busy)
+        for module_id, button in self.module_buttons.items():
+            button.setEnabled(not busy)
+            button.setText(
+                "任务运行中…"
+                if busy and module_id in self._active_gaze_module_ids
+                else str(button.property("idleText") or "打开项目")
+            )
+        if hasattr(self, "workbench_patient_list"):
+            self.workbench_patient_list.setEnabled(not busy)
+            self._refresh_workbench_plan()
+
+    def _stop_active_tasks(self, checked: bool = False) -> None:
+        del checked
+        if not self._task_in_progress():
+            return
+        result = QMessageBox.question(
+            self,
+            "停止当前任务",
+            "确定停止当前任务并保留已产生的数据以供复核吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            return
+
+        for process in tuple(self._gaze_processes.values()):
+            process.terminate()
+            if not process.waitForFinished(1_500):
+                process.kill()
+
+        for session_id, workbench in tuple(self._eye_windows.items()):
+            if self.experiment_session_service is not None:
+                with suppress(Exception):
+                    session = self.experiment_session_service.get_session(session_id)
+                    if not session.is_terminal:
+                        self.experiment_session_service.abort_session(
+                            session_id,
+                            "管理员停止任务。",
+                        )
+            workbench.close()
 
     def _set_gaze_module_busy(
         self,
@@ -1399,23 +2248,15 @@ class AdminMainWindow(QMainWindow):
             self._active_gaze_module_ids.discard(module_id)
 
         self._refresh_gaze_status()
-
-        if self._update_process is None:
-            self.update_button.setEnabled(not self._active_gaze_module_ids)
-
-        button = self.module_buttons.get(module_id)
-
-        if button is None:
-            return
-
-        button.setEnabled(not busy)
-        button.setText("任务运行中…" if busy else "打开项目")
+        self._refresh_task_controls()
 
     def _open_gaze_task_module(
         self,
         module: ModuleDefinition,
         *,
         config_revision: int | None = None,
+        game_mode: str | None = None,
+        plan_step_id: str | None = None,
     ) -> None:
         """Create a patient session and launch a gaze task."""
 
@@ -1435,7 +2276,7 @@ class AdminMainWindow(QMainWindow):
             )
             return
 
-        if self._active_gaze_module_ids:
+        if self._task_in_progress():
             QMessageBox.information(
                 self,
                 "任务已在运行",
@@ -1445,11 +2286,14 @@ class AdminMainWindow(QMainWindow):
 
         patient_id = self.current_patient.patient_id
         self._set_gaze_module_busy(module.module_id, True)
+        self.lower()
         self._open_patient_display()
         self._launch_gaze_task_process(
             module,
             patient_id=patient_id,
             config_revision=config_revision,
+            game_mode=game_mode,
+            plan_step_id=plan_step_id,
         )
 
     def _launch_gaze_task_process(
@@ -1458,6 +2302,8 @@ class AdminMainWindow(QMainWindow):
         *,
         patient_id: UUID,
         config_revision: int | None,
+        game_mode: str | None,
+        plan_step_id: str | None,
     ) -> None:
         """Launch a reserved gaze-task child process."""
         launch: GazeTaskLaunch | None = None
@@ -1472,6 +2318,12 @@ class AdminMainWindow(QMainWindow):
                 patient_id=patient_id,
                 module_id=module.module_id,
             )
+            if plan_step_id is not None:
+                self._mark_plan_step_running(
+                    patient_id,
+                    plan_step_id,
+                    launch.session_id,
+                )
 
             process = QProcess(self)
             environment = QProcessEnvironment.systemEnvironment()
@@ -1491,6 +2343,7 @@ class AdminMainWindow(QMainWindow):
             program, arguments = gaze_task_process_command(
                 launch.command,
                 config_revision=config_revision,
+                game_mode=game_mode,
             )
             process.setProgram(program)
             process.setArguments(arguments)
@@ -1514,6 +2367,7 @@ class AdminMainWindow(QMainWindow):
                 module.module_id,
                 False,
             )
+            self._restore_admin_window()
 
             if launch is not None and session_service is not None:
                 self._gaze_processes.pop(
@@ -1533,6 +2387,12 @@ class AdminMainWindow(QMainWindow):
                             launch.session_id,
                             str(error),
                         )
+                    session = session_service.get_session(launch.session_id)
+                    self._finish_plan_step_for_session(
+                        launch.patient_id,
+                        launch.session_id,
+                        session.status,
+                    )
 
             with suppress(Exception):
                 result_state = self._publish_patient_display(
@@ -1578,6 +2438,8 @@ class AdminMainWindow(QMainWindow):
                 False,
             )
 
+        self._restore_admin_window()
+
         if process is None or launch is None or self.experiment_session_service is None:
             return
 
@@ -1603,6 +2465,12 @@ class AdminMainWindow(QMainWindow):
                         session_id,
                         str(error),
                     )
+                session = self.experiment_session_service.get_session(session_id)
+                self._finish_plan_step_for_session(
+                    launch.patient_id,
+                    session_id,
+                    session.status,
+                )
 
             with suppress(Exception):
                 result_state = self._publish_patient_display(
@@ -1624,6 +2492,12 @@ class AdminMainWindow(QMainWindow):
                 str(error),
             )
             return
+
+        self._finish_plan_step_for_session(
+            launch.patient_id,
+            session_id,
+            status,
+        )
 
         patient_label = "该患者"
         if self.patient_service is not None:

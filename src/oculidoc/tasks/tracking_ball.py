@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
-from math import cos, pi, sin
+from math import atan2, cos, degrees, pi, sin
 from pathlib import Path
 from time import monotonic_ns
 
@@ -61,12 +61,14 @@ class TargetShape(StrEnum):
     SQUARE = "square"
     DIAMOND = "diamond"
     STAR = "star"
+    ANIMATED_CAT = "animated_cat"
 
 
 class TargetEffect(StrEnum):
     NONE = "none"
     PULSE = "pulse"
     SPIN = "spin"
+    RUNNING = "running"
 
 
 class TargetPath(StrEnum):
@@ -98,15 +100,20 @@ class TrackingBallConfig:
     show_gaze_cursor: bool = True
 
     def __post_init__(self) -> None:
+        shape = TargetShape(self.shape)
+        effect = TargetEffect(self.effect)
+        if shape is TargetShape.ANIMATED_CAT or effect is TargetEffect.RUNNING:
+            shape = TargetShape.ANIMATED_CAT
+            effect = TargetEffect.RUNNING
         object.__setattr__(
             self,
             "shape",
-            TargetShape(self.shape),
+            shape,
         )
         object.__setattr__(
             self,
             "effect",
-            TargetEffect(self.effect),
+            effect,
         )
         object.__setattr__(
             self,
@@ -946,6 +953,30 @@ class TrackingBallTask(QWidget):
             0.5 + 0.24 * sin(2.0 * phase),
         )
 
+    def target_tangent_pixels(self, phase: float) -> tuple[float, float]:
+        """Return the forward path tangent in screen-pixel coordinates."""
+        current_x, current_y = self.target_center_normalized(phase)
+        next_x, next_y = self.target_center_normalized(phase + 0.002)
+        return (
+            (next_x - current_x) * max(1.0, float(self.width())),
+            (next_y - current_y) * max(1.0, float(self.height())),
+        )
+
+    @staticmethod
+    def running_cat_transform(delta_x: float, delta_y: float) -> tuple[float, bool]:
+        """Keep the head on the tangent while preventing a downward-facing back."""
+        if abs(delta_x) + abs(delta_y) < 1e-12:
+            return (0.0, False)
+        tangent_angle = degrees(atan2(delta_y, delta_x))
+        mirror_horizontally = delta_x < -abs(delta_y) * 0.01
+        rotation = tangent_angle + (180.0 if mirror_horizontally else 0.0)
+        return (rotation, mirror_horizontally)
+
+    @staticmethod
+    def running_cat_stride(diameter: float, phase: float) -> float:
+        """Return a deliberately legible running stride for bedside viewing."""
+        return sin(phase * 4.0) * diameter * 0.16
+
     def _target_path(
         self,
         diameter: float,
@@ -984,6 +1015,17 @@ class TrackingBallTask(QWidget):
             path.closeSubpath()
             return path
 
+        if self.config.shape is TargetShape.ANIMATED_CAT:
+            path.addEllipse(
+                QRectF(
+                    -radius,
+                    -radius * 0.62,
+                    diameter,
+                    diameter * 0.92,
+                )
+            )
+            return path
+
         points: list[QPointF] = []
 
         for index in range(10):
@@ -999,6 +1041,132 @@ class TrackingBallTask(QWidget):
         path.addPolygon(QPolygonF(points))
         path.closeSubpath()
         return path
+
+    @staticmethod
+    def _paint_running_cat(
+        painter: QPainter,
+        *,
+        diameter: float,
+        phase: float,
+    ) -> None:
+        """Draw a deterministic orange running cat without an external asset."""
+        orange = QColor("#f28c28")
+        orange_dark = QColor("#b95812")
+        cream = QColor("#fff0d5")
+        outline = QPen(QColor("#7a350d"), max(2.0, diameter * 0.018))
+        gait = sin(phase * 4.0)
+        stride = TrackingBallTask.running_cat_stride(diameter, phase)
+
+        painter.save()
+        painter.translate(0.0, abs(gait) * -diameter * 0.045)
+
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(orange_dark, max(5.0, diameter * 0.065), Qt.PenStyle.SolidLine))
+        tail = QPainterPath(QPointF(-diameter * 0.27, -diameter * 0.03))
+        tail.cubicTo(
+            QPointF(-diameter * 0.48, -diameter * 0.20),
+            QPointF(-diameter * 0.47, diameter * 0.20),
+            QPointF(-diameter * 0.36, diameter * 0.15),
+        )
+        painter.drawPath(tail)
+
+        painter.setPen(QPen(orange_dark, max(4.0, diameter * 0.045)))
+        for x, direction in (
+            (-0.18, 1.0),
+            (-0.04, -1.0),
+            (0.10, -1.0),
+            (0.22, 1.0),
+        ):
+            hip = QPointF(diameter * x, diameter * 0.09)
+            lift = max(0.0, gait * direction) * diameter * 0.11
+            foot = QPointF(
+                diameter * x + stride * direction,
+                diameter * 0.34 - lift,
+            )
+            knee = QPointF(
+                (hip.x() + foot.x()) / 2.0 - stride * direction * 0.18,
+                diameter * 0.23 - lift * 0.35,
+            )
+            painter.drawLine(hip, knee)
+            painter.drawLine(knee, foot)
+            painter.drawLine(
+                foot,
+                QPointF(foot.x() + diameter * 0.11 * direction, foot.y()),
+            )
+
+        painter.setPen(outline)
+        painter.setBrush(orange)
+        body = QRectF(
+            -diameter * 0.29,
+            -diameter * 0.16,
+            diameter * 0.50,
+            diameter * 0.31,
+        )
+        painter.drawRoundedRect(body, diameter * 0.13, diameter * 0.13)
+
+        head = QRectF(
+            diameter * 0.10,
+            -diameter * 0.27,
+            diameter * 0.30,
+            diameter * 0.30,
+        )
+        painter.drawEllipse(head)
+        painter.drawPolygon(
+            QPolygonF(
+                [
+                    QPointF(diameter * 0.14, -diameter * 0.20),
+                    QPointF(diameter * 0.16, -diameter * 0.36),
+                    QPointF(diameter * 0.25, -diameter * 0.25),
+                ]
+            )
+        )
+        painter.drawPolygon(
+            QPolygonF(
+                [
+                    QPointF(diameter * 0.28, -diameter * 0.25),
+                    QPointF(diameter * 0.36, -diameter * 0.35),
+                    QPointF(diameter * 0.38, -diameter * 0.18),
+                ]
+            )
+        )
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(cream)
+        painter.drawEllipse(
+            QRectF(
+                diameter * 0.25,
+                -diameter * 0.12,
+                diameter * 0.14,
+                diameter * 0.11,
+            )
+        )
+        painter.setBrush(QColor("#203040"))
+        painter.drawEllipse(
+            QRectF(
+                diameter * 0.22,
+                -diameter * 0.18,
+                diameter * 0.035,
+                diameter * 0.05,
+            )
+        )
+        painter.drawEllipse(
+            QRectF(
+                diameter * 0.32,
+                -diameter * 0.18,
+                diameter * 0.035,
+                diameter * 0.05,
+            )
+        )
+        painter.setBrush(QColor("#7a350d"))
+        painter.drawEllipse(
+            QRectF(
+                diameter * 0.355,
+                -diameter * 0.085,
+                diameter * 0.035,
+                diameter * 0.025,
+            )
+        )
+        painter.restore()
 
     def paintEvent(self, event) -> None:
         del event
@@ -1040,7 +1208,21 @@ class TrackingBallTask(QWidget):
             )
         )
 
-        if not self._image.isNull():
+        if self.config.shape is TargetShape.ANIMATED_CAT:
+            delta_x, delta_y = self.target_tangent_pixels(phase)
+            rotation, mirror_horizontally = self.running_cat_transform(
+                delta_x,
+                delta_y,
+            )
+            painter.rotate(rotation)
+            if mirror_horizontally:
+                painter.scale(-1.0, 1.0)
+            self._paint_running_cat(
+                painter,
+                diameter=diameter,
+                phase=phase,
+            )
+        elif not self._image.isNull():
             painter.save()
             painter.setClipPath(path)
             target_rectangle = QRectF(
@@ -1160,6 +1342,7 @@ class TrackingBallSetupDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         initial = config or TrackingBallConfig()
+        self._syncing_cat_controls = False
         self.image_store = ImageLibraryStore(
             image_library_path or (Path.home() / ".oculidoc" / "data" / "image_library")
         )
@@ -1184,6 +1367,10 @@ class TrackingBallSetupDialog(QDialog):
         self.shape_combo.addItem(
             "星形",
             TargetShape.STAR,
+        )
+        self.shape_combo.addItem(
+            "动态小猫",
+            TargetShape.ANIMATED_CAT,
         )
         self.shape_combo.setCurrentIndex(self.shape_combo.findData(initial.shape))
         form.addRow(
@@ -1253,11 +1440,17 @@ class TrackingBallSetupDialog(QDialog):
             "旋转",
             TargetEffect.SPIN,
         )
+        self.effect_combo.addItem(
+            "跑动",
+            TargetEffect.RUNNING,
+        )
         self.effect_combo.setCurrentIndex(self.effect_combo.findData(initial.effect))
         form.addRow(
             "动画效果：",
             self.effect_combo,
         )
+        self.shape_combo.currentIndexChanged.connect(self._shape_changed)
+        self.effect_combo.currentIndexChanged.connect(self._effect_changed)
 
         self.diameter_spin = QSpinBox()
         self.diameter_spin.setRange(16, 600)
@@ -1332,6 +1525,7 @@ class TrackingBallSetupDialog(QDialog):
         image_guide.setStyleSheet("color:#365269; background:#eef7ff; padding:8px;")
         form.addRow("上传指引：", image_guide)
         self._reload_image_library(initial.image_path)
+        self._update_cat_controls()
 
         self.hit_radius_spin = QDoubleSpinBox()
         self.hit_radius_spin.setRange(0.5, 2.5)
@@ -1362,6 +1556,48 @@ class TrackingBallSetupDialog(QDialog):
         root.addLayout(form)
         root.addStretch(1)
         root.addWidget(buttons)
+
+    def _shape_changed(self, *_args: object) -> None:
+        if self._syncing_cat_controls:
+            return
+        self._syncing_cat_controls = True
+        try:
+            shape = TargetShape(self.shape_combo.currentData())
+            effect = TargetEffect(self.effect_combo.currentData())
+            if shape is TargetShape.ANIMATED_CAT:
+                self.effect_combo.setCurrentIndex(self.effect_combo.findData(TargetEffect.RUNNING))
+            elif effect is TargetEffect.RUNNING:
+                self.effect_combo.setCurrentIndex(self.effect_combo.findData(TargetEffect.PULSE))
+        finally:
+            self._syncing_cat_controls = False
+        self._update_cat_controls()
+
+    def _effect_changed(self, *_args: object) -> None:
+        if self._syncing_cat_controls:
+            return
+        self._syncing_cat_controls = True
+        try:
+            effect = TargetEffect(self.effect_combo.currentData())
+            shape = TargetShape(self.shape_combo.currentData())
+            if effect is TargetEffect.RUNNING:
+                self.shape_combo.setCurrentIndex(
+                    self.shape_combo.findData(TargetShape.ANIMATED_CAT)
+                )
+            elif shape is TargetShape.ANIMATED_CAT:
+                self.shape_combo.setCurrentIndex(self.shape_combo.findData(TargetShape.CIRCLE))
+        finally:
+            self._syncing_cat_controls = False
+        self._update_cat_controls()
+
+    def _update_cat_controls(self) -> None:
+        if not hasattr(self, "image_combo"):
+            return
+        is_cat = TargetShape(self.shape_combo.currentData()) is TargetShape.ANIMATED_CAT
+        self.image_combo.setEnabled(not is_cat)
+        self.color_edit.setEnabled(not is_cat)
+        message = "动态小猫使用内置橘色跑动动画。" if is_cat else ""
+        self.image_combo.setToolTip(message)
+        self.color_edit.setToolTip(message)
 
     def _select_color(self) -> None:
         selected = QColorDialog.getColor(
@@ -1430,8 +1666,9 @@ class TrackingBallSetupDialog(QDialog):
             self.image_combo.setCurrentIndex(self.image_combo.count() - 1)
 
     def build_config(self) -> TrackingBallConfig:
+        shape = TargetShape(self.shape_combo.currentData())
         return TrackingBallConfig(
-            shape=self.shape_combo.currentData(),
+            shape=shape,
             effect=self.effect_combo.currentData(),
             path=self.path_combo.currentData(),
             horizontal_position=self.horizontal_position_combo.currentData(),
@@ -1439,7 +1676,11 @@ class TrackingBallSetupDialog(QDialog):
             diameter_px=self.diameter_spin.value(),
             color=self.color_edit.text(),
             image_path=(
-                str(self.image_combo.currentData()) if self.image_combo.currentData() else None
+                None
+                if shape is TargetShape.ANIMATED_CAT
+                else (
+                    str(self.image_combo.currentData()) if self.image_combo.currentData() else None
+                )
             ),
             period_seconds=(self.period_spin.value()),
             duration_seconds=self.duration_spin.value(),

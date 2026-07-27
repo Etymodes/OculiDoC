@@ -34,6 +34,8 @@ datas = collect_data_files(
     includes=[
         "assets/*.ico",
         "assets/*.png",
+        "assets/stimuli/*.json",
+        "assets/stimuli/*.png",
     ],
 )
 hiddenimports = sorted(

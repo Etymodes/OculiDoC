@@ -187,6 +187,18 @@ def _validate_optional_number(
         raise ValueError(f"{field_name} must be at least {minimum}.")
 
 
+def _validate_optional_point_3d(
+    value: tuple[float, float, float] | None,
+    *,
+    field_name: str,
+) -> None:
+    if value is None:
+        return
+
+    if len(value) != 3 or any(not isfinite(component) for component in value):
+        raise ValueError(f"{field_name} must contain three finite values.")
+
+
 @dataclass(frozen=True, slots=True)
 class EyeTrackerSample:
     """One gaze sample produced by an eye tracker."""
@@ -198,6 +210,8 @@ class EyeTrackerSample:
     right_eye_valid: bool
     left_pupil_diameter_mm: float | None = None
     right_pupil_diameter_mm: float | None = None
+    left_eye_position_normalized: tuple[float, float, float] | None = None
+    right_eye_position_normalized: tuple[float, float, float] | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -219,6 +233,15 @@ class EyeTrackerSample:
                 minimum=0.0,
             )
 
+        for field_name in (
+            "left_eye_position_normalized",
+            "right_eye_position_normalized",
+        ):
+            _validate_optional_point_3d(
+                getattr(self, field_name),
+                field_name=field_name,
+            )
+
     @property
     def gaze_valid(self) -> bool:
         """Return whether a usable combined gaze position exists."""
@@ -226,6 +249,14 @@ class EyeTrackerSample:
             self.gaze_x_normalized is not None
             and self.gaze_y_normalized is not None
             and (self.left_eye_valid or self.right_eye_valid)
+        )
+
+    @property
+    def eye_position_available(self) -> bool:
+        """Return whether either normalized eye position is available."""
+        return (
+            self.left_eye_position_normalized is not None
+            or self.right_eye_position_normalized is not None
         )
 
 

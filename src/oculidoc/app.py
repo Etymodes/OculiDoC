@@ -5,6 +5,11 @@ from collections.abc import Sequence
 
 from PySide6.QtWidgets import QApplication
 
+from oculidoc.app_paths import application_root
+from oculidoc.application.builtin_test_patient import (
+    ensure_builtin_test_patient,
+    load_or_create_install_date,
+)
 from oculidoc.branding import (
     apply_application_branding,
 )
@@ -46,6 +51,13 @@ def create_admin_window(
     )
 
     try:
+        ensure_builtin_test_patient(
+            database_runtime.patient_service,
+            enrollment_date=load_or_create_install_date(
+                settings.data_dir,
+                installation_root=application_root(),
+            ),
+        )
         window = AdminMainWindow(
             settings,
             database_runtime.patient_service,

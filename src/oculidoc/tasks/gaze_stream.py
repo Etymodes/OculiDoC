@@ -23,6 +23,7 @@ from oculidoc.devices.preflight import (
     GazePreflightResult,
     GazePreflightStore,
     failed_gaze_preflight,
+    observed_sample_capabilities,
     run_gaze_preflight,
 )
 from oculidoc.devices.simulated import (
@@ -50,7 +51,7 @@ def create_eye_tracker(
         )
 
     if settings.gaze_source == "auto":
-        candidates: list[EyeTrackerFactory] = [
+        third_party_candidates: list[EyeTrackerFactory] = [
             lambda: TobiiStreamEngineDevice(library_path=settings.tobii_stream_engine_dll),
             lambda: TobiiLegacyBridgeDevice(
                 host=settings.tobii_bridge_host,
@@ -59,7 +60,7 @@ def create_eye_tracker(
             ),
         ]
         if settings.tobii_helper_executable is not None:
-            candidates.append(
+            third_party_candidates.append(
                 lambda: TobiiHospitalBridgeDevice(
                     host=settings.tobii_bridge_bind_host,
                     port=settings.tobii_bridge_port,
@@ -68,7 +69,7 @@ def create_eye_tracker(
                     helper_executable=settings.tobii_helper_executable,
                 )
             )
-        return AutoDetectEyeTrackerDevice(tuple(candidates))
+        return AutoDetectEyeTrackerDevice(tuple(third_party_candidates))
 
     if settings.gaze_source == "tobii_stream_engine":
         return TobiiStreamEngineDevice(library_path=(settings.tobii_stream_engine_dll))
@@ -86,19 +87,34 @@ def create_eye_tracker(
     if settings.gaze_source == "just_need_to_see_bundle":
         return JustNeedToSeeBundleDevice(bundle_root=settings.just_need_to_see_root)
 
-    if settings.tobii_bridge_mode == "hospital_server":
+    if settings.gaze_source == "tobii_hospital_bridge":
         return TobiiHospitalBridgeDevice(
-            host=(settings.tobii_bridge_bind_host),
+            host=settings.tobii_bridge_bind_host,
             port=settings.tobii_bridge_port,
-            screen_width_px=(settings.tobii_screen_width_px),
-            screen_height_px=(settings.tobii_screen_height_px),
-            helper_executable=(settings.tobii_helper_executable),
+            screen_width_px=settings.tobii_screen_width_px,
+            screen_height_px=settings.tobii_screen_height_px,
+            helper_executable=settings.tobii_helper_executable,
         )
 
-    return TobiiLegacyBridgeDevice(
-        host=settings.tobii_bridge_host,
-        port=settings.tobii_bridge_port,
-    )
+    if settings.gaze_source == "tobii_legacy_bridge":
+        candidates: list[EyeTrackerFactory] = [
+            lambda: TobiiLegacyBridgeDevice(
+                host=settings.tobii_bridge_host,
+                port=settings.tobii_bridge_port,
+            )
+        ]
+        if settings.gaze_collect_json_root.is_dir():
+            candidates.append(
+                lambda: GazeCollectLegacyDevice(
+                    json_root=settings.gaze_collect_json_root,
+                    screen_width_px=settings.tobii_screen_width_px,
+                    screen_height_px=settings.tobii_screen_height_px,
+                    player_executable=None,
+                )
+            )
+        return AutoDetectEyeTrackerDevice(tuple(candidates))
+
+    raise ValueError(f"Unsupported gaze source: {settings.gaze_source}")
 
 
 class GazeStreamWorker(QThread):
@@ -168,6 +184,9 @@ class GazeStreamWorker(QThread):
             live_started_at = monotonic()
             live_sample_count = 0
             live_valid_sample_count = 0
+            live_observed_capabilities = set(
+                preflight_result.observed_capabilities if preflight_result is not None else ()
+            )
 
             while not self.isInterruptionRequested():
                 try:
@@ -184,6 +203,7 @@ class GazeStreamWorker(QThread):
                     self.sample_received.emit(sample)
                 live_sample_count += 1
                 live_valid_sample_count += int(sample.gaze_valid)
+                live_observed_capabilities.update(observed_sample_capabilities(sample))
                 live_elapsed = monotonic() - live_started_at
 
                 if (
@@ -203,6 +223,7 @@ class GazeStreamWorker(QThread):
                             passed=(valid_ratio >= self._settings.gaze_minimum_valid_ratio),
                             error=None,
                             updated_at_utc=datetime.now(UTC).isoformat(),
+                            observed_capabilities=tuple(sorted(live_observed_capabilities)),
                         )
                     )
                     live_started_at = monotonic()
@@ -216,6 +237,7 @@ class GazeStreamWorker(QThread):
                         device_name=self._device.info.name,
                         minimum_valid_ratio=self._settings.gaze_minimum_valid_ratio,
                         error=str(error),
+                        device_info=self._device.info,
                     )
 
                     if self._preflight_store is not None:

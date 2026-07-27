@@ -3,9 +3,11 @@
 from datetime import UTC, datetime
 from time import monotonic_ns
 
+from PySide6.QtWidgets import QSizePolicy
 from pytestqt.qtbot import QtBot
 
 from oculidoc.config import Settings
+from oculidoc.devices.auto_detect import AutoDetectEyeTrackerDevice
 from oculidoc.devices.contracts import (
     DeviceTimestamp,
     EyeTrackerSample,
@@ -19,6 +21,7 @@ from oculidoc.devices.tobii_hospital_bridge import (
 from oculidoc.devices.tobii_legacy_bridge import (
     TobiiLegacyBridgeDevice,
 )
+from oculidoc.devices.tobii_stream_engine import TobiiStreamEngineDevice
 from oculidoc.tasks.binary_question import (
     BinaryQuestionConfig,
     BinaryQuestionTask,
@@ -61,6 +64,19 @@ def test_create_mock_eye_tracker() -> None:
     )
 
 
+def test_native_stream_source_remains_direct(tmp_path) -> None:
+    dll_path = tmp_path / "tobii_stream_engine.dll"
+    device = create_eye_tracker(
+        Settings(
+            gaze_source="tobii_stream_engine",
+            tobii_stream_engine_dll=dll_path,
+        )
+    )
+
+    assert isinstance(device, TobiiStreamEngineDevice)
+    assert device.requested_library_path == dll_path.resolve()
+
+
 def test_create_tobii_bridge_eye_tracker() -> None:
     device = create_eye_tracker(
         Settings(
@@ -71,12 +87,11 @@ def test_create_tobii_bridge_eye_tracker() -> None:
         )
     )
 
-    assert isinstance(
-        device,
-        TobiiLegacyBridgeDevice,
-    )
-    assert device.host == "127.0.0.1"
-    assert device.port == 4567
+    assert isinstance(device, AutoDetectEyeTrackerDevice)
+    bridge = device.candidate_factories[0]()
+    assert isinstance(bridge, TobiiLegacyBridgeDevice)
+    assert bridge.host == "127.0.0.1"
+    assert bridge.port == 4567
 
 
 def test_tracking_target_is_configurable(
@@ -248,16 +263,15 @@ def test_binary_question_uses_question_font(
     assert task.config.question_font_size_pt == 48
     assert "Arial" in task.question_label.styleSheet()
     assert "48pt" in task.question_label.styleSheet()
-    assert task.left_button.minimumHeight() >= 620
-    assert task.right_button.minimumHeight() >= 620
+    assert task.left_button.sizePolicy().verticalPolicy() is QSizePolicy.Policy.Expanding
+    assert task.right_button.sizePolicy().verticalPolicy() is QSizePolicy.Policy.Expanding
 
 
 def test_create_hospital_tobii_bridge() -> None:
     device = create_eye_tracker(
         Settings(
-            gaze_source=("tobii_legacy_bridge"),
-            tobii_bridge_mode=("hospital_server"),
-            tobii_bridge_bind_host=("127.0.0.1"),
+            gaze_source="tobii_hospital_bridge",
+            tobii_bridge_host="127.0.0.1",
             tobii_bridge_port=9999,
             tobii_screen_width_px=1920,
             tobii_screen_height_px=1080,

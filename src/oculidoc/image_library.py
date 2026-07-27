@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,71 @@ IMAGE_UPLOAD_GUIDE = (
 )
 ALLOWED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp"})
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
+BUILT_IN_STIMULUS_DIRECTORY = Path(__file__).resolve().parent / "assets" / "stimuli"
+BUILT_IN_STIMULUS_MANIFEST = BUILT_IN_STIMULUS_DIRECTORY / "manifest.json"
+
+_SHORT_CHINESE_NAME = re.compile(r"[\u3400-\u9fff]{2,4}\Z")
+_CATEGORY_ALIASES = {
+    "家庭与熟悉人物角色": "人物",
+    "家养与农场动物": "动物",
+    "野生陆生动物": "动物",
+    "鸟类": "动物",
+    "体育项目与器材": "活动",
+    "游戏与休闲活动": "活动",
+    "节日与文化活动": "文化",
+    "建筑物": "建筑",
+}
+_STYLE_ALIASES = {
+    "高对比图标": "图标",
+    "卡通插画": "卡通",
+    "写实孤立照片": "写实",
+    "写实情境照片": "写实",
+    "实物照片": "写实",
+    "写实照片": "写实",
+    "照片": "写实",
+    "实拍": "写实",
+    "情境": "写实",
+    "插画": "卡通",
+    "立体": "三维",
+    "彩色图标": "图标",
+    "透明图标": "图标",
+    "自定义图标": "图标",
+    "低细节3D": "三维",
+}
+
+
+def _normalize_taxonomy_name(
+    value: object,
+    *,
+    aliases: dict[str, str],
+    field_name: str,
+) -> str:
+    compact = re.sub(r"\s+", "", str(value).strip())
+    without_code = re.sub(r"^[A-Za-z]\d+", "", compact)
+    normalized = aliases.get(compact, aliases.get(without_code, without_code))
+
+    if not _SHORT_CHINESE_NAME.fullmatch(normalized):
+        raise ValueError(f"{field_name}需使用二至四个汉字，不能包含字母或数字。")
+
+    return normalized
+
+
+def normalize_image_category(value: object) -> str:
+    """Return one short, merged Chinese image category."""
+    return _normalize_taxonomy_name(
+        value,
+        aliases=_CATEGORY_ALIASES,
+        field_name="类别",
+    )
+
+
+def normalize_image_style(value: object) -> str:
+    """Return one short, merged Chinese image style."""
+    return _normalize_taxonomy_name(
+        value,
+        aliases=_STYLE_ALIASES,
+        field_name="风格",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,13 +116,24 @@ class ImageAsset:
     built_in: bool = False
 
     def __post_init__(self) -> None:
-        for name in ("image_id", "label", "category", "style"):
+        for name in ("image_id", "label"):
             normalized = str(getattr(self, name)).strip()
 
             if not normalized:
                 raise ValueError(f"{name} cannot be empty.")
 
             object.__setattr__(self, name, normalized)
+
+        object.__setattr__(
+            self,
+            "category",
+            normalize_image_category(self.category),
+        )
+        object.__setattr__(
+            self,
+            "style",
+            normalize_image_style(self.style),
+        )
 
         normalized_path = str(self.relative_path).strip() if self.relative_path is not None else ""
         object.__setattr__(self, "relative_path", normalized_path or None)
@@ -89,19 +166,58 @@ class ImageAsset:
         )
 
 
+_SYMBOL_IMAGE_ASSETS: tuple[ImageAsset, ...] = (
+    ImageAsset("banana", "香蕉", "水果", "图标", "🍌", built_in=True),
+    ImageAsset("lion", "狮子", "动物", "图标", "🦁", built_in=True),
+    ImageAsset("dog", "小狗", "动物", "图标", "🐶", built_in=True),
+    ImageAsset("cat", "小猫", "动物", "图标", "🐱", built_in=True),
+    ImageAsset("cup", "水杯", "日常用品", "图标", "🥤", built_in=True),
+    ImageAsset("bed", "床", "日常用品", "图标", "🛏", built_in=True),
+    ImageAsset("shoe", "鞋", "日常用品", "图标", "👟", built_in=True),
+    ImageAsset("sun", "太阳", "自然", "图标", "☀", built_in=True),
+    ImageAsset("moon", "月亮", "自然", "图标", "🌙", built_in=True),
+    ImageAsset("flower", "花", "植物", "图标", "🌼", built_in=True),
+    ImageAsset("car", "汽车", "交通工具", "图标", "🚗", built_in=True),
+)
+
+
+def _load_packaged_image_assets() -> tuple[ImageAsset, ...]:
+    """Load reviewed package images without copying them into patient data."""
+    payload = json.loads(BUILT_IN_STIMULUS_MANIFEST.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema_version") != "1.0":
+        raise ValueError("Unsupported built-in image manifest.")
+    raw_images = payload.get("images")
+    if not isinstance(raw_images, list):
+        raise ValueError("Built-in image manifest must contain an image list.")
+
+    assets = []
+    for value in raw_images:
+        if not isinstance(value, dict):
+            raise TypeError("Built-in image manifest entries must be objects.")
+        relative_path = Path(str(value["relative_path"])).name
+        path = BUILT_IN_STIMULUS_DIRECTORY / relative_path
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing built-in image: {relative_path}")
+        assets.append(
+            ImageAsset(
+                image_id=str(value["image_id"]),
+                label=str(value["label"]),
+                category=str(value["category"]),
+                style=str(value["style"]),
+                relative_path=relative_path,
+                built_in=True,
+            )
+        )
+
+    image_ids = [asset.image_id for asset in assets]
+    if len(set(image_ids)) != len(image_ids):
+        raise ValueError("Built-in image IDs must be unique.")
+    return tuple(assets)
+
+
 BUILT_IN_IMAGE_ASSETS: tuple[ImageAsset, ...] = (
-    ImageAsset("banana", "香蕉", "水果", "彩色图标", "🍌", built_in=True),
-    ImageAsset("apple", "苹果", "水果", "彩色图标", "🍎", built_in=True),
-    ImageAsset("lion", "狮子", "动物", "彩色图标", "🦁", built_in=True),
-    ImageAsset("dog", "小狗", "动物", "彩色图标", "🐶", built_in=True),
-    ImageAsset("cat", "小猫", "动物", "彩色图标", "🐱", built_in=True),
-    ImageAsset("cup", "水杯", "日常用品", "彩色图标", "🥤", built_in=True),
-    ImageAsset("bed", "床", "日常用品", "彩色图标", "🛏", built_in=True),
-    ImageAsset("shoe", "鞋", "日常用品", "彩色图标", "👟", built_in=True),
-    ImageAsset("sun", "太阳", "自然", "彩色图标", "☀", built_in=True),
-    ImageAsset("moon", "月亮", "自然", "彩色图标", "🌙", built_in=True),
-    ImageAsset("flower", "花", "植物", "彩色图标", "🌼", built_in=True),
-    ImageAsset("car", "汽车", "交通工具", "彩色图标", "🚗", built_in=True),
+    *_SYMBOL_IMAGE_ASSETS,
+    *_load_packaged_image_assets(),
 )
 
 
@@ -129,7 +245,13 @@ class ImageLibraryStore:
         if not isinstance(raw_images, list):
             raise ValueError("Image-library images must be a list.")
 
-        return tuple(ImageAsset.from_dict(item) for item in raw_images)
+        assets = tuple(ImageAsset.from_dict(item) for item in raw_images)
+        normalized_images = [asset.to_dict() for asset in assets]
+
+        if raw_images != normalized_images:
+            self._write(list(assets))
+
+        return assets
 
     def load(self) -> tuple[ImageAsset, ...]:
         combined = {asset.image_id: asset for asset in BUILT_IN_IMAGE_ASSETS}
@@ -142,6 +264,9 @@ class ImageLibraryStore:
     def resolve_path(self, asset: ImageAsset) -> Path | None:
         if asset.relative_path is None:
             return None
+
+        if asset.built_in:
+            return (BUILT_IN_STIMULUS_DIRECTORY / Path(asset.relative_path).name).resolve()
 
         return (self.files_directory / Path(asset.relative_path).name).resolve()
 
@@ -316,7 +441,7 @@ class ImageAssetDialog(QDialog):
         *,
         asset: ImageAsset | None = None,
         default_category: str = "日常用品",
-        default_style: str = "实物照片",
+        default_style: str = "实拍",
     ) -> None:
         super().__init__(parent)
         self.asset = asset

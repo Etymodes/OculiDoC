@@ -1,0 +1,537 @@
+{
+  "schema_version": "1.0",
+  "images": [
+    {
+      "image_id": "builtin-medical-equipment-thermometer-cartoon",
+      "label": "体温计",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__thermometer__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-thermometer-icon",
+      "label": "体温计",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__thermometer__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-stethoscope-cartoon",
+      "label": "听诊器",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__stethoscope__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-stethoscope-icon",
+      "label": "听诊器",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__stethoscope__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-suction-machine-cartoon",
+      "label": "吸痰器",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__suction_machine__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-suction-machine-icon",
+      "label": "吸痰器",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__suction_machine__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-suction-catheter-cartoon",
+      "label": "吸痰管",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__suction_catheter__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-suction-catheter-icon",
+      "label": "吸痰管",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__suction_catheter__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-ventilator-cartoon",
+      "label": "呼吸机",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__ventilator__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-ventilator-icon",
+      "label": "呼吸机",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__ventilator__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-urinary-catheter-cartoon",
+      "label": "导尿管",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__urinary_catheter__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-urinary-catheter-icon",
+      "label": "导尿管",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__urinary_catheter__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-urine-bag-cartoon",
+      "label": "尿袋",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__urine_bag__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-urine-bag-icon",
+      "label": "尿袋",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__urine_bag__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-ecg-monitor-cartoon",
+      "label": "心电监护仪",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__ecg_monitor__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-ecg-monitor-icon",
+      "label": "心电监护仪",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__ecg_monitor__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-stretcher-cartoon",
+      "label": "担架",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__stretcher__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-stretcher-icon",
+      "label": "担架",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__stretcher__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-oxygen-mask-cartoon",
+      "label": "氧气面罩",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__oxygen_mask__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-oxygen-mask-icon",
+      "label": "氧气面罩",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__oxygen_mask__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-syringe-cartoon",
+      "label": "注射器",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__syringe__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-syringe-icon",
+      "label": "注射器",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__syringe__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-hospital-bed-cartoon",
+      "label": "病床",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__hospital_bed__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-hospital-bed-icon",
+      "label": "病床",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__hospital_bed__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-gauze-cartoon",
+      "label": "纱布",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__gauze__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-gauze-icon",
+      "label": "纱布",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__gauze__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-bandage-cartoon",
+      "label": "绷带",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__bandage__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-bandage-icon",
+      "label": "绷带",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__bandage__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-pill-cartoon",
+      "label": "药片",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__pill__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-pill-icon",
+      "label": "药片",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__pill__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-blood-pressure-monitor-cartoon",
+      "label": "血压计",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__blood_pressure_monitor__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-blood-pressure-monitor-icon",
+      "label": "血压计",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__blood_pressure_monitor__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-pulse-oximeter-cartoon",
+      "label": "血氧仪",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__pulse_oximeter__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-pulse-oximeter-icon",
+      "label": "血氧仪",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__pulse_oximeter__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-wheelchair-cartoon",
+      "label": "轮椅",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__wheelchair__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-wheelchair-icon",
+      "label": "轮椅",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__wheelchair__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-iv-pole-cartoon",
+      "label": "输液架",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__iv_pole__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-iv-pole-icon",
+      "label": "输液架",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__iv_pole__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-iv-bag-cartoon",
+      "label": "输液袋",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__iv_bag__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-iv-bag-icon",
+      "label": "输液袋",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__iv_bag__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-nasal-cannula-cartoon",
+      "label": "鼻导管",
+      "category": "医疗器材",
+      "style": "卡通",
+      "relative_path": "medical_equipment__nasal_cannula__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-medical-equipment-nasal-cannula-icon",
+      "label": "鼻导管",
+      "category": "医疗器材",
+      "style": "图标",
+      "relative_path": "medical_equipment__nasal_cannula__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-fruit-apple-cartoon",
+      "label": "苹果",
+      "category": "水果",
+      "style": "卡通",
+      "relative_path": "fruit__apple__cartoon_illustration.png"
+    },
+    {
+      "image_id": "apple",
+      "label": "苹果",
+      "category": "水果",
+      "style": "图标",
+      "relative_path": "fruit__apple__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-body-part-right-hand-cartoon",
+      "label": "右手",
+      "category": "身体部位",
+      "style": "卡通",
+      "relative_path": "body_part__right_hand__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-body-part-right-hand-icon",
+      "label": "右手",
+      "category": "身体部位",
+      "style": "图标",
+      "relative_path": "body_part__right_hand__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-body-part-mouth-cartoon",
+      "label": "嘴",
+      "category": "身体部位",
+      "style": "卡通",
+      "relative_path": "body_part__mouth__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-body-part-mouth-icon",
+      "label": "嘴",
+      "category": "身体部位",
+      "style": "图标",
+      "relative_path": "body_part__mouth__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-body-part-head-cartoon",
+      "label": "头",
+      "category": "身体部位",
+      "style": "卡通",
+      "relative_path": "body_part__head__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-body-part-head-icon",
+      "label": "头",
+      "category": "身体部位",
+      "style": "图标",
+      "relative_path": "body_part__head__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-body-part-left-hand-cartoon",
+      "label": "左手",
+      "category": "身体部位",
+      "style": "卡通",
+      "relative_path": "body_part__left_hand__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-body-part-left-hand-icon",
+      "label": "左手",
+      "category": "身体部位",
+      "style": "图标",
+      "relative_path": "body_part__left_hand__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-body-part-eye-cartoon",
+      "label": "眼睛",
+      "category": "身体部位",
+      "style": "卡通",
+      "relative_path": "body_part__eye__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-body-part-eye-icon",
+      "label": "眼睛",
+      "category": "身体部位",
+      "style": "图标",
+      "relative_path": "body_part__eye__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-body-part-ear-cartoon",
+      "label": "耳朵",
+      "category": "身体部位",
+      "style": "卡通",
+      "relative_path": "body_part__ear__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-body-part-ear-icon",
+      "label": "耳朵",
+      "category": "身体部位",
+      "style": "图标",
+      "relative_path": "body_part__ear__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-body-part-nose-cartoon",
+      "label": "鼻子",
+      "category": "身体部位",
+      "style": "卡通",
+      "relative_path": "body_part__nose__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-body-part-nose-icon",
+      "label": "鼻子",
+      "category": "身体部位",
+      "style": "图标",
+      "relative_path": "body_part__nose__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-beverage-coffee-cartoon",
+      "label": "咖啡",
+      "category": "饮品",
+      "style": "卡通",
+      "relative_path": "beverage__coffee__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-beverage-coffee-icon",
+      "label": "咖啡",
+      "category": "饮品",
+      "style": "图标",
+      "relative_path": "beverage__coffee__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-beverage-bubble-tea-cartoon",
+      "label": "奶茶",
+      "category": "饮品",
+      "style": "卡通",
+      "relative_path": "beverage__bubble_tea__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-beverage-bubble-tea-icon",
+      "label": "奶茶",
+      "category": "饮品",
+      "style": "图标",
+      "relative_path": "beverage__bubble_tea__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-beverage-juice-cartoon",
+      "label": "果汁",
+      "category": "饮品",
+      "style": "卡通",
+      "relative_path": "beverage__juice__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-beverage-juice-icon",
+      "label": "果汁",
+      "category": "饮品",
+      "style": "图标",
+      "relative_path": "beverage__juice__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-beverage-water-cartoon",
+      "label": "水",
+      "category": "饮品",
+      "style": "卡通",
+      "relative_path": "beverage__water__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-beverage-water-icon",
+      "label": "水",
+      "category": "饮品",
+      "style": "图标",
+      "relative_path": "beverage__water__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-beverage-soup-cartoon",
+      "label": "汤",
+      "category": "饮品",
+      "style": "卡通",
+      "relative_path": "beverage__soup__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-beverage-soup-icon",
+      "label": "汤",
+      "category": "饮品",
+      "style": "图标",
+      "relative_path": "beverage__soup__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-beverage-soda-cartoon",
+      "label": "汽水",
+      "category": "饮品",
+      "style": "卡通",
+      "relative_path": "beverage__soda__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-beverage-soda-icon",
+      "label": "汽水",
+      "category": "饮品",
+      "style": "图标",
+      "relative_path": "beverage__soda__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-beverage-milk-cartoon",
+      "label": "牛奶",
+      "category": "饮品",
+      "style": "卡通",
+      "relative_path": "beverage__milk__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-beverage-milk-icon",
+      "label": "牛奶",
+      "category": "饮品",
+      "style": "图标",
+      "relative_path": "beverage__milk__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-beverage-tea-cartoon",
+      "label": "茶",
+      "category": "饮品",
+      "style": "卡通",
+      "relative_path": "beverage__tea__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-beverage-tea-icon",
+      "label": "茶",
+      "category": "饮品",
+      "style": "图标",
+      "relative_path": "beverage__tea__high_contrast_icon.png"
+    },
+    {
+      "image_id": "builtin-beverage-nutrition-drink-cartoon",
+      "label": "营养液",
+      "category": "饮品",
+      "style": "卡通",
+      "relative_path": "beverage__nutrition_drink__cartoon_illustration.png"
+    },
+    {
+      "image_id": "builtin-beverage-nutrition-drink-icon",
+      "label": "营养液",
+      "category": "饮品",
+      "style": "图标",
+      "relative_path": "beverage__nutrition_drink__high_contrast_icon.png"
+    }
+  ]
+}

@@ -374,36 +374,7 @@ BUILT_IN_QUESTION_TEMPLATES = tuple(
 
 
 FIXED_BINARY_QUESTION_FORMS: dict[int, tuple[str, ...]] = {
-    6: (
-        "fact-01",
-        "function-01",
-        "quantity-01",
-        "symptom-02",
-        "care-02",
-        "emotion-06",
-    ),
-    8: (
-        "fact-04",
-        "function-07",
-        "category-01",
-        "quantity-02",
-        "symptom-01",
-        "care-03",
-        "activity-03",
-        "emotion-05",
-    ),
-    10: (
-        "fact-01",
-        "function-01",
-        "category-01",
-        "attribute-01",
-        "quantity-01",
-        "sensory-01",
-        "symptom-02",
-        "care-02",
-        "activity-04",
-        "emotion-06",
-    ),
+    size: ("objective",) * (size // 2) + ("subjective",) * (size // 2) for size in (6, 8, 10)
 }
 
 

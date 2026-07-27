@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 from pytestqt.qtbot import QtBot
 
@@ -6,9 +7,33 @@ import oculidoc.ui.device_settings as device_settings_module
 from oculidoc.config import GazeDeviceConfig, GazeDeviceConfigStore, Settings
 from oculidoc.ui.device_settings import (
     DeviceSettingsDialog,
+    find_tobii_experience_app_id,
     find_tobii_experience_shortcut,
-    find_tobii_ghost_shortcut,
+    launch_tobii_experience,
 )
+
+
+def test_device_settings_keeps_native_stream_and_only_generic_sources(
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    settings = Settings(environment="test", data_dir=tmp_path, gaze_source="tobii_stream_engine")
+    dialog = DeviceSettingsDialog(settings, GazeDeviceConfigStore.for_settings(settings))
+    qtbot.addWidget(dialog)
+
+    items = [
+        (dialog.source_combo.itemText(index), dialog.source_combo.itemData(index))
+        for index in range(dialog.source_combo.count())
+    ]
+
+    assert items == [
+        ("Tobii 原生 Stream（推荐）", "tobii_stream_engine"),
+        ("工程模拟测试", "mock"),
+        ("原监听兼容", "tobii_hospital_bridge"),
+        ("Tobii DLL兼容", "just_need_to_see_bundle"),
+        ("第三方兼容", "tobii_legacy_bridge"),
+    ]
+    assert dialog.source_combo.currentData() == "tobii_stream_engine"
 
 
 def test_device_settings_dialog_saves_native_source(qtbot: QtBot, tmp_path: Path) -> None:
@@ -32,7 +57,7 @@ def test_device_settings_dialog_saves_native_source(qtbot: QtBot, tmp_path: Path
     assert saved.gaze_minimum_valid_ratio == 0.70
 
 
-def test_device_settings_dialog_marks_mock_as_engineering_mode(
+def test_device_settings_modes_enable_only_their_controls(
     qtbot: QtBot,
     tmp_path: Path,
 ) -> None:
@@ -40,28 +65,60 @@ def test_device_settings_dialog_marks_mock_as_engineering_mode(
     dialog = DeviceSettingsDialog(settings, GazeDeviceConfigStore.for_settings(settings))
     qtbot.addWidget(dialog)
 
-    assert "仅工程测试" in dialog.source_combo.currentText()
-    assert dialog.dll_path_edit.isEnabled() is False
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("tobii_hospital_bridge"))
+    assert not dialog.bridge_host_edit.isEnabled()
+    assert dialog.bridge_port_spin.isEnabled()
+    assert not dialog.third_party_json_edit.isEnabled()
+    assert not dialog.compatibility_dll_edit.isEnabled()
+
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("tobii_legacy_bridge"))
+    assert dialog.bridge_host_edit.isEnabled()
+    assert dialog.bridge_port_spin.isEnabled()
+    assert dialog.third_party_json_edit.isEnabled()
+
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("just_need_to_see_bundle"))
+    assert dialog.compatibility_dll_edit.isEnabled()
+    assert not dialog.bridge_host_edit.isEnabled()
 
 
-def test_device_settings_dialog_exposes_auto_detection_and_bridge_address(
+def test_legacy_file_source_is_presented_as_third_party_compatibility(
     qtbot: QtBot,
     tmp_path: Path,
 ) -> None:
-    settings = Settings(environment="test", data_dir=tmp_path, gaze_source="auto")
-    store = GazeDeviceConfigStore.for_settings(settings)
-    dialog = DeviceSettingsDialog(settings, store)
+    settings = Settings(
+        environment="test",
+        data_dir=tmp_path,
+        gaze_source="gaze_collect_legacy",
+    )
+    dialog = DeviceSettingsDialog(settings, GazeDeviceConfigStore.for_settings(settings))
     qtbot.addWidget(dialog)
 
-    assert dialog.source_combo.currentData() == "auto"
-    assert "自动检测传感器" in dialog.source_combo.currentText()
-    assert dialog.bridge_host_edit.isEnabled() is True
-    dialog.bridge_host_edit.setText("192.168.20.8")
-    dialog.bridge_port_spin.setValue(7788)
+    assert dialog.source_combo.currentData() == "tobii_legacy_bridge"
+    assert dialog.source_combo.currentText() == "第三方兼容"
 
+
+def test_third_party_and_dll_compatibility_build_existing_config(
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    third_party_root = tmp_path / "third-party"
+    third_party_root.mkdir()
+    compatibility_dll = tmp_path / "compat" / "tobii_stream_engine.dll"
+    compatibility_dll.parent.mkdir()
+    compatibility_dll.write_bytes(b"test")
+    settings = Settings(environment="test", data_dir=tmp_path, gaze_source="mock")
+    dialog = DeviceSettingsDialog(settings, GazeDeviceConfigStore.for_settings(settings))
+    qtbot.addWidget(dialog)
+
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("tobii_legacy_bridge"))
+    dialog.third_party_json_edit.setText(str(third_party_root))
+    assert dialog.build_config().gaze_collect_json_root == third_party_root
+
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("just_need_to_see_bundle"))
+    dialog.compatibility_dll_edit.setText(str(compatibility_dll))
     config = dialog.build_config()
-    assert config.tobii_bridge_host == "192.168.20.8"
-    assert config.tobii_bridge_port == 7788
+    assert config.just_need_to_see_root == compatibility_dll.parent
+    assert dialog._validate_config(config)
 
 
 def test_device_settings_dialog_wires_stream_engine_discovery(
@@ -85,41 +142,74 @@ def test_device_settings_dialog_wires_stream_engine_discovery(
     assert dialog.dll_path_edit.text() == str(dll_path)
 
 
-def test_device_settings_dialog_exposes_legacy_sampling_paths(
+def test_self_check_uses_current_unsaved_source(
     qtbot: QtBot,
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
-    gaze_json = tmp_path / "gaze-json"
-    gaze_json.mkdir()
-    player = tmp_path / "HPFMediaPlayer.exe"
-    eye_position = tmp_path / "EyePosition.exe"
-    just_need_root = tmp_path / "JustNeedToSee"
-    just_need_root.mkdir()
-    (just_need_root / "tobii_stream_engine.dll").write_bytes(b"test")
-    settings = Settings(
-        environment="test",
-        data_dir=tmp_path,
-        gaze_source="gaze_collect_legacy",
-        gaze_collect_json_root=gaze_json,
-        gaze_collect_player_executable=player,
-        eye_position_executable=eye_position,
-        just_need_to_see_root=just_need_root,
-    )
+    settings = Settings(environment="test", data_dir=tmp_path, gaze_source="tobii_stream_engine")
     dialog = DeviceSettingsDialog(settings, GazeDeviceConfigStore.for_settings(settings))
     qtbot.addWidget(dialog)
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("mock"))
+    calls: list[Settings] = []
 
-    assert dialog.source_combo.currentData() == "gaze_collect_legacy"
-    assert dialog.gaze_collect_json_edit.isEnabled() is True
-    assert dialog.just_need_to_see_root_edit.isEnabled() is False
-    assert dialog.build_config().gaze_collect_json_root == gaze_json
+    class StubSelfCheck:
+        def __init__(
+            self,
+            selected: Settings,
+            parent: object,
+            **kwargs: object,
+        ) -> None:
+            assert parent is dialog
+            assert "preflight_store" in kwargs
+            calls.append(selected)
 
-    dialog.source_combo.setCurrentIndex(
-        dialog.source_combo.findData("just_need_to_see_bundle")
+        def exec(self) -> int:
+            return 0
+
+    monkeypatch.setattr(device_settings_module, "GazeSelfCheckDialog", StubSelfCheck)
+
+    dialog._open_self_check()
+
+    assert len(calls) == 1
+    assert calls[0].gaze_source == "mock"
+
+
+def test_opoin_thesis_is_a_separate_subjective_view(
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(environment="test", data_dir=tmp_path, gaze_source="mock")
+    dialog = DeviceSettingsDialog(settings, GazeDeviceConfigStore.for_settings(settings))
+    qtbot.addWidget(dialog)
+    calls: list[Settings] = []
+
+    class StubOpoinThesis:
+        def __init__(
+            self,
+            selected: Settings,
+            parent: object,
+            **kwargs: object,
+        ) -> None:
+            assert parent is dialog
+            assert "preflight_result" in kwargs
+            calls.append(selected)
+
+        def exec(self) -> int:
+            return 0
+
+    monkeypatch.setattr(
+        device_settings_module,
+        "OpoinThesisDialog",
+        StubOpoinThesis,
     )
 
-    assert dialog.gaze_collect_json_edit.isEnabled() is False
-    assert dialog.just_need_to_see_root_edit.isEnabled() is True
-    assert dialog.build_config().just_need_to_see_root == just_need_root
+    dialog._open_opoin_thesis()
+
+    assert dialog.opoin_thesis_button.text() == "打开 OpoinThesis"
+    assert len(calls) == 1
+    assert calls[0].gaze_source == "mock"
 
 
 def test_find_tobii_experience_start_menu_shortcut(
@@ -138,14 +228,40 @@ def test_find_tobii_experience_start_menu_shortcut(
     assert find_tobii_experience_shortcut() == shortcut
 
 
-def test_find_tobii_ghost_start_menu_shortcut(tmp_path: Path, monkeypatch) -> None:
-    program_data = tmp_path / "ProgramData"
-    shortcut = (
-        program_data / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Tobii Ghost.lnk"
+def test_find_tobii_experience_registered_app_id(monkeypatch) -> None:
+    monkeypatch.setattr(device_settings_module.sys, "platform", "win32")
+    monkeypatch.setattr(
+        device_settings_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="TobiiAB.TobiiExperience_xyz!App\n",
+        ),
     )
-    shortcut.parent.mkdir(parents=True)
-    shortcut.write_bytes(b"test")
-    monkeypatch.setenv("ProgramData", str(program_data))
-    monkeypatch.delenv("APPDATA", raising=False)
 
-    assert find_tobii_ghost_shortcut() == shortcut
+    assert find_tobii_experience_app_id() == "TobiiAB.TobiiExperience_xyz!App"
+
+
+def test_launch_tobii_experience_uses_registered_app_when_shortcut_is_missing(
+    monkeypatch,
+) -> None:
+    targets: list[object] = []
+
+    def open_target(target: object) -> bool:
+        targets.append(target)
+        return True
+
+    monkeypatch.setattr(device_settings_module, "find_tobii_experience_shortcut", lambda: None)
+    monkeypatch.setattr(
+        device_settings_module,
+        "find_tobii_experience_app_id",
+        lambda: "TobiiAB.TobiiExperience_xyz!App",
+    )
+    monkeypatch.setattr(
+        device_settings_module,
+        "_open_windows_shell_target",
+        open_target,
+    )
+
+    assert launch_tobii_experience()
+    assert targets == [r"shell:AppsFolder\TobiiAB.TobiiExperience_xyz!App"]

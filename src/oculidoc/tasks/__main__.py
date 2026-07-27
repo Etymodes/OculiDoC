@@ -3,7 +3,7 @@
 import argparse
 from collections.abc import Sequence
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtTextToSpeech import QTextToSpeech
 from PySide6.QtWidgets import (
     QDialog,
@@ -32,6 +32,12 @@ from oculidoc.tasks.binary_question import (
     BinaryQuestionSetupDialog,
     BinaryQuestionTask,
     binary_question_sequence,
+)
+from oculidoc.tasks.gaze_contingency import GazeContingencyTask
+from oculidoc.tasks.gaze_games import (
+    GazeGameConfig,
+    GazeGameMode,
+    GazeGameSetupDialog,
 )
 from oculidoc.tasks.gaze_stream import (
     GazeStreamWorker,
@@ -67,9 +73,28 @@ from oculidoc.tasks.tracking_ball import (
     TrackingBallSetupDialog,
     TrackingBallTask,
 )
+from oculidoc.tasks.visual_hunt import VisualHuntTask
+from oculidoc.tasks.visual_preference import (
+    VisualPreferenceConfig,
+    VisualPreferenceSetupDialog,
+    VisualPreferenceTask,
+)
 
 TASK_START_COUNTDOWN_SECONDS = 3
 TASK_RESULT_MESSAGE_MILLISECONDS = 6_000
+
+
+def _task_exit_code(reason: str) -> int:
+    return 3 if reason == "device_error" else 0
+
+
+def _exec_task_setup(dialog: QDialog) -> QDialog.DialogCode:
+    """Keep task settings above the prepared patient screen until saved."""
+    dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+    return QDialog.DialogCode(dialog.exec())
 
 
 def main(
@@ -86,14 +111,26 @@ def main(
             "multiple-choice",
             "image-choice",
             "instruction-fixation",
+            "gaze-games",
+            "visual-preference",
         ),
     )
     parser.add_argument("--direct", action="store_true")
     parser.add_argument("--config-revision", type=int)
+    parser.add_argument(
+        "--game-mode",
+        choices=tuple(mode.value for mode in GazeGameMode),
+    )
     args = parser.parse_args(argv)
 
     if args.direct != (args.config_revision is not None):
         parser.error("--direct and --config-revision must be used together.")
+
+    if args.game_mode is not None and args.task != "gaze-games":
+        parser.error("--game-mode is only valid for gaze-games.")
+
+    if args.direct and args.task == "gaze-games" and args.game_mode is None:
+        parser.error("请选择游戏模式。")
 
     app = create_qt_application()
     settings = apply_saved_gaze_device_config(get_settings())
@@ -106,11 +143,14 @@ def main(
         "multiple-choice": "multiple_choice",
         "image-choice": "image_choice",
         "instruction-fixation": "instruction_fixation",
+        "gaze-games": "gaze_games",
+        "visual-preference": "visual_preference",
     }[args.task]
     config_store = TaskConfigStore(settings.data_dir / "runtime" / "task_configs.json")
     record = config_store.load(module_id)
     config = task_config_from_dict(module_id, record.config)
     setup: QDialog
+    selected_game_mode: GazeGameMode | None = None
 
     if args.direct:
         if args.config_revision != record.revision:
@@ -118,6 +158,9 @@ def main(
                 "Task config revision changed before launch: "
                 f"requested {args.config_revision}, current {record.revision}."
             )
+
+        if args.task == "gaze-games":
+            selected_game_mode = GazeGameMode(args.game_mode)
     elif args.task == "tracking":
         if not isinstance(config, TrackingBallConfig):
             raise TypeError("Tracking task configuration type mismatch.")
@@ -127,7 +170,7 @@ def main(
             image_library_path=(settings.data_dir / "image_library"),
         )
 
-        if setup.exec() != QDialog.DialogCode.Accepted:
+        if _exec_task_setup(setup) != QDialog.DialogCode.Accepted:
             return 0
 
         config = setup.build_config()
@@ -141,7 +184,7 @@ def main(
             layout=("vertical" if args.task == "binary-vertical" else "horizontal"),
         )
 
-        if setup.exec() != QDialog.DialogCode.Accepted:
+        if _exec_task_setup(setup) != QDialog.DialogCode.Accepted:
             return 0
 
         config = setup.build_config()
@@ -151,7 +194,7 @@ def main(
 
         setup = ScreenKeyboardSetupDialog(config=config)
 
-        if setup.exec() != QDialog.DialogCode.Accepted:
+        if _exec_task_setup(setup) != QDialog.DialogCode.Accepted:
             return 0
 
         config = setup.build_config()
@@ -161,7 +204,7 @@ def main(
 
         setup = MultipleChoiceSetupDialog(config=config)
 
-        if setup.exec() != QDialog.DialogCode.Accepted:
+        if _exec_task_setup(setup) != QDialog.DialogCode.Accepted:
             return 0
 
         config = setup.build_config()
@@ -174,17 +217,45 @@ def main(
             image_library_path=(settings.data_dir / "image_library"),
         )
 
-        if setup.exec() != QDialog.DialogCode.Accepted:
+        if _exec_task_setup(setup) != QDialog.DialogCode.Accepted:
             return 0
 
         config = setup.build_config()
-    else:
+    elif args.task == "instruction-fixation":
         if not isinstance(config, InstructionFixationConfig):
             raise TypeError("Instruction-fixation task configuration type mismatch.")
 
         setup = InstructionFixationSetupDialog(config=config)
 
-        if setup.exec() != QDialog.DialogCode.Accepted:
+        if _exec_task_setup(setup) != QDialog.DialogCode.Accepted:
+            return 0
+
+        config = setup.build_config()
+    elif args.task == "gaze-games":
+        if not isinstance(config, GazeGameConfig):
+            raise TypeError("Gaze-game task configuration type mismatch.")
+
+        game_setup = GazeGameSetupDialog(
+            config=config,
+            image_library_path=(settings.data_dir / "image_library"),
+        )
+        setup = game_setup
+
+        if _exec_task_setup(setup) != QDialog.DialogCode.Accepted:
+            return 0
+
+        config = game_setup.build_config()
+        selected_game_mode = game_setup.selected_mode
+    else:
+        if not isinstance(config, VisualPreferenceConfig):
+            raise TypeError("Visual-preference task configuration type mismatch.")
+
+        setup = VisualPreferenceSetupDialog(
+            config=config,
+            image_library_path=(settings.data_dir / "image_library"),
+        )
+
+        if _exec_task_setup(setup) != QDialog.DialogCode.Accepted:
             return 0
 
         config = setup.build_config()
@@ -212,6 +283,9 @@ def main(
         | MultipleChoiceTask
         | SequentialChoiceTask
         | InstructionFixationTask
+        | GazeContingencyTask
+        | VisualHuntTask
+        | VisualPreferenceTask
     )
 
     if args.task == "tracking":
@@ -298,7 +372,7 @@ def main(
         title = "语音图片选择"
         duration_seconds = min(3_600, config.duration_seconds * len(image_questions))
         question_to_speak = image_questions[0].prompt
-    else:
+    elif args.task == "instruction-fixation":
         if not isinstance(config, InstructionFixationConfig):
             raise TypeError("Instruction-fixation task configuration type mismatch.")
 
@@ -312,6 +386,60 @@ def main(
             config.trial_count * config.trial_duration_seconds + config.trial_count,
         )
         question_to_speak = f"请注视{config.target_description}"
+    elif args.task == "gaze-games":
+        if not isinstance(config, GazeGameConfig):
+            raise TypeError("Gaze-game task configuration type mismatch.")
+
+        if selected_game_mode is None:
+            raise TypeError("Gaze-game mode was not selected.")
+
+        if selected_game_mode == GazeGameMode.GARDEN:
+            garden = config.garden
+            task = GazeContingencyTask(
+                garden,
+                allow_mouse_fallback=allow_mouse_fallback,
+            )
+            title = "眼动游戏 · 点亮花园"
+            duration_seconds = min(
+                3_600,
+                max(
+                    5,
+                    garden.baseline_seconds
+                    + garden.contingent_block_seconds * 2
+                    + garden.replay_block_seconds
+                    + max(30, garden.contingent_block_seconds),
+                ),
+            )
+        else:
+            hunt = config.treasure_hunt
+            task = VisualHuntTask(
+                hunt,
+                ImageLibraryStore(settings.data_dir / "image_library"),
+                allow_mouse_fallback=allow_mouse_fallback,
+            )
+            title = "眼动游戏 · 视觉寻宝"
+            total_ms = 3_000 + hunt.trial_count * (
+                hunt.target_preview_ms
+                + hunt.interstimulus_ms
+                + hunt.trial_duration_seconds * 1_000
+                + hunt.reward_animation_ms
+            )
+            duration_seconds = min(3_600, max(5, (total_ms + 999) // 1_000))
+    else:
+        if not isinstance(config, VisualPreferenceConfig):
+            raise TypeError("Visual-preference task configuration type mismatch.")
+
+        task = VisualPreferenceTask(
+            config,
+            ImageLibraryStore(settings.data_dir / "image_library"),
+            allow_mouse_fallback=allow_mouse_fallback,
+        )
+        title = "视觉偏好"
+        trial_ms = config.center_cue_ms + config.presentation_seconds * 1_000 + config.intertrial_ms
+        duration_seconds = min(
+            3_600,
+            max(5, (3_000 + len(task.protocol.trials) * trial_ms + 999) // 1_000),
+        )
 
     window = TimedTaskWindow(
         task,
@@ -335,6 +463,13 @@ def main(
 
     if isinstance(task, ScreenKeyboardTask):
         task.speech_requested.connect(speak)
+
+    if isinstance(
+        task,
+        (GazeContingencyTask, VisualHuntTask, VisualPreferenceTask),
+    ):
+        task.speech_requested.connect(speak)
+        task.protocol_completed.connect(lambda: window.finish("protocol_completed"))
 
     if isinstance(
         task,
@@ -373,7 +508,7 @@ def main(
     worker.sample_received.connect(recorded_runtime.handle_sample)
 
     window.finished.connect(recorded_runtime.finish)
-    window.finished.connect(lambda reason: app.quit())
+    window.finished.connect(lambda reason: app.exit(_task_exit_code(reason)))
     app.aboutToQuit.connect(worker.stop)
 
     display_state_store = LanControlStateStore(
@@ -477,15 +612,30 @@ def main(
         task_id=module_id,
     )
 
-    preflight_failed = False
+    stream_failed = False
+    task_started = False
 
-    def fail_preflight(message: str) -> None:
-        nonlocal preflight_failed
+    def handle_stream_error(message: str) -> None:
+        nonlocal stream_failed
 
-        if preflight_failed:
+        if stream_failed:
             return
 
-        preflight_failed = True
+        stream_failed = True
+
+        if task_started:
+            try:
+                display_state_store.set_display(
+                    "眼动设备连接中断\n任务已停止",
+                    mode=PatientDisplayMode.ERROR,
+                    task_id=module_id,
+                )
+            except LanControlTransitionError:
+                pass
+
+            window.finish("device_error")
+            return
+
         try:
             display_state_store.set_display(
                 "眼动设备预检失败\n请联系管理员",
@@ -505,15 +655,17 @@ def main(
         QTimer.singleShot(TASK_RESULT_MESSAGE_MILLISECONDS, box.close)
         QTimer.singleShot(TASK_RESULT_MESSAGE_MILLISECONDS, lambda: app.exit(3))
 
-    worker.stream_error.connect(fail_preflight)
+    worker.stream_error.connect(handle_stream_error)
 
     def start_task() -> None:
+        nonlocal task_started
         current = display_state_store.load()
 
         if current.mode is not PatientDisplayMode.READY or current.task_id != module_id:
             app.quit()
             return
 
+        task_started = True
         display_state_store.set_display(
             f"正在进行：{title}",
             mode=PatientDisplayMode.RUNNING,

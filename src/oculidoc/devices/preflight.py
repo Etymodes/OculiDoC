@@ -10,7 +10,34 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from time import monotonic, sleep
 
-from oculidoc.devices.contracts import EyeTrackerDevice
+from oculidoc.devices.contracts import DeviceInfo, EyeTrackerDevice, EyeTrackerSample
+
+_CAPABILITY_LABELS = {
+    "gaze_point": "注视点",
+    "pupil_diameter": "瞳孔直径",
+    "eye_position": "三维眼位",
+    "source_timestamp": "设备时间戳",
+}
+
+
+def observed_sample_capabilities(sample: EyeTrackerSample) -> tuple[str, ...]:
+    """Return only data fields actually observed in one sensor sample."""
+    capabilities = []
+    if sample.gaze_valid:
+        capabilities.append("gaze_point")
+    if sample.left_pupil_diameter_mm is not None or sample.right_pupil_diameter_mm is not None:
+        capabilities.append("pupil_diameter")
+    if sample.eye_position_available:
+        capabilities.append("eye_position")
+    if sample.timestamp.source_timestamp_ns is not None:
+        capabilities.append("source_timestamp")
+    return tuple(capabilities)
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item) for item in value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +55,13 @@ class GazePreflightResult:
     passed: bool
     error: str | None
     updated_at_utc: str
+    device_manufacturer: str = ""
+    device_model: str = ""
+    device_serial_number: str | None = None
+    is_simulated: bool = False
+    advertised_capabilities: tuple[str, ...] = ()
+    observed_capabilities: tuple[str, ...] = ()
+    capability_notes: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, value: object) -> GazePreflightResult:
@@ -48,6 +82,15 @@ class GazePreflightResult:
             passed=bool(value["passed"]),
             error=(str(value["error"]) if value.get("error") else None),
             updated_at_utc=str(value["updated_at_utc"]),
+            device_manufacturer=str(value.get("device_manufacturer", "")),
+            device_model=str(value.get("device_model", "")),
+            device_serial_number=(
+                str(value["device_serial_number"]) if value.get("device_serial_number") else None
+            ),
+            is_simulated=bool(value.get("is_simulated", False)),
+            advertised_capabilities=_string_tuple(value.get("advertised_capabilities")),
+            observed_capabilities=_string_tuple(value.get("observed_capabilities")),
+            capability_notes=_string_tuple(value.get("capability_notes")),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -57,7 +100,22 @@ class GazePreflightResult:
         if self.error:
             return f"{self.device_name} · 预检失败：{self.error}"
 
-        return f"{self.device_name} · {self.sample_rate_hz:.0f} Hz · 有效率 {self.valid_ratio:.0%}"
+        return (
+            f"{self.device_name} · {self.sample_rate_hz:.0f} Hz"
+            f" · 有效率 {self.valid_ratio:.0%}"
+            f" · {self.observed_capability_text()}"
+        )
+
+    def observed_capability_text(self) -> str:
+        labels = [
+            _CAPABILITY_LABELS[item]
+            for item in self.observed_capabilities
+            if item in _CAPABILITY_LABELS
+        ]
+        return "已采集：" + ("、".join(labels) if labels else "未观察到可用字段")
+
+    def observed(self, capability: str) -> bool:
+        return capability in self.observed_capabilities
 
 
 class GazePreflightStore:
@@ -99,6 +157,7 @@ def failed_gaze_preflight(
     device_name: str,
     minimum_valid_ratio: float,
     error: str,
+    device_info: DeviceInfo | None = None,
 ) -> GazePreflightResult:
     return GazePreflightResult(
         source=source,
@@ -114,6 +173,11 @@ def failed_gaze_preflight(
         passed=False,
         error=error.strip() or "未知设备错误",
         updated_at_utc=datetime.now(UTC).isoformat(),
+        device_manufacturer=device_info.manufacturer if device_info is not None else "",
+        device_model=device_info.model if device_info is not None else "",
+        device_serial_number=device_info.serial_number if device_info is not None else None,
+        is_simulated=device_info.is_simulated if device_info is not None else False,
+        advertised_capabilities=device_info.capabilities if device_info is not None else (),
     )
 
 
@@ -137,6 +201,7 @@ def run_gaze_preflight(
     deadline = started_at + duration_seconds
     sample_count = 0
     valid_sample_count = 0
+    observed_capabilities: set[str] = set()
     first_attempt = True
 
     while first_attempt or clock() < deadline:
@@ -150,6 +215,7 @@ def run_gaze_preflight(
 
         sample_count += 1
         valid_sample_count += int(sample.gaze_valid)
+        observed_capabilities.update(observed_sample_capabilities(sample))
 
     elapsed = max(clock() - started_at, 0.001)
     valid_ratio = valid_sample_count / sample_count if sample_count else 0.0
@@ -157,6 +223,8 @@ def run_gaze_preflight(
     passed = sample_count > 0 and valid_ratio >= minimum_valid_ratio
     device_url = getattr(device, "device_url", None)
     library_path = getattr(device, "library_path", None)
+    diagnostics = getattr(device, "capability_diagnostics", None)
+    capability_notes = tuple(str(note) for note in diagnostics()) if callable(diagnostics) else ()
 
     return GazePreflightResult(
         source=source,
@@ -183,4 +251,11 @@ def run_gaze_preflight(
             )
         ),
         updated_at_utc=datetime.now(UTC).isoformat(),
+        observed_capabilities=tuple(sorted(observed_capabilities)),
+        device_manufacturer=device.info.manufacturer,
+        device_model=device.info.model,
+        device_serial_number=device.info.serial_number,
+        is_simulated=device.info.is_simulated,
+        advertised_capabilities=device.info.capabilities,
+        capability_notes=capability_notes,
     )

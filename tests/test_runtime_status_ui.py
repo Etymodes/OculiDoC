@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from uuid import uuid4
+
 from pytestqt.qtbot import QtBot
 
 import oculidoc.ui.main_window as main_window_module
 from oculidoc.config import Settings
 from oculidoc.devices.preflight import GazePreflightResult, GazePreflightStore
 from oculidoc.lan_control import PatientDisplayMode
+from oculidoc.modules.registry import DEFAULT_MODULES
 from oculidoc.ui.main_window import AdminMainWindow
 
 
@@ -22,7 +26,7 @@ def test_main_window_displays_native_tobii_source(
     )
     qtbot.addWidget(window)
 
-    assert window.gaze_status_label.text() == ("眼动源：Tobii Eye Tracker 5 · 尚未预检")
+    assert window.gaze_status_label.text() == ("眼动源：Tobii 原生 Stream · 尚未预检")
     assert "#b42318" in window.gaze_status_label.styleSheet()
 
 
@@ -39,7 +43,7 @@ def test_main_window_marks_mock_source(
     )
     qtbot.addWidget(window)
 
-    assert window.gaze_status_label.text() == "眼动源：模拟模式（仅工程测试）"
+    assert window.gaze_status_label.text() == "眼动源：工程模拟测试"
     assert "#6b7280" in window.gaze_status_label.styleSheet()
 
 
@@ -47,7 +51,7 @@ def test_main_window_displays_auto_detect_source(qtbot: QtBot, tmp_path) -> None
     window = AdminMainWindow(Settings(environment="test", data_dir=tmp_path, gaze_source="auto"))
     qtbot.addWidget(window)
 
-    assert window.gaze_status_label.text() == "眼动源：自动检测传感器 · 尚未预检"
+    assert window.gaze_status_label.text() == "眼动源：硬件自动检测 · 尚未预检"
 
 
 def test_auto_detect_status_names_the_selected_sensor(qtbot: QtBot, tmp_path) -> None:
@@ -71,7 +75,7 @@ def test_auto_detect_status_names_the_selected_sensor(qtbot: QtBot, tmp_path) ->
     window = AdminMainWindow(Settings(environment="test", data_dir=tmp_path, gaze_source="auto"))
     qtbot.addWidget(window)
 
-    assert "自动检测 → 第三方眼动传感器" in window.gaze_status_label.text()
+    assert "硬件自动检测 → 第三方眼动传感器" in window.gaze_status_label.text()
 
 
 def test_main_window_displays_latest_live_gaze_quality(qtbot: QtBot, tmp_path) -> None:
@@ -198,6 +202,63 @@ def test_desktop_projects_text_through_shared_state(
     assert state.mode is PatientDisplayMode.PREVIEW
     assert state.text == "请看向屏幕中央"
     assert window._patient_window.isVisible()
+
+
+def test_patient_display_is_prepared_below_admin_at_startup(
+    qtbot: QtBot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window = AdminMainWindow(Settings(environment="test", data_dir=tmp_path, gaze_source="mock"))
+    qtbot.addWidget(window)
+    events: list[str] = []
+    monkeypatch.setattr(
+        window._patient_window,
+        "showFullScreen",
+        lambda: events.append("patient-show"),
+    )
+    monkeypatch.setattr(
+        window._patient_window,
+        "lower",
+        lambda: events.append("patient-lower"),
+    )
+    monkeypatch.setattr(
+        window,
+        "_restore_admin_window",
+        lambda: events.append("admin-raise"),
+    )
+
+    window._show_patient_display_behind_admin()
+
+    assert events == ["patient-show", "patient-lower", "admin-raise"]
+
+
+def test_task_launch_lowers_admin_then_raises_patient_before_child_process(
+    qtbot: QtBot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window = AdminMainWindow(Settings(environment="test", data_dir=tmp_path, gaze_source="mock"))
+    qtbot.addWidget(window)
+    window.current_patient = SimpleNamespace(patient_id=uuid4())  # type: ignore[assignment]
+    window.experiment_session_service = object()  # type: ignore[assignment]
+    module = next(item for item in DEFAULT_MODULES if item.module_id == "tracking_ball")
+    events: list[str] = []
+    monkeypatch.setattr(window, "lower", lambda: events.append("admin-lower"))
+    monkeypatch.setattr(
+        window,
+        "_open_patient_display",
+        lambda: events.append("patient-raise"),
+    )
+    monkeypatch.setattr(
+        window,
+        "_launch_gaze_task_process",
+        lambda *args, **kwargs: events.append("task-process"),
+    )
+
+    window._open_gaze_task_module(module)
+
+    assert events == ["admin-lower", "patient-raise", "task-process"]
 
 
 def test_main_window_refreshes_lan_address(

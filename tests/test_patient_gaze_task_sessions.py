@@ -156,6 +156,8 @@ def create_patient(runtime):
 
 def write_completed_run(
     launch,
+    *,
+    end_reason: str = "completed",
 ) -> Path:
     run_directory = launch.session_directory / "tasks" / "run-test"
     run_directory.mkdir(
@@ -174,9 +176,10 @@ def write_completed_run(
     (run_directory / "task_result.json").write_text(
         json.dumps(
             {
+                "end_reason": end_reason,
                 "result": {
                     "recording_failed": False,
-                }
+                },
             }
         )
         + "\n",
@@ -251,6 +254,62 @@ def test_completed_run_registers_artifacts(
     assert artifacts_by_name["task_events.jsonl"].kind is SessionArtifactKind.EVENTS
     assert artifacts_by_name["gaze_events.parquet"].sha256 is not None
 
+    runtime.dispose()
+
+
+def test_manual_exit_is_saved_as_aborted(
+    tmp_path: Path,
+) -> None:
+    runtime = initialize_database(
+        tmp_path / "oculidoc.sqlite3",
+        data_root=tmp_path / "data",
+    )
+    patient = create_patient(runtime)
+    launch = create_gaze_task_launch(
+        runtime.experiment_session_service,
+        patient_id=patient.patient_id,
+        module_id="gaze_games",
+    )
+    write_completed_run(launch, end_reason="manual_exit")
+
+    status = finalize_gaze_task_launch(
+        runtime.experiment_session_service,
+        launch,
+        exit_code=0,
+    )
+
+    assert status is ExperimentSessionStatus.ABORTED
+    session = runtime.experiment_session_service.get_session(launch.session_id)
+    assert session.failure_reason is not None
+    assert "manual_exit" in session.failure_reason
+    runtime.dispose()
+
+
+def test_device_error_is_saved_as_failed_even_with_zero_exit_code(
+    tmp_path: Path,
+) -> None:
+    runtime = initialize_database(
+        tmp_path / "oculidoc.sqlite3",
+        data_root=tmp_path / "data",
+    )
+    patient = create_patient(runtime)
+    launch = create_gaze_task_launch(
+        runtime.experiment_session_service,
+        patient_id=patient.patient_id,
+        module_id="visual_preference",
+    )
+    write_completed_run(launch, end_reason="device_error")
+
+    status = finalize_gaze_task_launch(
+        runtime.experiment_session_service,
+        launch,
+        exit_code=0,
+    )
+
+    assert status is ExperimentSessionStatus.FAILED
+    session = runtime.experiment_session_service.get_session(launch.session_id)
+    assert session.failure_reason is not None
+    assert "device_error" in session.failure_reason
     runtime.dispose()
 
 

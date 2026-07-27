@@ -240,6 +240,7 @@ class SimulatedEyeTrackerDevice(_SimulatedDeviceBase):
                 capabilities=(
                     "normalized_gaze",
                     "binocular_validity",
+                    "normalized_eye_position",
                     "pupil_diameter",
                     "polling",
                 ),
@@ -317,6 +318,24 @@ class SimulatedEyeTrackerDevice(_SimulatedDeviceBase):
             right_eye_valid=valid,
             left_pupil_diameter_mm=(3.2 + 0.1 * sin(phase) if valid else None),
             right_pupil_diameter_mm=(3.1 + 0.1 * cos(phase) if valid else None),
+            left_eye_position_normalized=(
+                (
+                    0.42 + 0.04 * sin(phase),
+                    0.50 + 0.06 * cos(phase),
+                    0.50 + 0.05 * sin(phase * 0.5),
+                )
+                if valid
+                else None
+            ),
+            right_eye_position_normalized=(
+                (
+                    0.58 + 0.04 * sin(phase),
+                    0.50 + 0.06 * cos(phase),
+                    0.50 + 0.05 * sin(phase * 0.5),
+                )
+                if valid
+                else None
+            ),
         )
 
         self._sequence += 1

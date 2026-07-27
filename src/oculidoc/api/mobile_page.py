@@ -100,6 +100,7 @@ const query = "?token=" + encodeURIComponent(token);
 let currentRecord = null;
 let formDirty = false;
 let multipleChoiceTemplates = [];
+let imageAssets = [];
 
 const binaryFields = [
   {name: "fixed_form_size", label: "标准模式卷", type: "select", options: [[0, "自定义题组 / 单题"], [6, "固定 6 题（前半客观、后半开放）"], [8, "固定 8 题（前半客观、后半开放）"], [10, "固定 10 题（前半客观、后半开放）"]]},
@@ -193,7 +194,43 @@ const fields = {
     {name: "randomize_trial_order", label: "随机试次顺序并平衡目标位置", type: "checkbox"},
     {name: "show_gaze_cursor", label: "患者屏幕显示实时视线光标", type: "checkbox"}
   ],
+  gaze_games: [
+    {name: "default_mode", label: "本次游戏模式", type: "select", options: [["garden", "点亮花园"], ["treasure_hunt", "视觉寻宝"]]},
+    {name: "garden.object_count", label: "花园 · 花朵数量", type: "number", min: 2, max: 6, step: 1},
+    {name: "garden.object_diameter_px", label: "花园 · 花朵直径（px）", type: "number", min: 160, max: 480, step: 1},
+    {name: "garden.dwell_time_ms", label: "花园 · 持续注视阈值（ms）", type: "number", min: 250, max: 3000, step: 50},
+    {name: "garden.baseline_seconds", label: "花园 · 基线块（秒）", type: "number", min: 5, max: 30, step: 1},
+    {name: "garden.contingent_block_seconds", label: "花园 · 联动块（秒）", type: "number", min: 10, max: 120, step: 1},
+    {name: "garden.replay_block_seconds", label: "花园 · 回放块（秒）", type: "number", min: 10, max: 120, step: 1},
+    {name: "garden.reward_animation_ms", label: "花园 · 奖励动画（ms）", type: "number", min: 500, max: 3000, step: 100},
+    {name: "garden.sound_enabled", label: "花园 · 启用温和语音反馈", type: "checkbox"},
+    {name: "garden.show_gaze_cursor", label: "花园 · 显示实时视线光标", type: "checkbox"},
+    {name: "treasure_hunt.preview_trial_count", label: "寻宝 · 预览搜索试次", type: "number", min: 0, max: 30, step: 1},
+    {name: "treasure_hunt.popout_trial_count", label: "寻宝 · 突现试次", type: "number", min: 0, max: 30, step: 1},
+    {name: "treasure_hunt.catch_trial_count", label: "寻宝 · 目标缺失试次", type: "number", min: 0, max: 10, step: 1},
+    {name: "treasure_hunt.distractor_count", label: "寻宝 · 干扰图片数量", type: "number", min: 1, max: 5, step: 1},
+    {name: "treasure_hunt.target_preview_ms", label: "寻宝 · 目标预览（ms）", type: "number", min: 500, max: 5000, step: 100},
+    {name: "treasure_hunt.interstimulus_ms", label: "寻宝 · 预览后间隔（ms）", type: "number", min: 250, max: 2000, step: 50},
+    {name: "treasure_hunt.dwell_time_ms", label: "寻宝 · 持续注视阈值（ms）", type: "number", min: 250, max: 5000, step: 50},
+    {name: "treasure_hunt.trial_duration_seconds", label: "寻宝 · 每试次最长呈现（秒）", type: "number", min: 3, max: 60, step: 1},
+    {name: "treasure_hunt.reward_animation_ms", label: "寻宝 · 奖励动画（ms）", type: "number", min: 500, max: 3000, step: 100},
+    {name: "treasure_hunt.category_filters", label: "寻宝 · 图片类别（可多选）", type: "multi-select", options: []},
+    {name: "treasure_hunt.style_filters", label: "寻宝 · 图片风格（可多选）", type: "multi-select", options: []},
+    {name: "treasure_hunt.randomize_trial_order", label: "寻宝 · 随机试次顺序", type: "checkbox"},
+    {name: "treasure_hunt.sound_enabled", label: "寻宝 · 启用温和语音反馈", type: "checkbox"},
+    {name: "treasure_hunt.show_gaze_cursor", label: "寻宝 · 显示实时视线光标", type: "checkbox"}
+  ],
+  visual_preference: [
+    {name: "presentation_seconds", label: "单次图片呈现（秒）", type: "number", min: 3, max: 15, step: 1},
+    {name: "center_cue_ms", label: "中央提示（ms）", type: "number", min: 0, max: 3000, step: 100},
+    {name: "intertrial_ms", label: "试次间隔（ms）", type: "number", min: 500, max: 5000, step: 100},
+    {name: "minimum_trial_valid_ratio", label: "最低试次有效率", type: "number", min: 0.2, max: 0.9, step: 0.05},
+    {name: "randomize_pair_order", label: "随机排列刺激对", type: "checkbox"},
+    {name: "sound_intro_enabled", label: "启用开始语音", type: "checkbox"},
+    {name: "show_gaze_cursor", label: "患者屏幕显示实时视线光标", type: "checkbox"}
+  ],
   screen_keyboard: [
+    {name: "input_mode", label: "输入模式", type: "select", options: [["direct", "直观直选模式"], ["advanced", "进阶模式（拼音）"]]},
     {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
     {name: "duration_seconds", label: "任务时长（秒）", type: "number", min: 5, max: 3600, step: 1},
     {name: "enable_tone_step", label: "启用声调选择步骤", type: "checkbox"},
@@ -266,11 +303,108 @@ function applyMultipleChoiceTemplate(templateId) {
   });
 }
 
-function renderConfig(record) {
+function getConfigValue(config, path) {
+  return path.split(".").reduce((value, key) =>
+    value && typeof value === "object" ? value[key] : undefined, config);
+}
+
+function setConfigValue(config, path, value) {
+  const keys = path.split(".");
+  let target = config;
+  keys.slice(0, -1).forEach((key) => {
+    if (!target[key] || typeof target[key] !== "object") target[key] = {};
+    target = target[key];
+  });
+  target[keys[keys.length - 1]] = value;
+}
+
+function markConfigDirty() {
+  formDirty = true;
+  document.getElementById("config-status").textContent =
+    "有尚未保存的修改 · 当前版本 " + currentRecord.revision;
+}
+
+function renderPreferencePairs(record, container) {
+  const heading = document.createElement("label");
+  heading.textContent = "刺激对（勾选 2–12 组；每组会自动换边呈现）";
+  container.appendChild(heading);
+  const pairs = Array.isArray(record.config.pairs) ? record.config.pairs : [];
+  const selected = new Set(Array.isArray(record.config.pair_ids) ? record.config.pair_ids : []);
+  pairs.forEach((pair) => {
+    const row = document.createElement("label");
+    row.className = "check-label";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = selected.has(pair.pair_id);
+    checkbox.addEventListener("change", () => {
+      const ids = new Set(currentRecord.config.pair_ids || []);
+      if (checkbox.checked) ids.add(pair.pair_id); else ids.delete(pair.pair_id);
+      currentRecord.config.pair_ids = [...ids];
+      markConfigDirty();
+    });
+    const byId = Object.fromEntries(imageAssets.map((asset) => [asset.image_id, asset.label]));
+    row.appendChild(checkbox);
+    row.appendChild(document.createTextNode(
+      (pair.pair_label || "未命名刺激对") + " · " +
+      (byId[pair.image_a_id] || pair.image_a_id) + " ↔ " +
+      (byId[pair.image_b_id] || pair.image_b_id)
+    ));
+    container.appendChild(row);
+  });
+
+  const imageA = document.createElement("select");
+  const imageB = document.createElement("select");
+  imageAssets.forEach((asset) => {
+    [imageA, imageB].forEach((select) => {
+      const option = document.createElement("option");
+      option.value = asset.image_id;
+      option.textContent = asset.label + " · " + asset.category + " · " + asset.style;
+      select.appendChild(option);
+    });
+  });
+  if (imageB.options.length > 1) imageB.selectedIndex = 1;
+  const pairLabel = document.createElement("input");
+  pairLabel.type = "text";
+  pairLabel.placeholder = "刺激对标签（可留空）";
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "secondary";
+  add.textContent = "新增并选中刺激对";
+  add.addEventListener("click", () => {
+    if (!imageA.value || !imageB.value || imageA.value === imageB.value) {
+      alert("请选择两张不同的图片。");
+      return;
+    }
+    currentRecord.config = collectConfig();
+    const byId = Object.fromEntries(imageAssets.map((asset) => [asset.image_id, asset.label]));
+    const pairId = "mobile-pair-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+    currentRecord.config.pairs = [...(currentRecord.config.pairs || []), {
+      pair_id: pairId,
+      image_a_id: imageA.value,
+      image_b_id: imageB.value,
+      pair_label: pairLabel.value.trim() ||
+        (byId[imageA.value] || "A") + " / " + (byId[imageB.value] || "B"),
+      comparison_type: "generic_interest",
+      matching_note: ""
+    }];
+    currentRecord.config.pair_ids = [...(currentRecord.config.pair_ids || []), pairId];
+    markConfigDirty();
+    renderConfig(currentRecord, true);
+  });
+  container.appendChild(imageA);
+  container.appendChild(imageB);
+  container.appendChild(pairLabel);
+  container.appendChild(add);
+}
+
+function renderConfig(record, preserveDirty = false) {
   currentRecord = record;
-  formDirty = false;
+  if (!preserveDirty) formDirty = false;
   const container = document.getElementById("config-form");
   container.innerHTML = "";
+  if (record.module_id === "visual_preference") {
+    renderPreferencePairs(record, container);
+  }
   (fields[record.module_id] || []).forEach((definition) => {
     const label = document.createElement("label");
     label.textContent = definition.label;
@@ -295,7 +429,7 @@ function renderConfig(record) {
     ["min", "max", "step"].forEach((name) => {
       if (definition[name] !== undefined) input[name] = definition[name];
     });
-    const value = record.config[definition.name];
+    const value = getConfigValue(record.config, definition.name);
     if (definition.type === "checkbox") {
       input.checked = Boolean(value);
       label.className = "check-label";
@@ -316,33 +450,32 @@ function renderConfig(record) {
       if (record.module_id === "multiple_choice" && definition.name === "template_id") {
         applyMultipleChoiceTemplate(input.value);
       }
-      formDirty = true;
-      document.getElementById("config-status").textContent =
-        "有尚未保存的修改 · 当前版本 " + currentRecord.revision;
+      markConfigDirty();
       refreshCorrectOptionState();
     });
     container.appendChild(label);
   });
   refreshCorrectOptionState();
   document.getElementById("config-status").className = "muted";
-  document.getElementById("config-status").textContent =
-    "已同步设置版本 " + record.revision;
+  document.getElementById("config-status").textContent = preserveDirty
+    ? "有尚未保存的修改 · 当前版本 " + record.revision
+    : "已同步设置版本 " + record.revision;
 }
 
 function collectConfig() {
-  const config = {...currentRecord.config};
+  const config = JSON.parse(JSON.stringify(currentRecord.config));
   document.querySelectorAll("#config-form [data-field]").forEach((input) => {
     const name = input.dataset.field;
     if (input.dataset.kind === "checkbox") {
-      config[name] = input.checked;
+      setConfigValue(config, name, input.checked);
     } else if (input.dataset.kind === "multi-select") {
-      config[name] = [...input.selectedOptions].map((option) => option.value);
+      setConfigValue(config, name, [...input.selectedOptions].map((option) => option.value));
     } else if (input.dataset.kind === "number" || name === "fixed_form_size") {
-      config[name] = Number(input.value);
+      setConfigValue(config, name, Number(input.value));
     } else if (input.dataset.nullable === "true" && !input.value.trim()) {
-      config[name] = null;
+      setConfigValue(config, name, null);
     } else {
-      config[name] = input.value;
+      setConfigValue(config, name, input.value);
     }
   });
   if ("question_type" in config && !["yes_no", "question_answer"].includes(config.question_type)) {
@@ -412,7 +545,7 @@ async function refresh() {
         template.template_id, template.display_label
       ])
     );
-    const imageAssets = runtime.image_library || [];
+    imageAssets = runtime.image_library || [];
     const imageFields = fields.image_choice;
     const categoryField = imageFields.find((definition) => definition.name === "category_filters");
     const styleField = imageFields.find((definition) => definition.name === "style_filters");
@@ -420,6 +553,15 @@ async function refresh() {
       .sort().map((value) => [value, value]);
     styleField.options = [...new Set(imageAssets.map((asset) => asset.style))]
       .sort().map((value) => [value, value]);
+    const huntFields = fields.gaze_games;
+    const huntCategory = huntFields.find((definition) =>
+      definition.name === "treasure_hunt.category_filters"
+    );
+    const huntStyle = huntFields.find((definition) =>
+      definition.name === "treasure_hunt.style_filters"
+    );
+    huntCategory.options = categoryField.options;
+    huntStyle.options = styleField.options;
     const displayLabels = {
       closed: "已关闭", idle: "待机", ready: "准备", preview: "提示",
       running: "任务进行中", paused: "已暂停", result: "任务结束", error: "异常"
@@ -427,9 +569,12 @@ async function refresh() {
     document.getElementById("online").textContent = "本地后台在线";
     const preflight = runtime.gaze_preflight;
     const gazeLabels = {
-      auto: "自动检测传感器", mock: "模拟模式（仅工程测试）",
-      tobii_stream_engine: "Tobii Eye Tracker 5",
-      tobii_legacy_bridge: "兼容眼动传感器桥接"
+      auto: "硬件自动检测", mock: "工程模拟测试",
+      gaze_collect_legacy: "第三方兼容",
+      just_need_to_see_bundle: "Tobii DLL兼容",
+      tobii_hospital_bridge: "原监听兼容",
+      tobii_stream_engine: "Tobii 原生 Stream",
+      tobii_legacy_bridge: "第三方兼容"
     };
     let gazeText = "眼动源：" + (gazeLabels[runtime.gaze_source] || runtime.gaze_source);
     if (preflight && preflight.source === runtime.gaze_source) {
@@ -467,15 +612,50 @@ async function refresh() {
   }
 }
 
-async function submitDesktopCommand(commandType, moduleId = null, configRevision = null) {
+async function submitDesktopCommand(
+  commandType, moduleId = null, configRevision = null, gameMode = null
+) {
   const payload = {command_type: commandType};
   if (moduleId) payload.module_id = moduleId;
   if (configRevision !== null) payload.config_revision = configRevision;
+  if (gameMode !== null) payload.game_mode = gameMode;
   const command = await request("/api/v1/commands", {
     method: "POST", body: JSON.stringify(payload)
   });
   renderLatestCommand([command]);
   await refresh();
+}
+
+function launchSummary(record) {
+  const config = record.config;
+  if (record.module_id === "gaze_games" && config.default_mode === "garden") {
+    const garden = config.garden;
+    const seconds = garden.baseline_seconds +
+      garden.contingent_block_seconds * 2 + garden.replay_block_seconds;
+    return "一级入口：眼动游戏\n游戏模式：点亮花园\n总协议时长：" + seconds +
+      " 秒\n持续注视阈值：" + garden.dwell_time_ms + " ms\n" +
+      "区块：基线 → 联动 1 → 回放 → 联动 2\n声音：" +
+      (garden.sound_enabled ? "开启" : "关闭") + "\n随机种子：" +
+      (garden.randomization_seed === null ? "运行时生成" : garden.randomization_seed);
+  }
+  if (record.module_id === "gaze_games") {
+    const hunt = config.treasure_hunt;
+    const trials = hunt.preview_trial_count + hunt.popout_trial_count + hunt.catch_trial_count;
+    return "一级入口：眼动游戏\n游戏模式：视觉寻宝\n试次数：" + trials +
+      "\n每试次最长：" + hunt.trial_duration_seconds + " 秒\n持续注视阈值：" +
+      hunt.dwell_time_ms + " ms\n声音：" + (hunt.sound_enabled ? "开启" : "关闭") +
+      "\n随机种子：" +
+      (hunt.randomization_seed === null ? "运行时生成" : hunt.randomization_seed);
+  }
+  if (record.module_id === "visual_preference") {
+    const pairs = Array.isArray(config.pair_ids) ? config.pair_ids.length : 0;
+    return "一级入口：视觉偏好\n刺激对：" + pairs + " 组（共 " + pairs * 2 +
+      " 试次，逐对换边）\n单次呈现：" + config.presentation_seconds +
+      " 秒\n声音：" + (config.sound_intro_enabled ? "开启" : "关闭") +
+      "\n随机种子：" +
+      (config.randomization_seed === null ? "运行时生成" : config.randomization_seed);
+  }
+  return "任务：" + record.module_id + "\n设置版本：" + record.revision;
 }
 
 document.getElementById("run-module").addEventListener("change", async () => {
@@ -489,7 +669,12 @@ document.getElementById("reload-config").addEventListener("click", async () => {
 });
 document.getElementById("start-task").addEventListener("click", async () => {
   const record = await saveTaskConfig();
-  if (record) await submitDesktopCommand("start_task", record.module_id, record.revision);
+  if (record) {
+    const gameMode = record.module_id === "gaze_games" ? record.config.default_mode : null;
+    if (confirm(launchSummary(record) + "\n\n确认按以上设置直接启动？")) {
+      await submitDesktopCommand("start_task", record.module_id, record.revision, gameMode);
+    }
+  }
 });
 document.getElementById("open-display").addEventListener("click", async () => {
   await submitDesktopCommand("open_patient_display");

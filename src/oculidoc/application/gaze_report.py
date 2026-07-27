@@ -32,6 +32,11 @@ from oculidoc.domain.experiment_session import (
 from oculidoc.modules.registry import DEFAULT_MODULES
 
 _MODULE_TITLES = {module.module_id: module.title for module in DEFAULT_MODULES}
+CLINICAL_USE_NOTICE = (
+    "本结果描述患者在本次任务、当前配置和可用眼动数据中的观察表现。"
+    "眼动任务不能单独诊断意识状态，也不能替代 CRS-R 等重复标准化行为评估。"
+    "低有效采样率、视觉/眼肌障碍、疲劳、药物和警觉波动均可能造成阴性或不稳定结果。"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +50,7 @@ class GazeReportArtifacts:
     semantic_aoi_path: Path
     tracking_error_path: Path | None
     tracking_error_timeline_path: Path | None
+    task_detail_path: Path | None
 
 
 def _finite_float(
@@ -464,7 +470,169 @@ def _task_result_rows(
             )
         )
 
-    if task_kind == "instruction_fixation" or "target_acquisition_ratio" in result:
+    game_mode = str(result.get("game_mode") or "")
+
+    if task_kind == "gaze_games" and game_mode == "garden":
+        rows.extend(
+            (
+                ("游戏模式", "点亮花园"),
+                ("有效样本率", _display_ratio(result.get("valid_sample_ratio"))),
+                ("实际随机种子", _display_value(result.get("randomization_seed"))),
+                ("回放来源", _display_value(result.get("replay_source"))),
+                ("花朵探索覆盖", _display_ratio(result.get("aoi_exploration_coverage"))),
+                ("联动触发次数", _display_value(result.get("contingent_activation_count"))),
+                (
+                    "联动目标停留占比",
+                    _display_ratio(result.get("contingent_target_dwell_ratio")),
+                ),
+                (
+                    "回放目标停留占比",
+                    _display_ratio(result.get("replay_target_dwell_ratio")),
+                ),
+                (
+                    "丢失后重新获得",
+                    _display_value(result.get("loss_and_reacquisition_count")),
+                ),
+                (
+                    "解释边界",
+                    "仅描述本次联动与回放中的注视表现，不用于意识分类",
+                ),
+            )
+        )
+        blocks = result.get("blocks")
+
+        if isinstance(blocks, list):
+            block_labels = {
+                "baseline": "基线",
+                "contingent_1": "联动 1",
+                "replay": "回放",
+                "contingent_2": "联动 2",
+            }
+
+            for block in blocks:
+                if not isinstance(block, dict):
+                    continue
+
+                sample_count = _finite_float(block.get("sample_count")) or 0.0
+                valid_count = _finite_float(block.get("valid_sample_count")) or 0.0
+                ratio = valid_count / sample_count if sample_count > 0 else None
+                rows.append(
+                    (
+                        f"{block_labels.get(str(block.get('block_type')), '区块')}明细",
+                        f"有效率 {_display_ratio(ratio)} · "
+                        f"有效时长 {_display_ms(block.get('valid_duration_ms'))} · "
+                        f"目标停留 {_display_ms(block.get('target_dwell_ms'))} · "
+                        f"触发 {len(block.get('activation_latencies_ms', []))}",
+                    )
+                )
+
+    if task_kind == "gaze_games" and game_mode == "treasure_hunt":
+        by_condition = result.get("target_acquisition_ratio_by_condition")
+
+        if not isinstance(by_condition, dict):
+            by_condition = {}
+
+        rows.extend(
+            (
+                ("游戏模式", "视觉寻宝"),
+                ("有效样本率", _display_ratio(result.get("valid_sample_ratio"))),
+                (
+                    "目标存在试次成功",
+                    f"{result.get('successful_trial_count', 0)}/"
+                    f"{result.get('target_present_trial_count', 0)}",
+                ),
+                (
+                    "未成功或超时",
+                    _display_value(result.get("failed_or_timeout_trial_count")),
+                ),
+                (
+                    "预览搜索获得率",
+                    _display_ratio(by_condition.get("preview_search")),
+                ),
+                ("突现获得率", _display_ratio(by_condition.get("popout"))),
+                (
+                    "目标获得中位潜伏期",
+                    _display_ms(result.get("median_target_acquisition_ms")),
+                ),
+                ("干扰区停留占比", _display_ratio(result.get("distractor_dwell_ratio"))),
+                (
+                    "目标缺失试次假选择率",
+                    _display_ratio(result.get("catch_false_selection_ratio")),
+                ),
+                (
+                    "解释边界",
+                    "未成功、超时和目标缺失试次均保留在分母；结果不用于意识分类",
+                ),
+            )
+        )
+        hunt_trials = result.get("trials")
+
+        if isinstance(hunt_trials, list):
+            for trial in hunt_trials:
+                if not isinstance(trial, dict):
+                    continue
+
+                outcome = (
+                    "获得目标"
+                    if trial.get("target_acquired") is True
+                    else "目标缺失"
+                    if trial.get("target_present") is False
+                    else "未成功/超时"
+                )
+                rows.append(
+                    (
+                        f"试次 {trial.get('trial_number', '-')} · {trial.get('condition', '-')}",
+                        f"{outcome} · 获得潜伏期 "
+                        f"{_display_ms(trial.get('target_acquisition_ms'))} · "
+                        f"干扰停留 {_display_ms(trial.get('distractor_dwell_ms'))}",
+                    )
+                )
+
+    if task_kind == "visual_preference":
+        rows.extend(
+            (
+                ("有效样本率", _display_ratio(result.get("valid_sample_ratio"))),
+                (
+                    "可用试次",
+                    f"{result.get('usable_trial_count', 0)}/{result.get('trial_count', 0)}",
+                ),
+                ("任一图片进入率", _display_ratio(result.get("any_image_entry_ratio"))),
+                ("图片 A 停留占比", _display_ratio(result.get("image_dwell_share_a"))),
+                ("图片 B 停留占比", _display_ratio(result.get("image_dwell_share_b"))),
+                ("固定左侧停留占比", _display_ratio(result.get("left_dwell_share"))),
+                (
+                    "换边后一致性",
+                    _display_ratio(result.get("side_swap_consistency"))
+                    + f"（分母 {result.get('side_swap_pair_denominator', 0)} 对）",
+                ),
+                (
+                    "解释边界",
+                    "图片关注与固定左右侧偏分别统计；停留不等同于识别、选择或诊断",
+                ),
+            )
+        )
+        preference_trials = result.get("trials")
+
+        if isinstance(preference_trials, list):
+            for trial in preference_trials:
+                if not isinstance(trial, dict):
+                    continue
+
+                rows.append(
+                    (
+                        f"刺激对 {trial.get('pair_id', '-')} · "
+                        f"呈现 {trial.get('side_presentation_index', '-')}",
+                        f"质量 {trial.get('quality', '-')} · "
+                        f"A {_display_ms(trial.get('dwell_a_ms'))} · "
+                        f"B {_display_ms(trial.get('dwell_b_ms'))} · "
+                        f"首次进入 {trial.get('first_entry') or '-'}",
+                    )
+                )
+
+    if task_kind == "instruction_fixation" or (
+        task_kind not in {"gaze_games", "visual_preference"}
+        and "target_acquisition_ratio" in result
+    ):
         rows.extend(
             (
                 (
@@ -644,8 +812,7 @@ def _task_result_sections(
             "<section><h2>结构化任务结果</h2>"
             "<p>没有可读取的 task_result.json。</p>"
             + _analysis_html(
-                "本次缺少结构化任务结果，只能查看眼动采样图，"
-                "不能解释具体回答或任务完成情况。"
+                "本次缺少结构化任务结果，只能查看眼动采样图，不能解释具体回答或任务完成情况。"
             )
             + "</section>"
         )
@@ -1254,8 +1421,7 @@ def _quality_analysis(metrics: dict[str, object]) -> str:
     else:
         quality = "多数样本有效，数据完整性相对较好"
     return (
-        f"共记录 {sample_count} 个样本，其中 {valid_count} 个有效"
-        f"（{valid_ratio:.1%}）；{quality}。"
+        f"共记录 {sample_count} 个样本，其中 {valid_count} 个有效（{valid_ratio:.1%}）；{quality}。"
     )
 
 
@@ -1265,6 +1431,34 @@ def _task_result_analysis(task_record: dict[str, object]) -> str:
     value = task_record.get("result")
     result = value if isinstance(value, dict) else {}
     status = str(result.get("completion_status") or task_record.get("end_reason") or "未知")
+    task_kind = str(task_record.get("task_kind") or result.get("task_kind") or "")
+    game_mode = str(result.get("game_mode") or "")
+
+    if task_kind == "gaze_games" and game_mode == "garden":
+        return (
+            f"本轮状态为“{status}”，联动区块共记录 "
+            f"{result.get('contingent_activation_count', 0)} 次达到注视阈值的触发，"
+            f"回放来源为 {result.get('replay_source') or '未形成'}。"
+            "联动与回放差异只描述本次观察，不单独判断意识状态。"
+        )
+
+    if task_kind == "gaze_games" and game_mode == "treasure_hunt":
+        return (
+            f"本轮状态为“{status}”，目标存在试次获得 "
+            f"{result.get('successful_trial_count', 0)}/"
+            f"{result.get('target_present_trial_count', 0)}；"
+            f"另有 {result.get('failed_or_timeout_trial_count', 0)} 个未成功或超时试次。"
+            "所有失败、超时和目标缺失试次均保留，单次结果不用于意识分类。"
+        )
+
+    if task_kind == "visual_preference":
+        return (
+            f"本轮状态为“{status}”，可用试次 "
+            f"{result.get('usable_trial_count', 0)}/{result.get('trial_count', 0)}。"
+            "图片 A/B 与固定左/右侧分别统计，避免把侧偏误写成图片偏好；"
+            "注视时长不等同于识别、选择或诊断。"
+        )
+
     questions = result.get("questions")
     if isinstance(questions, list):
         completed = int(result.get("completed_question_count") or 0)
@@ -1327,6 +1521,186 @@ def _tracking_analysis(metrics: dict[str, object]) -> str:
     )
 
 
+def _task_detail_plot(
+    task_results: list[dict[str, object]],
+    output_path: Path,
+) -> str | None:
+    """Render one neutral task-family figure from structured block/trial results."""
+    for task_record in task_results:
+        result_value = task_record.get("result")
+        result = result_value if isinstance(result_value, dict) else {}
+        task_kind = str(task_record.get("task_kind") or "")
+        game_mode = str(result.get("game_mode") or "")
+
+        if task_kind == "gaze_games" and game_mode == "garden":
+            blocks_value = result.get("blocks")
+            blocks = (
+                [block for block in blocks_value if isinstance(block, dict)]
+                if isinstance(blocks_value, list)
+                else []
+            )
+
+            if not blocks:
+                return None
+
+            labels = {
+                "baseline": "Baseline",
+                "contingent_1": "Contingent 1",
+                "replay": "Replay",
+                "contingent_2": "Contingent 2",
+            }
+            x_values = list(range(len(blocks)))
+            valid_ratios = []
+
+            for block in blocks:
+                sample_count = _finite_float(block.get("sample_count")) or 0.0
+                valid_count = _finite_float(block.get("valid_sample_count")) or 0.0
+                valid_ratios.append(valid_count / sample_count if sample_count > 0 else 0.0)
+
+            figure, (quality_axis, latency_axis) = plt.subplots(
+                2,
+                1,
+                figsize=(9, 7),
+                constrained_layout=True,
+            )
+            quality_axis.bar(x_values, valid_ratios, color="#4f8fb5")
+            quality_axis.set_ylim(0.0, 1.0)
+            quality_axis.set_ylabel("Valid sample ratio")
+            quality_axis.set_xticks(
+                x_values,
+                [labels.get(str(block.get("block_type")), "Block") for block in blocks],
+            )
+            latency_found = False
+
+            for index, block in enumerate(blocks):
+                raw = block.get("activation_latencies_ms")
+                latencies = (
+                    [number for value in raw if (number := _finite_float(value)) is not None]
+                    if isinstance(raw, list)
+                    else []
+                )
+
+                if latencies:
+                    latency_found = True
+                    latency_axis.scatter(
+                        [index] * len(latencies),
+                        latencies,
+                        color="#d77a28",
+                    )
+
+            latency_axis.set_xticks(
+                x_values,
+                [labels.get(str(block.get("block_type")), "Block") for block in blocks],
+            )
+            latency_axis.set_ylabel("Activation latency (ms)")
+            latency_axis.set_title(
+                "Threshold events by block" if latency_found else "No threshold event recorded"
+            )
+            figure.suptitle("Garden block quality and gaze-contingent events")
+            _atomic_save_figure(figure, output_path)
+            return "garden"
+
+        if task_kind == "gaze_games" and game_mode == "treasure_hunt":
+            trials_value = result.get("trials")
+            trials = (
+                [trial for trial in trials_value if isinstance(trial, dict)]
+                if isinstance(trials_value, list)
+                else []
+            )
+
+            if not trials:
+                return None
+
+            figure, axis = plt.subplots(figsize=(10, 5.5))
+            colors = {
+                "preview_search": "#2e7d9a",
+                "popout": "#8a5aa9",
+                "catch": "#7a7a7a",
+            }
+
+            for trial in trials:
+                trial_number = _finite_float(trial.get("trial_number"))
+                latency = _finite_float(trial.get("target_acquisition_ms"))
+                condition = str(trial.get("condition") or "unknown")
+
+                if trial_number is None:
+                    continue
+
+                if latency is not None:
+                    axis.scatter(
+                        trial_number,
+                        latency,
+                        color=colors.get(condition, "#2e7d9a"),
+                        marker="o",
+                    )
+                else:
+                    axis.scatter(
+                        trial_number,
+                        0.0,
+                        color="#b42318" if trial.get("target_present") is not False else "#7a7a7a",
+                        marker="x",
+                        s=70,
+                    )
+
+            axis.set_xlabel("Trial number")
+            axis.set_ylabel("Target acquisition latency (ms); x = no acquisition")
+            axis.set_title("Visual-hunt outcomes with failures and catch trials retained")
+            axis.grid(alpha=0.2)
+            _atomic_save_figure(figure, output_path)
+            return "treasure_hunt"
+
+        if task_kind == "visual_preference":
+            values = (
+                _finite_float(result.get("image_dwell_share_a")),
+                _finite_float(result.get("image_dwell_share_b")),
+                _finite_float(result.get("left_dwell_share")),
+            )
+
+            if not any(value is not None for value in values):
+                return None
+
+            image_a, image_b, left = values
+            right = None if left is None else 1.0 - left
+            figure, axis = plt.subplots(figsize=(8.5, 5.2))
+            bar_labels = ("Image A", "Image B", "Left side", "Right side")
+            heights = [
+                0.0 if image_a is None else image_a,
+                0.0 if image_b is None else image_b,
+                0.0 if left is None else left,
+                0.0 if right is None else right,
+            ]
+            axis.bar(
+                bar_labels,
+                heights,
+                color=("#4f8fb5", "#70ad74", "#c6904b", "#c6904b"),
+            )
+            axis.set_ylim(0.0, 1.0)
+            axis.set_ylabel("Share of usable image dwell")
+            axis.set_title("Image-specific attention separated from fixed screen side")
+            _atomic_save_figure(figure, output_path)
+            return "visual_preference"
+
+    return None
+
+
+def _task_detail_analysis(kind: str) -> str:
+    if kind == "garden":
+        return (
+            "上图按四个区块分别保留有效率与达到注视阈值的时间点；"
+            "回放块不是患者触发，不能与联动块作简单因果判断。"
+        )
+
+    if kind == "treasure_hunt":
+        return (
+            "圆点表示形成目标获得的试次，叉号保留未成功、超时和目标缺失试次。"
+            "不同条件应分层复核，不能只报告成功试次。"
+        )
+
+    return (
+        "图片 A/B 的停留份额与固定左/右侧份额分开展示；两者差异不能直接解释为识别、偏好或诊断结论。"
+    )
+
+
 def _html_document(
     *,
     patient_label: str,
@@ -1337,8 +1711,17 @@ def _html_document(
     task_results: list[dict[str, object]],
     has_tracking_plot: bool,
     has_tracking_timeline: bool,
+    task_detail_kind: str | None,
 ) -> str:
     task_result_html = _task_result_sections(task_results)
+    valid_sample_ratio = _finite_float(metrics.get("valid_sample_ratio"))
+    quality_warning = (
+        '<section class="notice"><strong>数据质量不足，谨慎解释：</strong>'
+        "本次有效采样率低于 60%，原始记录仍完整保留；"
+        "请优先复核摆位、校准、眼睑/眼肌情况、疲劳、药物与警觉波动。</section>"
+        if valid_sample_ratio is not None and valid_sample_ratio < 0.60
+        else ""
+    )
     tracking_image = (
         "<section><h2>目标—视线误差分布</h2>"
         '<img src="tracking_error.png" '
@@ -1357,6 +1740,13 @@ def _html_document(
         )
         + "</section>"
         if has_tracking_timeline
+        else ""
+    )
+    task_detail = (
+        "<section><h2>任务专属指标图</h2>"
+        '<img src="task_detail.png" alt="Task-specific descriptive metrics">'
+        f"{_analysis_html(_task_detail_analysis(task_detail_kind))}</section>"
+        if task_detail_kind is not None
         else ""
     )
 
@@ -1409,12 +1799,14 @@ code {{ word-break: break-all; }}
 <p>记录时间：{html.escape(record_time)}</p>
 <p>生成时间：{html.escape(generated_at)}</p>
 </header>
+{quality_warning}
 <section>
 <h2>核心指标</h2>
 <table>{_metric_rows(metrics)}</table>
 {_analysis_html(_quality_analysis(metrics))}
 </section>
 {task_result_html}
+{task_detail}
 <section>
 <h2>屏幕空间热图</h2>
 <img src="screen_heatmap.png" alt="Screen heatmap">
@@ -1429,9 +1821,7 @@ code {{ word-break: break-all; }}
 {tracking_timeline}
 <section class="notice">
 <strong>用途声明：</strong>
-本报告用于研究与临床辅助观察，不能单独作为意识状态诊断、
-治疗决策或预后判断依据。应结合 CRS-R、神经电生理、影像学、
-床旁观察与患者基础状态综合解释。
+{html.escape(CLINICAL_USE_NOTICE)}
 </section>
 </body>
 </html>
@@ -1490,6 +1880,7 @@ def generate_gaze_session_report(
     tracking_error_timeline_path = (
         report_directory / "tracking_error_timeline.png" if tracking_series else None
     )
+    task_detail_path = report_directory / "task_detail.png"
     report_json_path = report_directory / "report.json"
     html_path = report_directory / "report.html"
 
@@ -1516,6 +1907,8 @@ def generate_gaze_session_report(
             tracking_error_timeline_path,
         )
 
+    task_detail_kind = _task_detail_plot(task_results, task_detail_path)
+
     generated_at_text = generated_at.isoformat()
     report_document: dict[str, object] = {
         "schema_version": "1.2",
@@ -1528,9 +1921,8 @@ def generate_gaze_session_report(
         "session_id": str(session.session_id),
         "module_id": session.module_id,
         "metrics": metrics,
-        "clinical_use_notice": (
-            "Research and clinical-assistive use only; not a standalone diagnosis."
-        ),
+        "task_metric_families": ([task_detail_kind] if task_detail_kind is not None else []),
+        "clinical_use_notice": CLINICAL_USE_NOTICE,
     }
     _atomic_write_json(
         report_json_path,
@@ -1547,6 +1939,7 @@ def generate_gaze_session_report(
             task_results=task_results,
             has_tracking_plot=(tracking_error_path is not None),
             has_tracking_timeline=(tracking_error_timeline_path is not None),
+            task_detail_kind=task_detail_kind,
         ),
     )
 
@@ -1562,6 +1955,9 @@ def generate_gaze_session_report(
 
     if tracking_error_timeline_path is not None:
         produced_paths.append(tracking_error_timeline_path)
+
+    if task_detail_kind is not None:
+        produced_paths.append(task_detail_path)
 
     for path in produced_paths:
         _register_artifact(
@@ -1579,4 +1975,5 @@ def generate_gaze_session_report(
         semantic_aoi_path=(semantic_aoi_path),
         tracking_error_path=(tracking_error_path),
         tracking_error_timeline_path=(tracking_error_timeline_path),
+        task_detail_path=(task_detail_path if task_detail_kind is not None else None),
     )

@@ -1,11 +1,14 @@
 """Tests for reusable timed task windows."""
 
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication
 from pytestqt.qtbot import QtBot
 
 from oculidoc.tasks.binary_question import (
     BinaryQuestionConfig,
     BinaryQuestionTask,
 )
+from oculidoc.tasks.sequential_choice import SequentialChoiceTask
 from oculidoc.tasks.task_window import (
     TimedTaskWindow,
 )
@@ -54,6 +57,55 @@ def test_task_window_has_emergency_exit(
     assert signal.args == ["manual_exit"]
 
 
+def test_multi_question_skip_key_advances_instead_of_exiting(
+    qtbot: QtBot,
+) -> None:
+    configs = (
+        BinaryQuestionConfig(
+            question="第一题",
+            left_answer="是",
+            right_answer="否",
+        ),
+        BinaryQuestionConfig(
+            question="第二题",
+            left_answer="是",
+            right_answer="否",
+        ),
+    )
+    task = SequentialChoiceTask(
+        config=configs[0],
+        question_ids=("q1", "q2"),
+        task_factory=lambda index: BinaryQuestionTask(configs[index]),
+        layout_orientation="horizontal",
+    )
+    window = TimedTaskWindow(
+        task,
+        duration_seconds=60,
+        title="多题问答",
+    )
+    qtbot.addWidget(window)
+    finished_reasons: list[str] = []
+
+    def record_finished(reason: str) -> None:
+        finished_reasons.append(reason)
+
+    window.finished.connect(record_finished)
+    window.show()
+    window.activateWindow()
+    window.start()
+    qtbot.waitUntil(task.hasFocus)
+
+    focus_widget = QApplication.focusWidget()
+    assert focus_widget is task
+    assert window.exit_button.focusPolicy() is Qt.FocusPolicy.NoFocus
+
+    qtbot.keyClick(focus_widget, Qt.Key.Key_Space)
+
+    assert task.current_question_number == 2
+    assert finished_reasons == []
+    assert window.isVisible()
+
+
 def test_binary_answers_use_large_regions(
     qtbot: QtBot,
 ) -> None:
@@ -65,6 +117,17 @@ def test_binary_answers_use_large_regions(
         )
     )
     qtbot.addWidget(task)
+    task.resize(1_280, 720)
+    task.show()
+    qtbot.wait(10)
 
-    assert task.left_button.minimumHeight() >= 460
-    assert task.right_button.minimumHeight() >= 460
+    small_height = task.left_button.height()
+
+    assert task.left_button.width() >= task.width() * 0.45
+    assert small_height >= task.height() * 0.70
+
+    task.resize(3_840, 2_160)
+    qtbot.wait(10)
+
+    assert task.left_button.height() > small_height * 3
+    assert task.right_button.height() == task.left_button.height()

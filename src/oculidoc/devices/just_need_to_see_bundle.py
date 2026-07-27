@@ -1,4 +1,4 @@
-"""Use the Stream Engine library shipped beside JustNeedToSee without launching its UI."""
+"""Use an explicitly selected compatibility copy of Tobii Stream Engine."""
 
 from __future__ import annotations
 
@@ -8,11 +8,10 @@ from oculidoc.devices.tobii_stream_engine import TobiiStreamEngineDevice
 
 
 class JustNeedToSeeBundleDevice(TobiiStreamEngineDevice):
-    """Direct Tobii source using JustNeedToSee's known-good DLL location.
+    """Direct Tobii source using a known-good compatibility DLL location.
 
-    JustNeedToSee itself must remain closed. OculiDoC owns the device subscription
-    in this mode; reading cursor movement from the other application is deliberately
-    not used because it discards timestamps and validity.
+    OculiDoC owns the device subscription in this mode; another program must not
+    subscribe to the same consumer eye tracker at the same time.
     """
 
     def __init__(
@@ -25,12 +24,12 @@ class JustNeedToSeeBundleDevice(TobiiStreamEngineDevice):
         super().__init__(library_path=library_path)
         self.bundle_root = root
         self._info = self._info.__class__(
-            device_id="just-need-to-see-stream-engine",
+            device_id="tobii-dll-compatibility",
             kind=self._info.kind,
-            name="JustNeedToSee 内置 Tobii 兼容模式",
-            manufacturer="Tobii / HPF legacy bundle",
-            model="Stream Engine 2.3.0.699",
+            name="Tobii DLL兼容",
+            manufacturer="Tobii",
+            model="Stream Engine compatibility bundle",
             serial_number=None,
             is_simulated=False,
-            capabilities=self._info.capabilities + ("just_need_to_see_bundle",),
+            capabilities=self._info.capabilities + ("tobii_dll_compatibility",),
         )

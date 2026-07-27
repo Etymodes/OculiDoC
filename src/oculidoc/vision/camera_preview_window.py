@@ -99,9 +99,7 @@ class CameraPreviewWindow(QMainWindow):
         )
         self._closed_emitted = False
 
-        self.setWindowTitle(
-            f"OculiDoC Camera and Eye Workbench — {self._patient_display_label}"
-        )
+        self.setWindowTitle(f"OculiDoC Camera and Eye Workbench — {self._patient_display_label}")
         self._frame_save_guard = FrameSaveGuard()
         self._timer = QTimer(self)
         self._timer.setInterval(33)
@@ -792,9 +790,7 @@ class CameraPreviewWindow(QMainWindow):
         self._frame_save_guard.mark_saved(frame_key)
 
         self.statusBar().showMessage(
-            f"已保存患者档案 "
-            f"{self._patient_display_label} 的样本 "
-            f"{sample_paths.index:04d}"
+            f"已保存患者档案 {self._patient_display_label} 的样本 {sample_paths.index:04d}"
         )
 
     def _stop_preview(self) -> None:

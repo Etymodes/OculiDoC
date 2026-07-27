@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QFrame, QPushButton
 from pytestqt.qtbot import QtBot
 
 from oculidoc.config import Settings
@@ -23,6 +23,11 @@ def test_admin_window_builds(qtbot: QtBot, tmp_path: Path) -> None:
     )
     assert tracking_button is not None
     assert tracking_button.property("moduleId") == "tracking_ball"
+    assert tracking_button.text() == "追踪球"
+    assert tracking_button.property("idleText") == "追踪球"
+    assert window.findChild(QFrame, "workbenchTaskStrip") is not None
+    assert window.findChild(QPushButton, "singleModuleButton") is None
+    assert "QPushButton:pressed" in window.styleSheet()
     assert window.update_button.text() == "检查更新"
 
     image_button = window.findChild(QPushButton, "moduleButton_image_choice")

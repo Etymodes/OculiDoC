@@ -34,6 +34,9 @@ def _optional_float(
     if isinstance(value, bool):
         raise DeviceReadError(f"{field_name} cannot be boolean.")
 
+    if not isinstance(value, (int, float, str)):
+        raise DeviceReadError(f"{field_name} must be numeric.")
+
     try:
         result = float(value)
     except (TypeError, ValueError) as error:
@@ -57,6 +60,77 @@ def _first_float(
             )
 
     return None
+
+
+def _eye_position(
+    payload: dict[str, Any],
+    side: str,
+) -> tuple[float, float, float] | None:
+    names = (
+        f"{side}_eye_position_normalized",
+        f"{side}EyePositionNormalized",
+    )
+    containers = [payload]
+
+    for container_name in ("eye_position", "eye_positions", "eyes"):
+        nested = payload.get(container_name)
+
+        if isinstance(nested, dict):
+            containers.append(nested)
+
+    value: object | None = None
+
+    for container in containers:
+        for name in names:
+            if name in container:
+                value = container[name]
+                break
+
+        if value is not None:
+            break
+
+    if value is None:
+        flat_values = tuple(
+            _first_float(
+                payload,
+                (
+                    f"{side}_eye_position_{axis}",
+                    f"{side}_eye_{axis}_normalized",
+                ),
+            )
+            for axis in ("x", "y", "z")
+        )
+
+        if all(component is None for component in flat_values):
+            return None
+
+        if any(component is None for component in flat_values):
+            raise DeviceReadError(f"{side} eye position must contain x, y, and z.")
+
+        return flat_values  # type: ignore[return-value]
+
+    if isinstance(value, dict):
+        components = tuple(
+            _first_float(
+                value,
+                (
+                    axis,
+                    axis.upper(),
+                ),
+            )
+            for axis in ("x", "y", "z")
+        )
+    elif isinstance(value, (list, tuple)) and len(value) == 3:
+        components = tuple(
+            _optional_float(component, field_name=f"{side}_eye_position") for component in value
+        )
+    else:
+        raise DeviceReadError(f"{side} eye position must be a three-value list or x/y/z object.")
+
+    if any(component is None for component in components):
+        raise DeviceReadError(f"{side} eye position must contain x, y, and z.")
+
+    return components  # type: ignore[return-value]
 
 
 def _boolean_value(
@@ -290,6 +364,14 @@ def parse_tobii_bridge_payload(
                 "right_pupil_mm",
             ),
         ),
+        left_eye_position_normalized=_eye_position(
+            merged,
+            "left",
+        ),
+        right_eye_position_normalized=_eye_position(
+            merged,
+            "right",
+        ),
     )
 
 
@@ -366,6 +448,7 @@ class TobiiLegacyBridgeDevice:
                 "normalized_gaze",
                 "binocular_validity",
                 "pupil_diameter",
+                "normalized_eye_position_optional",
                 "tcp",
                 "ndjson",
                 TOBII_BRIDGE_PROTOCOL,

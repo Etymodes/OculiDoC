@@ -1,6 +1,7 @@
 """Patient registration, editing, and selection dialogs."""
 
 import json
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from uuid import UUID
@@ -346,11 +347,13 @@ class PatientManagementDialog(QDialog):
         parent: QWidget | None = None,
         *,
         experiment_session_service: ExperimentSessionService | None = None,
+        is_patient_session_active: Callable[[UUID], bool] | None = None,
     ) -> None:
         super().__init__(parent)
 
         self.patient_service = patient_service
         self.experiment_session_service = experiment_session_service
+        self.is_patient_session_active = is_patient_session_active
         self.selected_patient: Patient | None = None
 
         self.setWindowTitle("\u60a3\u8005\u7ba1\u7406")
@@ -692,6 +695,15 @@ class PatientManagementDialog(QDialog):
             return
 
         if patient.is_active:
+            if self.is_patient_session_active is not None and self.is_patient_session_active(
+                patient.patient_id
+            ):
+                QMessageBox.information(
+                    self,
+                    "患者任务进行中",
+                    "请先结束该患者当前正在运行的任务，再停用患者。",
+                )
+                return
             result = QMessageBox.question(
                 self,
                 "\u505c\u7528\u60a3\u8005",

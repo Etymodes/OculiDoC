@@ -12,8 +12,11 @@ _TASK_COMMANDS = frozenset(
         "multiple-choice",
         "image-choice",
         "instruction-fixation",
+        "gaze-games",
+        "visual-preference",
     }
 )
+_GAZE_GAME_MODES = frozenset({"garden", "treasure_hunt"})
 
 
 def is_frozen_application() -> bool:
@@ -25,6 +28,7 @@ def gaze_task_process_command(
     command: str,
     *,
     config_revision: int | None = None,
+    game_mode: str | None = None,
     executable: str | Path | None = None,
     frozen: bool | None = None,
 ) -> tuple[str, list[str]]:
@@ -49,6 +53,19 @@ def gaze_task_process_command(
             raise ValueError("config_revision cannot be negative.")
 
         arguments.extend(["--direct", "--config-revision", str(config_revision)])
+
+    normalized_game_mode = game_mode.strip() if game_mode is not None else None
+
+    if normalized_game_mode is not None:
+        if normalized_command != "gaze-games":
+            raise ValueError("game_mode is only valid for the gaze-games command.")
+
+        if normalized_game_mode not in _GAZE_GAME_MODES:
+            raise ValueError(f"Unsupported gaze game mode: {game_mode}")
+
+        arguments.extend(["--game-mode", normalized_game_mode])
+    elif normalized_command == "gaze-games" and config_revision is not None:
+        raise ValueError("Direct gaze-games launch requires game_mode.")
 
     return program, arguments
 

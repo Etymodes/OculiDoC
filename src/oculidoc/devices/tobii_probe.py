@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import struct
 import sys
 from time import monotonic, sleep
 
@@ -29,6 +30,7 @@ def main() -> int:
 
     print("=== OCULIDOC TOBII NATIVE PROBE ===")
     print(f"PYTHON={sys.version.split()[0]}")
+    print(f"PYTHON_BITS={struct.calcsize('P') * 8}")
     print(f"PLATFORM={sys.platform}")
 
     library_path = discover_tobii_stream_engine_dll(args.dll)
@@ -44,6 +46,7 @@ def main() -> int:
     valid_count = 0
     invalid_count = 0
     sample_count = 0
+    eye_position_sample_count = 0
     first_sample_printed = False
 
     try:
@@ -53,6 +56,8 @@ def main() -> int:
         print(f"DEVICE_URL={device.device_url}")
 
         device.start_stream()
+        print(f"EYE_POSITION_STREAM={device.eye_position_stream_status}")
+        print(f"EYE_POSITION_DETAIL={device.eye_position_stream_detail}")
 
         deadline = monotonic() + max(1.0, args.seconds)
 
@@ -64,6 +69,7 @@ def main() -> int:
                 continue
 
             sample_count += 1
+            eye_position_sample_count += int(sample.eye_position_available)
 
             if sample.gaze_valid:
                 valid_count += 1
@@ -88,6 +94,7 @@ def main() -> int:
     print(f"SAMPLES={sample_count}")
     print(f"VALID={valid_count}")
     print(f"INVALID={invalid_count}")
+    print(f"EYE_POSITION_SAMPLES={eye_position_sample_count}")
 
     if valid_count <= 0:
         print("TOBII_NATIVE_PROBE=NO_VALID_GAZE")

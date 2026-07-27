@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oculidoc"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Eye-tracking assessment and interaction platform for disorders of consciousness."
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
@@ -13,7 +13,7 @@ authors = [
   { name = "TiantanDoC" }
 ]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 3 - Alpha",
   "Intended Audience :: Healthcare Industry",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3.11",
@@ -90,4 +90,9 @@ indent-style = "space"
 line-ending = "lf"
 
 [tool.setuptools.package-data]
-oculidoc = ["assets/*.ico", "assets/*.png"]
+oculidoc = [
+  "assets/*.ico",
+  "assets/*.png",
+  "assets/stimuli/*.json",
+  "assets/stimuli/*.png",
+]

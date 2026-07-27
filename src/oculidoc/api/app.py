@@ -48,6 +48,7 @@ class DesktopCommandRequest(BaseModel):
     command_type: LanCommandType
     module_id: str | None = Field(default=None, min_length=1, max_length=100)
     config_revision: int | None = Field(default=None, ge=0)
+    game_mode: str | None = Field(default=None, min_length=1, max_length=40)
 
 
 class TaskConfigUpdateRequest(BaseModel):
@@ -331,6 +332,20 @@ def create_api(
                 detail="start_task requires config_revision.",
             )
 
+        game_mode = request.game_mode.strip() if request.game_mode else None
+
+        if request.command_type is LanCommandType.START_TASK and module_id == "gaze_games":
+            if game_mode not in {"garden", "treasure_hunt"}:
+                raise HTTPException(
+                    status_code=422,
+                    detail="请选择游戏模式。",
+                )
+        elif game_mode is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="game_mode is only valid for gaze_games start_task.",
+            )
+
         if (
             request.command_type is not LanCommandType.START_TASK
             and request.config_revision is not None
@@ -363,6 +378,9 @@ def create_api(
 
         if request.config_revision is not None:
             payload["config_revision"] = request.config_revision
+
+        if game_mode is not None:
+            payload["game_mode"] = game_mode
 
         return commands.submit(request.command_type, payload=payload).to_dict()
 

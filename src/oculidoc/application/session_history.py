@@ -319,7 +319,54 @@ def format_task_result_lines(
             lines.append("反应时间：" + milliseconds_text(result.get("reaction_time_ms")))
             lines.append("确认停留：" + milliseconds_text(result.get("confirmation_dwell_ms")))
 
-        if task_kind == "instruction_fixation" or "target_acquisition_ratio" in result:
+        game_mode = str(result.get("game_mode") or "")
+
+        if task_kind == "gaze_games" and game_mode == "garden":
+            lines.extend(
+                (
+                    "游戏模式：点亮花园",
+                    "有效样本率：" + ratio_text(result.get("valid_sample_ratio")),
+                    "联动触发次数：" + str(result.get("contingent_activation_count", 0)),
+                    "联动目标停留占比：" + ratio_text(result.get("contingent_target_dwell_ratio")),
+                    "回放来源：" + str(result.get("replay_source") or "-"),
+                    "解释边界：仅描述本次联动与回放注视，不自动判定意识状态",
+                )
+            )
+
+        if task_kind == "gaze_games" and game_mode == "treasure_hunt":
+            lines.extend(
+                (
+                    "游戏模式：视觉寻宝",
+                    "有效样本率：" + ratio_text(result.get("valid_sample_ratio")),
+                    "目标获得比例：" + ratio_text(result.get("target_acquisition_ratio")),
+                    "未成功或超时：" + str(result.get("failed_or_timeout_trial_count", 0)),
+                    "目标缺失假选择率：" + ratio_text(result.get("catch_false_selection_ratio")),
+                    "解释边界：失败、超时与目标缺失试次均保留，不自动判定意识状态",
+                )
+            )
+
+        if task_kind == "visual_preference":
+            lines.extend(
+                (
+                    "有效样本率：" + ratio_text(result.get("valid_sample_ratio")),
+                    "可用试次："
+                    + str(result.get("usable_trial_count", 0))
+                    + "/"
+                    + str(result.get("trial_count", 0)),
+                    "图片 A/B 停留占比："
+                    + ratio_text(result.get("image_dwell_share_a"))
+                    + "/"
+                    + ratio_text(result.get("image_dwell_share_b")),
+                    "固定左侧停留占比：" + ratio_text(result.get("left_dwell_share")),
+                    "换边后一致性：" + ratio_text(result.get("side_swap_consistency")),
+                    "解释边界：图片关注与固定侧偏分别统计，不等同于识别或诊断",
+                )
+            )
+
+        if task_kind == "instruction_fixation" or (
+            task_kind not in {"gaze_games", "visual_preference"}
+            and "target_acquisition_ratio" in result
+        ):
             lines.extend(
                 (
                     "目标稳定注视比例：" + ratio_text(result.get("target_acquisition_ratio")),
