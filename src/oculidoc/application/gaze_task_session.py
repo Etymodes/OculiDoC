@@ -28,6 +28,18 @@ _GAZE_TASK_COMMANDS = {
     "multiple_choice": "multiple-choice",
     "image_choice": "image-choice",
     "instruction_fixation": "instruction-fixation",
+    "gaze_games": "gaze-games",
+    "visual_preference": "visual-preference",
+}
+
+_ABORTED_END_REASONS = {
+    "application_quit",
+    "manual_exit",
+    "window_closed",
+}
+_FAILED_END_REASONS = {
+    "device_error",
+    "stream_error",
 }
 
 
@@ -216,9 +228,11 @@ def register_gaze_task_artifacts(
     return paths
 
 
-def _recording_failure_reason(
+def _task_result_outcome(
     result_paths: tuple[Path, ...],
-) -> str | None:
+) -> tuple[ExperimentSessionStatus | None, str | None]:
+    end_reasons: set[str] = set()
+
     for path in result_paths:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -227,14 +241,53 @@ def _recording_failure_reason(
             UnicodeDecodeError,
             json.JSONDecodeError,
         ) as error:
-            return f"Invalid task result file {path.name}: {error}"
+            return (
+                ExperimentSessionStatus.FAILED,
+                f"Invalid task result file {path.name}: {error}",
+            )
+
+        if not isinstance(payload, dict):
+            return (
+                ExperimentSessionStatus.FAILED,
+                f"Invalid task result file {path.name}: expected a JSON object.",
+            )
 
         result = payload.get("result")
 
         if isinstance(result, dict) and result.get("recording_failed") is True:
-            return "The task UI completed, but experiment recording failed."
+            return (
+                ExperimentSessionStatus.FAILED,
+                "The task UI completed, but experiment recording failed.",
+            )
 
-    return None
+        end_reason = payload.get("end_reason")
+
+        if isinstance(end_reason, str) and end_reason.strip():
+            end_reasons.add(end_reason.strip())
+
+    failed_reason = next(
+        (reason for reason in sorted(end_reasons) if reason in _FAILED_END_REASONS),
+        None,
+    )
+
+    if failed_reason is not None:
+        return (
+            ExperimentSessionStatus.FAILED,
+            f"The gaze task stopped because of {failed_reason}.",
+        )
+
+    aborted_reason = next(
+        (reason for reason in sorted(end_reasons) if reason in _ABORTED_END_REASONS),
+        None,
+    )
+
+    if aborted_reason is not None:
+        return (
+            ExperimentSessionStatus.ABORTED,
+            f"The gaze task ended before completion: {aborted_reason}.",
+        )
+
+    return None, None
 
 
 def finalize_gaze_task_launch(
@@ -281,12 +334,19 @@ def finalize_gaze_task_launch(
             "The task process ended without task_result.json.",
         ).status
 
-    failure_reason = _recording_failure_reason(result_paths)
+    result_status, result_reason = _task_result_outcome(result_paths)
 
-    if failure_reason is not None:
+    if result_status is ExperimentSessionStatus.FAILED:
+        assert result_reason is not None
         return service.fail_session(
             launch.session_id,
-            failure_reason,
+            result_reason,
+        ).status
+
+    if result_status is ExperimentSessionStatus.ABORTED:
+        return service.abort_session(
+            launch.session_id,
+            result_reason,
         ).status
 
     return service.complete_session(launch.session_id).status

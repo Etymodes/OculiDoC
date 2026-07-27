@@ -304,12 +304,8 @@ def test_history_dialog_deletes_record_and_keeps_files_in_recovery_area(
     dialog.delete_button.click()
 
     assert dialog.table.rowCount() == 0
-    assert runtime.experiment_session_service.list_sessions_for_patient(
-        patient.patient_id
-    ) == []
-    archived_payloads = list(
-        (tmp_path / "data" / "deleted_sessions").rglob("payload.bin")
-    )
+    assert runtime.experiment_session_service.list_sessions_for_patient(patient.patient_id) == []
+    archived_payloads = list((tmp_path / "data" / "deleted_sessions").rglob("payload.bin"))
     assert len(archived_payloads) == 1
     assert archived_payloads[0].read_bytes() == b"recoverable"
 
@@ -358,9 +354,10 @@ def test_history_dialog_blocks_mutation_for_live_process(
 
     dialog.status_button.click()
 
-    assert runtime.experiment_session_service.get_session(
-        launch.session_id
-    ).status is ExperimentSessionStatus.RUNNING
+    assert (
+        runtime.experiment_session_service.get_session(launch.session_id).status
+        is ExperimentSessionStatus.RUNNING
+    )
     assert any("任务仍在运行" in str(value) for call in messages for value in call)
 
     dialog.close()

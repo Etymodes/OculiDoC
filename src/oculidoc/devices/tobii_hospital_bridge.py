@@ -85,9 +85,9 @@ class TobiiHospitalBridgeDevice:
         self._info = DeviceInfo(
             device_id=(f"hospital-tobii:{self.host}:{self.port}"),
             kind=DeviceKind.EYE_TRACKER,
-            name="医院 Tobii 眼动仪",
-            manufacturer="Tobii",
-            model=("MCeyegazethesisNET461 TCP Bridge"),
+            name="原监听传感器",
+            manufacturer="兼容采集程序",
+            model=("TCP NDJSON 监听"),
             is_simulated=False,
             capabilities=(
                 "screen_pixel_gaze",

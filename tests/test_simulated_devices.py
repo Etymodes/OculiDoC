@@ -116,6 +116,9 @@ def test_simulated_eye_tracker_lifecycle_and_samples() -> None:
     assert first.gaze_y_normalized is not None
     assert 0.0 <= first.gaze_x_normalized <= 1.0
     assert 0.0 <= first.gaze_y_normalized <= 1.0
+    assert first.eye_position_available
+    assert first.left_eye_position_normalized is not None
+    assert first.right_eye_position_normalized is not None
 
     tracker.stop_stream()
     tracker.disconnect()

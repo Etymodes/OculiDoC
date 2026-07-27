@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
+from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -17,6 +19,7 @@ GazeSource = Literal[
     "gaze_collect_legacy",
     "just_need_to_see_bundle",
     "mock",
+    "tobii_hospital_bridge",
     "tobii_stream_engine",
     "tobii_legacy_bridge",
 ]
@@ -75,9 +78,6 @@ class Settings(BaseSettings):
     gaze_collect_player_executable: Path | None = Path(
         r"D:\GazeCollect\VMMachine\HPFMediaPlayer.exe"
     )
-    eye_position_executable: Path | None = Path(
-        r"D:\EyePosition\TobiiDynavox.EyeAssist.Smorgasbord.exe"
-    )
     just_need_to_see_root: Path = Path(r"D:\JustNeedToSee")
 
     @property
@@ -107,9 +107,6 @@ class GazeDeviceConfig(BaseModel):
     gaze_collect_player_executable: Path | None = Path(
         r"D:\GazeCollect\VMMachine\HPFMediaPlayer.exe"
     )
-    eye_position_executable: Path | None = Path(
-        r"D:\EyePosition\TobiiDynavox.EyeAssist.Smorgasbord.exe"
-    )
     just_need_to_see_root: Path = Path(r"D:\JustNeedToSee")
     gaze_preflight_seconds: int = Field(ge=3, le=10)
     gaze_minimum_valid_ratio: float = Field(ge=0.0, le=1.0)
@@ -123,7 +120,6 @@ class GazeDeviceConfig(BaseModel):
             tobii_bridge_port=settings.tobii_bridge_port,
             gaze_collect_json_root=settings.gaze_collect_json_root,
             gaze_collect_player_executable=settings.gaze_collect_player_executable,
-            eye_position_executable=settings.eye_position_executable,
             just_need_to_see_root=settings.just_need_to_see_root,
             gaze_preflight_seconds=settings.gaze_preflight_seconds,
             gaze_minimum_valid_ratio=settings.gaze_minimum_valid_ratio,
@@ -139,7 +135,6 @@ class GazeDeviceConfig(BaseModel):
                 "tobii_bridge_port": self.tobii_bridge_port,
                 "gaze_collect_json_root": self.gaze_collect_json_root,
                 "gaze_collect_player_executable": self.gaze_collect_player_executable,
-                "eye_position_executable": self.eye_position_executable,
                 "just_need_to_see_root": self.just_need_to_see_root,
                 "gaze_preflight_seconds": self.gaze_preflight_seconds,
                 "gaze_minimum_valid_ratio": self.gaze_minimum_valid_ratio,
@@ -160,11 +155,6 @@ class GazeDeviceConfig(BaseModel):
             "gaze_collect_player_executable": (
                 str(self.gaze_collect_player_executable)
                 if self.gaze_collect_player_executable is not None
-                else None
-            ),
-            "eye_position_executable": (
-                str(self.eye_position_executable)
-                if self.eye_position_executable is not None
                 else None
             ),
             "just_need_to_see_root": str(self.just_need_to_see_root),
@@ -224,6 +214,73 @@ class GazeDeviceConfigStore:
             stream.write("\n")
 
         temporary_path.replace(self.path)
+
+
+class AdminUiMode(StrEnum):
+    CLINICAL_WORKBENCH = "clinical_workbench"
+    CLASSIC = "classic"
+
+
+class AdminUiPreferences(BaseModel):
+    """Administrator-shell choice applied only after the next app restart."""
+
+    mode: AdminUiMode = AdminUiMode.CLINICAL_WORKBENCH
+
+    def to_dict(self) -> dict[str, str]:
+        return {"mode": self.mode.value}
+
+
+class AdminUiPreferencesStore:
+    """Atomically persist the administrator shell without touching patient data."""
+
+    schema_version = "1.0"
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path).expanduser().resolve()
+
+    @classmethod
+    def for_settings(cls, settings: Settings) -> AdminUiPreferencesStore:
+        return cls(settings.data_dir / "runtime" / "admin_ui_preferences.json")
+
+    def load(self) -> AdminUiPreferences:
+        if not self.path.is_file():
+            return AdminUiPreferences()
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise TypeError("Saved administrator UI preferences must be an object.")
+            if payload.get("schema_version") != self.schema_version:
+                raise ValueError("Unsupported administrator UI preference schema.")
+            return AdminUiPreferences.model_validate(payload.get("preferences"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError) as error:
+            raise ValueError(f"已保存的管理端界面设置无效：{self.path}") from error
+
+    def save(self, preferences: AdminUiPreferences) -> None:
+        validated = AdminUiPreferences.model_validate(preferences)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "schema_version": self.schema_version,
+            "updated_at_utc": datetime.now(UTC).isoformat(),
+            "preferences": validated.to_dict(),
+        }
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="\n",
+            dir=self.path.parent,
+            prefix=f".{self.path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            temporary_path = Path(stream.name)
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            temporary_path.replace(self.path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
 
 def apply_saved_gaze_device_config(settings: Settings) -> Settings:

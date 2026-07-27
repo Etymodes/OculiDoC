@@ -1,4 +1,4 @@
-"""Gaze-driven staged Pinyin keyboard."""
+"""Gaze-driven direct-selection and staged Pinyin keyboard."""
 
 from __future__ import annotations
 
@@ -7,9 +7,10 @@ from enum import StrEnum
 from time import monotonic_ns
 
 from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QResizeEvent
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -28,6 +29,8 @@ from oculidoc.devices.contracts import EyeTrackerSample
 
 
 class KeyboardStage(StrEnum):
+    DIRECT_CATEGORIES = "direct_categories"
+    DIRECT_PHRASES = "direct_phrases"
     INITIAL = "initial"
     CONFIRM_INITIAL = "confirm_initial"
     FINAL = "final"
@@ -38,8 +41,14 @@ class KeyboardStage(StrEnum):
     CONFIRM_TONE = "confirm_tone"
 
 
+class ScreenKeyboardMode(StrEnum):
+    DIRECT = "direct"
+    ADVANCED = "advanced"
+
+
 @dataclass(frozen=True, slots=True)
 class ScreenKeyboardConfig:
+    input_mode: ScreenKeyboardMode = ScreenKeyboardMode.DIRECT
     dwell_time_ms: int = 900
     duration_seconds: int = 600
     enable_tone_step: bool = True
@@ -48,6 +57,8 @@ class ScreenKeyboardConfig:
     option_font_size_pt: int = 34
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "input_mode", ScreenKeyboardMode(self.input_mode))
+
         if not 250 <= self.dwell_time_ms <= 10_000:
             raise ValueError("dwell_time_ms must be between 250 and 10000.")
 
@@ -129,6 +140,119 @@ _TONES = (
     ("轻声", "5"),
 )
 
+_DIRECT_PAGE_SIZE = 8
+
+_DIRECT_SELECTION_CATEGORIES = (
+    (
+        "common",
+        "常用表达",
+        (
+            "对",
+            "不对",
+            "好",
+            "不好",
+            "有",
+            "没有",
+            "喜欢",
+            "不喜欢",
+            "知道",
+            "不知道",
+            "是",
+            "不是",
+            "停止",
+            "请再说一次",
+            "谢谢",
+            "对不起",
+            "没关系",
+            "你好",
+            "再见",
+            "怎么办",
+        ),
+    ),
+    (
+        "daily_care",
+        "生活照护",
+        (
+            "我想喝水",
+            "我想吃饭",
+            "我想吃水果",
+            "我想小便",
+            "我想大便",
+            "请帮我翻身",
+            "请帮我侧卧",
+            "请帮我坐起",
+            "请让我躺下",
+            "请抬高床头",
+            "请调整床尾",
+            "请帮我换衣服",
+            "请帮我刷牙",
+            "请帮我洗脸",
+            "请帮我洗澡",
+            "请帮我换纸尿裤",
+            "请帮我戴眼镜",
+            "请开灯",
+            "请关灯",
+            "请开窗",
+            "请关窗",
+            "请打开窗帘",
+            "请关闭窗帘",
+            "我冷",
+            "我热",
+            "我想睡觉",
+            "我想出门",
+        ),
+    ),
+    (
+        "body_comfort",
+        "身体感受",
+        (
+            "我疼",
+            "我痒",
+            "我麻",
+            "我肿",
+            "头疼",
+            "眼睛不舒服",
+            "嘴巴不舒服",
+            "脖子不舒服",
+            "肩膀不舒服",
+            "胸口不舒服",
+            "肚子不舒服",
+            "腰背不舒服",
+            "手臂不舒服",
+            "手不舒服",
+            "腿不舒服",
+            "脚不舒服",
+        ),
+    ),
+    (
+        "medical_care",
+        "医疗需求",
+        (
+            "我呼吸费力",
+            "我喘不上气",
+            "我胸闷",
+            "我口干",
+            "我发烧",
+            "我想吸氧",
+            "我需要吸痰",
+            "痰太黏咳不出",
+            "吸痰后不舒服",
+            "呼吸机不舒服",
+            "气管发紧",
+            "鼻饲管疼",
+            "插管处疼",
+            "我需要吃药",
+            "请帮我换敷料",
+            "请调整体位",
+            "请让我坐高一些",
+            "请叫医生",
+            "请叫护士",
+            "请去医院",
+            "请叫救护车",
+        ),
+    ),
+)
+
 _TONE_MARKS = {
     "a": "āáǎà",
     "e": "ēéěè",
@@ -139,6 +263,8 @@ _TONE_MARKS = {
 }
 
 _STAGE_TEXT = {
+    KeyboardStage.DIRECT_CATEGORIES: "请选择需求类别",
+    KeyboardStage.DIRECT_PHRASES: "请选择要表达的内容",
     KeyboardStage.INITIAL: "第一步：请选择声母",
     KeyboardStage.CONFIRM_INITIAL: "请确认声母是否选对",
     KeyboardStage.FINAL: "第二步：请选择韵腹或组合韵母",
@@ -183,7 +309,7 @@ def apply_tone(syllable: str, tone: int) -> str:
 
 
 class ScreenKeyboardTask(QWidget):
-    """Compose Pinyin with large gaze-dwell choices and explicit confirmation."""
+    """Select common phrases directly or compose Pinyin in advanced mode."""
 
     display_text_changed = Signal(str)
     speech_requested = Signal(str)
@@ -198,8 +324,10 @@ class ScreenKeyboardTask(QWidget):
         super().__init__()
         self.config = config
         self.allow_mouse_fallback = allow_mouse_fallback
-        self.stage = KeyboardStage.INITIAL
+        self.stage = self._initial_stage()
         self.output_text = ""
+        self._direct_category_id: str | None = None
+        self._direct_page_index = 0
         self._initial = ""
         self._final = ""
         self._tail = ""
@@ -229,7 +357,7 @@ class ScreenKeyboardTask(QWidget):
             QLabel#outputText { color: #2f291b; font-weight: 800; padding: 10px 24px; }
             QLabel#composeText { color: #785c00; font-weight: 700; padding: 4px 24px; }
             QLabel#instructionText { color: #493b18; font-weight: 800; }
-            QPushButton#pinyinOption {
+            QPushButton#typingOption {
                 min-height: 68px;
                 background: #fffdf4;
                 color: #2f291b;
@@ -238,12 +366,12 @@ class ScreenKeyboardTask(QWidget):
                 font-weight: 800;
                 padding: 8px;
             }
-            QPushButton#pinyinOption[active="true"] {
+            QPushButton#typingOption[active="true"] {
                 background: #fff0a0;
                 border-color: #e28a00;
             }
             QPushButton#keyboardAction {
-                min-height: 54px;
+                min-height: 112px;
                 background: #5c6f7d;
                 color: white;
                 border: 3px solid white;
@@ -303,9 +431,15 @@ class ScreenKeyboardTask(QWidget):
         self.dwell_progress.setRange(0, config.dwell_time_ms)
         self.dwell_progress.setFormat("请持续注视选项 · %p%")
 
-        actions = QHBoxLayout()
-        actions.setContentsMargins(16, 2, 16, 10)
-        actions.setSpacing(10)
+        self.action_panel = QWidget()
+        self.action_panel.setObjectName("keyboardActions")
+        self.action_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        self._actions_layout = QHBoxLayout(self.action_panel)
+        self._actions_layout.setContentsMargins(20, 10, 20, 28)
+        self._actions_layout.setSpacing(12)
 
         for action_id, label in (
             ("action:delete", "删除"),
@@ -314,16 +448,16 @@ class ScreenKeyboardTask(QWidget):
             ("action:clear", "清空"),
         ):
             button = self._create_button(action_id, label, action=True)
-            actions.addWidget(button, 1)
+            self._actions_layout.addWidget(button, 1)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(5)
         root.addWidget(output_panel, 1)
         root.addWidget(self.instruction_label)
-        root.addWidget(self.options_widget, 1)
+        root.addWidget(self.options_widget, 4)
         root.addWidget(self.dwell_progress)
-        root.addLayout(actions)
+        root.addWidget(self.action_panel, 1)
 
         if not allow_mouse_fallback:
             self.setCursor(Qt.CursorShape.BlankCursor)
@@ -336,8 +470,36 @@ class ScreenKeyboardTask(QWidget):
         font.setBold(bold)
         return font
 
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        height = max(1, self.height())
+        minimum_button_height = max(112, min(180, round(height * 0.14)))
+        bottom_clearance = max(24, min(48, round(height * 0.035)))
+        self._actions_layout.setContentsMargins(
+            20,
+            10,
+            20,
+            bottom_clearance,
+        )
+
+        for option_id, button in self._buttons.items():
+            if option_id.startswith("action:"):
+                button.setMinimumHeight(minimum_button_height)
+
     @property
     def composing_text(self) -> str:
+        if self.config.input_mode is ScreenKeyboardMode.DIRECT:
+            if self._direct_category_id is None:
+                return "请选择需求类别"
+
+            category = self._direct_category()
+            assert category is not None
+            page_count = max(
+                1,
+                (len(category[2]) + _DIRECT_PAGE_SIZE - 1) // _DIRECT_PAGE_SIZE,
+            )
+            return f"{category[1]} · 第 {self._direct_page_index + 1}/{page_count} 页"
+
         pieces = [self._initial or "∅"]
 
         if self._final:
@@ -357,9 +519,39 @@ class ScreenKeyboardTask(QWidget):
     @property
     def patient_display_text(self) -> str:
         output = self.output_text or "尚未输入"
-        return f"屏幕打字\n{output}\n当前拼音：{self.composing_text}"
+
+        if self.config.input_mode is ScreenKeyboardMode.DIRECT:
+            return f"屏幕打字 · 直观直选模式\n{output}\n{self.composing_text}"
+
+        return f"屏幕打字 · 进阶模式\n{output}\n当前拼音：{self.composing_text}"
 
     def _stage_options(self) -> tuple[tuple[str, str], ...]:
+        if self.stage is KeyboardStage.DIRECT_CATEGORIES:
+            return tuple(
+                (label, f"category:{category_id}")
+                for category_id, label, _phrases in _DIRECT_SELECTION_CATEGORIES
+            )
+
+        if self.stage is KeyboardStage.DIRECT_PHRASES:
+            category = self._direct_category()
+
+            if category is None:
+                return (("返回类别", "direct:back"),)
+
+            phrases = category[2]
+            start = self._direct_page_index * _DIRECT_PAGE_SIZE
+            page = phrases[start : start + _DIRECT_PAGE_SIZE]
+            options = [(self._direct_label(phrase), f"phrase:{phrase}") for phrase in page]
+            options.append(("返回类别", "direct:back"))
+
+            if self._direct_page_index > 0:
+                options.append(("上一页", "direct:previous"))
+
+            if start + _DIRECT_PAGE_SIZE < len(phrases):
+                options.append(("下一页", "direct:next"))
+
+            return tuple(options)
+
         if self.stage is KeyboardStage.INITIAL:
             return _INITIALS
 
@@ -375,6 +567,12 @@ class ScreenKeyboardTask(QWidget):
         return (("选对了\n继续", "yes"), ("选错了\n返回", "no"))
 
     def _option_columns(self) -> int:
+        if self.stage is KeyboardStage.DIRECT_CATEGORIES:
+            return 2
+
+        if self.stage is KeyboardStage.DIRECT_PHRASES:
+            return 4
+
         count = len(self._stage_options())
 
         if count <= 3:
@@ -387,12 +585,12 @@ class ScreenKeyboardTask(QWidget):
 
     def _create_button(self, option_id: str, label: str, *, action: bool = False) -> QPushButton:
         button = QPushButton(label)
-        button.setObjectName("keyboardAction" if action else "pinyinOption")
+        button.setObjectName("keyboardAction" if action else "typingOption")
         button.setProperty("active", False)
         button.setFont(self._font(self.config.option_font_size_pt, bold=True))
         button.setSizePolicy(
             QSizePolicy.Policy.Expanding,
-            (QSizePolicy.Policy.Fixed if action else QSizePolicy.Policy.Expanding),
+            QSizePolicy.Policy.Expanding,
         )
         button.clicked.connect(lambda checked=False, key=option_id: self._activate(key, "mouse"))
 
@@ -402,6 +600,41 @@ class ScreenKeyboardTask(QWidget):
 
         self._buttons[option_id] = button
         return button
+
+    def _initial_stage(self) -> KeyboardStage:
+        if self.config.input_mode is ScreenKeyboardMode.DIRECT:
+            return KeyboardStage.DIRECT_CATEGORIES
+
+        return KeyboardStage.INITIAL
+
+    @staticmethod
+    def _direct_label(text: str) -> str:
+        if len(text) <= 6:
+            return text
+
+        midpoint = (len(text) + 1) // 2
+        return f"{text[:midpoint]}\n{text[midpoint:]}"
+
+    def _direct_category(self) -> tuple[str, str, tuple[str, ...]] | None:
+        return next(
+            (
+                category
+                for category in _DIRECT_SELECTION_CATEGORIES
+                if category[0] == self._direct_category_id
+            ),
+            None,
+        )
+
+    def _instruction_text(self) -> str:
+        if self.stage is not KeyboardStage.DIRECT_PHRASES:
+            return _STAGE_TEXT[self.stage]
+
+        category = self._direct_category()
+        return (
+            f"{category[1]}：请选择要表达的内容"
+            if category is not None
+            else _STAGE_TEXT[self.stage]
+        )
 
     def _render_stage(self) -> None:
         while item := self.options_layout.takeAt(0):
@@ -422,13 +655,14 @@ class ScreenKeyboardTask(QWidget):
             self.options_layout.addWidget(button, index // columns, index % columns)
 
         self._layout_revision += 1
-        self.instruction_label.setText(_STAGE_TEXT[self.stage])
+        self.instruction_label.setText(self._instruction_text())
         self._refresh_labels()
         self._reset_dwell()
 
     def _refresh_labels(self) -> None:
         self.output_label.setText(self.output_text or "尚未输入")
-        self.compose_label.setText(f"当前拼音：{self.composing_text}")
+        prefix = "当前类别" if self.config.input_mode is ScreenKeyboardMode.DIRECT else "当前拼音"
+        self.compose_label.setText(f"{prefix}：{self.composing_text}")
         self.display_text_changed.emit(self.patient_display_text)
 
     def _set_stage(self, stage: KeyboardStage) -> None:
@@ -443,16 +677,21 @@ class ScreenKeyboardTask(QWidget):
         self._queue_event(
             "typing_started",
             monotonic_timestamp_ns=self._started_at_ns,
-            payload={"tone_step_enabled": self.config.enable_tone_step},
+            payload={
+                "input_mode": self.config.input_mode.value,
+                "tone_step_enabled": self.config.enable_tone_step,
+            },
         )
-        self.speech_requested.emit(_STAGE_TEXT[self.stage])
+        self.speech_requested.emit(self._instruction_text())
 
     def stop(self) -> None:
         return None
 
     def reset(self) -> None:
-        self.stage = KeyboardStage.INITIAL
+        self.stage = self._initial_stage()
         self.output_text = ""
+        self._direct_category_id = None
+        self._direct_page_index = 0
         self._initial = ""
         self._final = ""
         self._tail = ""
@@ -472,6 +711,10 @@ class ScreenKeyboardTask(QWidget):
         value = self._button_values.get(option_id)
 
         if value is None:
+            return
+
+        if self.config.input_mode is ScreenKeyboardMode.DIRECT:
+            self._activate_direct(value, method)
             return
 
         self._queue_event(
@@ -495,6 +738,52 @@ class ScreenKeyboardTask(QWidget):
             self._confirm_current_stage()
         else:
             self._return_to_selection()
+
+    def _activate_direct(self, value: str, method: str) -> None:
+        self._queue_event(
+            "direct_option_selected",
+            payload={"stage": self.stage.value, "value": value, "method": method},
+        )
+
+        if value.startswith("category:"):
+            self._direct_category_id = value.removeprefix("category:")
+            self._direct_page_index = 0
+            self._set_stage(KeyboardStage.DIRECT_PHRASES)
+            return
+
+        if value == "direct:back":
+            self._direct_category_id = None
+            self._direct_page_index = 0
+            self._set_stage(KeyboardStage.DIRECT_CATEGORIES)
+            return
+
+        if value == "direct:previous":
+            self._direct_page_index = max(0, self._direct_page_index - 1)
+            self._render_stage()
+            return
+
+        if value == "direct:next":
+            self._direct_page_index += 1
+            self._render_stage()
+            return
+
+        if not value.startswith("phrase:"):
+            return
+
+        phrase = value.removeprefix("phrase:")
+
+        if self.output_text and not self.output_text.endswith(" "):
+            self.output_text += " "
+
+        self.output_text += phrase
+        self._commit_count += 1
+        self._queue_event(
+            "direct_phrase_committed",
+            payload={"phrase": phrase, "final_text": self.output_text},
+        )
+        self.speech_requested.emit(phrase)
+        self._refresh_labels()
+        self._reset_dwell()
 
     def _confirm_current_stage(self) -> None:
         if self.stage is KeyboardStage.CONFIRM_INITIAL:
@@ -710,7 +999,11 @@ class ScreenKeyboardTask(QWidget):
             "phase": self.stage.value,
             "aois": aois,
             "register_layout": bool(aois),
-            "question_metadata": {"stage": self.stage.value, "layout": "grid"},
+            "question_metadata": {
+                "input_mode": self.config.input_mode.value,
+                "stage": self.stage.value,
+                "layout": "grid",
+            },
         }
 
     def _queue_event(
@@ -738,9 +1031,16 @@ class ScreenKeyboardTask(QWidget):
         return events
 
     def recording_result(self, reason: str) -> dict[str, object]:
-        result = {
+        result: dict[str, object] = {
             "final_text": self.output_text,
-            "committed_syllable_count": self._commit_count,
+            "input_mode": self.config.input_mode.value,
+            "committed_item_count": self._commit_count,
+            "committed_syllable_count": (
+                self._commit_count if self.config.input_mode is ScreenKeyboardMode.ADVANCED else 0
+            ),
+            "committed_phrase_count": (
+                self._commit_count if self.config.input_mode is ScreenKeyboardMode.DIRECT else 0
+            ),
             "current_stage": self.stage.value,
             "current_composition": self.composing_text,
             "tone_step_enabled": self.config.enable_tone_step,
@@ -756,7 +1056,7 @@ class ScreenKeyboardTask(QWidget):
 
 
 class ScreenKeyboardSetupDialog(QDialog):
-    """Configure the staged Pinyin task before a desktop launch."""
+    """Configure direct selection or staged Pinyin before a desktop launch."""
 
     def __init__(
         self,
@@ -768,6 +1068,11 @@ class ScreenKeyboardSetupDialog(QDialog):
         current = config or ScreenKeyboardConfig()
         self.setWindowTitle("屏幕打字设置")
         self.setMinimumWidth(520)
+
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("直观直选模式", ScreenKeyboardMode.DIRECT.value)
+        self.mode_combo.addItem("进阶模式（拼音）", ScreenKeyboardMode.ADVANCED.value)
+        self.mode_combo.setCurrentIndex(self.mode_combo.findData(current.input_mode.value))
 
         self.dwell_spin = QSpinBox()
         self.dwell_spin.setRange(250, 10_000)
@@ -785,8 +1090,10 @@ class ScreenKeyboardSetupDialog(QDialog):
         self.option_font_spin = self._font_spin(current.option_font_size_pt)
         self.tone_checkbox = QCheckBox("完成韵尾后选择声调")
         self.tone_checkbox.setChecked(current.enable_tone_step)
+        self.mode_combo.currentIndexChanged.connect(self._update_mode_controls)
 
         form = QFormLayout()
+        form.addRow("输入模式：", self.mode_combo)
         form.addRow("停留确认时间：", self.dwell_spin)
         form.addRow("任务总时长：", self.duration_spin)
         form.addRow("上半屏输出字号：", self.output_font_spin)
@@ -795,8 +1102,8 @@ class ScreenKeyboardSetupDialog(QDialog):
         form.addRow("声调步骤：", self.tone_checkbox)
 
         note = QLabel(
-            "输入顺序：声母 → 确认 → 韵腹/组合韵母 → 确认 → 韵尾 → 确认"
-            " → 可选声调 → 确认。每个音节完成后自动回到声母选择。"
+            "直观直选模式按“类别 → 常用词句”直接表达；进阶模式按“声母 → 确认 → "
+            "韵腹/组合韵母 → 确认 → 韵尾 → 确认 → 可选声调 → 确认”输入拼音。"
         )
         note.setWordWrap(True)
 
@@ -810,6 +1117,12 @@ class ScreenKeyboardSetupDialog(QDialog):
         layout.addLayout(form)
         layout.addWidget(note)
         layout.addWidget(buttons)
+        self._update_mode_controls()
+
+    def _update_mode_controls(self) -> None:
+        self.tone_checkbox.setEnabled(
+            self.mode_combo.currentData() == ScreenKeyboardMode.ADVANCED.value
+        )
 
     @staticmethod
     def _font_spin(value: int) -> QSpinBox:
@@ -821,6 +1134,7 @@ class ScreenKeyboardSetupDialog(QDialog):
 
     def build_config(self) -> ScreenKeyboardConfig:
         return ScreenKeyboardConfig(
+            input_mode=ScreenKeyboardMode(self.mode_combo.currentData()),
             dwell_time_ms=self.dwell_spin.value(),
             duration_seconds=self.duration_spin.value(),
             enable_tone_step=self.tone_checkbox.isChecked(),

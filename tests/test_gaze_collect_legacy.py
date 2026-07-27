@@ -4,9 +4,12 @@ from pathlib import Path
 import pytest
 
 from oculidoc.config import Settings
+from oculidoc.devices.auto_detect import AutoDetectEyeTrackerDevice
 from oculidoc.devices.contracts import DeviceState
 from oculidoc.devices.gaze_collect_legacy import GazeCollectLegacyDevice
 from oculidoc.devices.just_need_to_see_bundle import JustNeedToSeeBundleDevice
+from oculidoc.devices.tobii_hospital_bridge import TobiiHospitalBridgeDevice
+from oculidoc.devices.tobii_legacy_bridge import TobiiLegacyBridgeDevice
 from oculidoc.tasks.gaze_stream import create_eye_tracker
 
 
@@ -24,10 +27,12 @@ def test_reads_hpf_pixel_sample(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     device.start_stream()
     # start_stream ignores existing records; append one as HPFMediaPlayer would.
     path.write_text(
-        json.dumps([
-            {"timestamp_us": 123, "validity": 1, "x": 960, "y": 540},
-            {"timestamp_us": 124, "validity": 1, "x": 480, "y": 270},
-        ]),
+        json.dumps(
+            [
+                {"timestamp_us": 123, "validity": 1, "x": 960, "y": 540},
+                {"timestamp_us": 124, "validity": 1, "x": 480, "y": 270},
+            ]
+        ),
         encoding="utf-8",
     )
     sample = device.read_sample()
@@ -82,3 +87,33 @@ def test_factory_exposes_both_explicit_legacy_sources(tmp_path: Path) -> None:
     )
     assert isinstance(just_need_to_see, JustNeedToSeeBundleDevice)
     assert just_need_to_see.bundle_root == tmp_path.resolve()
+
+
+def test_generic_compatibility_combines_network_and_file_sources(tmp_path: Path) -> None:
+    device = create_eye_tracker(
+        Settings(
+            gaze_source="tobii_legacy_bridge",
+            tobii_bridge_host="127.0.0.1",
+            tobii_bridge_port=7788,
+            gaze_collect_json_root=tmp_path,
+        )
+    )
+
+    assert isinstance(device, AutoDetectEyeTrackerDevice)
+    candidates = [factory() for factory in device.candidate_factories]
+    assert any(isinstance(candidate, TobiiLegacyBridgeDevice) for candidate in candidates)
+    assert any(isinstance(candidate, GazeCollectLegacyDevice) for candidate in candidates)
+
+
+def test_original_listener_remains_a_distinct_compatibility_source() -> None:
+    device = create_eye_tracker(
+        Settings(
+            gaze_source="tobii_hospital_bridge",
+            tobii_bridge_host="127.0.0.1",
+            tobii_bridge_port=8899,
+        )
+    )
+
+    assert isinstance(device, TobiiHospitalBridgeDevice)
+    assert device.host == "0.0.0.0"
+    assert device.port == 8899

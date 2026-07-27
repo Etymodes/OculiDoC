@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -21,6 +21,8 @@ TASK_CONFIG_MODULE_IDS = frozenset(
         "multiple_choice",
         "image_choice",
         "instruction_fixation",
+        "gaze_games",
+        "visual_preference",
     }
 )
 
@@ -56,22 +58,36 @@ def _config_type(module_id: str) -> Any:
 
         return InstructionFixationConfig
 
+    if module_id == "gaze_games":
+        from oculidoc.tasks.gaze_games import GazeGameConfig
+
+        return GazeGameConfig
+
+    if module_id == "visual_preference":
+        from oculidoc.tasks.visual_preference import VisualPreferenceConfig
+
+        return VisualPreferenceConfig
+
     raise KeyError(f"Unsupported task configuration module: {module_id}")
+
+
+def _json_compatible(value: object) -> object:
+    if isinstance(value, Enum):
+        return value.value
+    if is_dataclass(value) and not isinstance(value, type):
+        return {field.name: _json_compatible(getattr(value, field.name)) for field in fields(value)}
+    if isinstance(value, (list, tuple)):
+        return [_json_compatible(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_compatible(item) for key, item in value.items()}
+    return value
 
 
 def task_config_to_dict(config: object) -> dict[str, object]:
     """Serialize one supported task dataclass to JSON-compatible values."""
-    values: dict[str, object] = {}
-
-    for field in fields(config):  # type: ignore[arg-type]
-        value = getattr(config, field.name)
-        if isinstance(value, Enum):
-            values[field.name] = value.value
-        elif isinstance(value, tuple):
-            values[field.name] = list(value)
-        else:
-            values[field.name] = value
-
+    values = _json_compatible(config)
+    if not isinstance(values, dict):
+        raise TypeError("Task config must be a dataclass.")
     return values
 
 
@@ -89,6 +105,10 @@ def task_config_from_dict(module_id: str, value: object) -> object:
         "randomize_question_order",
         "enable_tone_step",
         "randomize_trial_order",
+        "sound_enabled",
+        "randomize_pair_order",
+        "sound_intro_enabled",
+        "present_each_side_once",
     } & normalized.keys():
         if not isinstance(normalized[name], bool):
             raise TypeError(f"{name} must be a boolean.")
@@ -103,6 +123,7 @@ def task_config_from_dict(module_id: str, value: object) -> object:
         "category_filters",
         "style_filters",
         "position_ids",
+        "pair_ids",
     } & normalized.keys():
         identifiers = normalized[name]
 
@@ -177,21 +198,28 @@ class TaskConfigConflict(RuntimeError):
 
 
 class TaskConfigStore:
-    """Atomically persist versioned settings in one task_configs.json file."""
+    """Atomically persist versioned settings, scoped to the selected patient."""
 
-    schema_version = "1.0"
+    schema_version = "2.0"
+    legacy_schema_version = "1.0"
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser().resolve()
 
-    def load(self, module_id: str) -> TaskConfigRecord:
+    def load(
+        self,
+        module_id: str,
+        *,
+        patient_id: str | None = None,
+    ) -> TaskConfigRecord:
         normalized_module = module_id.strip()
 
         if normalized_module not in TASK_CONFIG_MODULE_IDS:
             raise KeyError(f"Unsupported task configuration module: {normalized_module}")
 
         document = self._load_document()
-        value = document["modules"].get(normalized_module)
+        modules = self._modules_for(document, patient_id=patient_id)
+        value = modules.get(normalized_module)
 
         if value is None:
             return TaskConfigRecord.default(normalized_module)
@@ -209,11 +237,17 @@ class TaskConfigStore:
         config: object,
         *,
         expected_revision: int,
+        patient_id: str | None = None,
     ) -> TaskConfigRecord:
         normalized_module = module_id.strip()
         validated = task_config_from_dict(normalized_module, config)
         document = self._load_document()
-        stored = document["modules"].get(normalized_module)
+        normalized_patient = self._resolved_patient_id(document, patient_id)
+        if normalized_patient is None:
+            modules = document["legacy_modules"]
+        else:
+            modules = document["patients"].setdefault(normalized_patient, {})
+        stored = modules.get(normalized_module)
         current = (
             TaskConfigRecord.from_dict(stored)
             if stored is not None
@@ -229,30 +263,117 @@ class TaskConfigStore:
             config=task_config_to_dict(validated),
             updated_at_utc=utc_now_text(),
         )
-        document["modules"][normalized_module] = updated.to_dict()
+        modules[normalized_module] = updated.to_dict()
         self._write(document)
         return updated
 
+    def set_active_patient(
+        self,
+        patient_id: str | None,
+        *,
+        inherit_legacy: bool = False,
+    ) -> None:
+        """Publish the desktop-selected patient for mobile and child processes."""
+        normalized_patient = self._normalize_patient_id(patient_id)
+        document = self._load_document()
+        if (
+            normalized_patient is not None
+            and inherit_legacy
+            and normalized_patient not in document["patients"]
+            and document["legacy_modules"]
+        ):
+            document["patients"][normalized_patient] = json.loads(
+                json.dumps(document["legacy_modules"], ensure_ascii=False)
+            )
+        document["active_patient_id"] = normalized_patient
+        self._write(document)
+
+    @staticmethod
+    def _normalize_patient_id(patient_id: str | None) -> str | None:
+        if patient_id is None:
+            return None
+        normalized = str(patient_id).strip()
+        if not normalized:
+            raise ValueError("patient_id cannot be empty.")
+        return normalized
+
+    def _resolved_patient_id(
+        self,
+        document: dict[str, Any],
+        patient_id: str | None,
+    ) -> str | None:
+        explicit = self._normalize_patient_id(patient_id)
+        if explicit is not None:
+            return explicit
+        environment_patient = os.environ.get("OCULIDOC_PATIENT_ID", "").strip()
+        if environment_patient:
+            return environment_patient
+        active = document.get("active_patient_id")
+        return str(active) if active is not None else None
+
+    def _modules_for(
+        self,
+        document: dict[str, Any],
+        *,
+        patient_id: str | None,
+    ) -> dict[str, Any]:
+        normalized_patient = self._resolved_patient_id(document, patient_id)
+        if normalized_patient is None:
+            return document["legacy_modules"]
+        modules = document["patients"].get(normalized_patient, {})
+        if not isinstance(modules, dict):
+            raise ValueError("Patient task config modules must be an object.")
+        return modules
+
     def _load_document(self) -> dict[str, Any]:
         if not self.path.is_file():
-            return {"schema_version": self.schema_version, "modules": {}}
+            return {
+                "schema_version": self.schema_version,
+                "active_patient_id": None,
+                "legacy_modules": {},
+                "patients": {},
+            }
 
         payload = json.loads(self.path.read_text(encoding="utf-8"))
 
         if not isinstance(payload, dict):
             raise ValueError("Task config root must be an object.")
 
-        if payload.get("schema_version") != self.schema_version:
+        schema_version = payload.get("schema_version")
+        if schema_version == self.legacy_schema_version:
+            modules = payload.get("modules")
+            if not isinstance(modules, dict):
+                raise ValueError("Task config modules must be an object.")
+            return {
+                "schema_version": self.schema_version,
+                "active_patient_id": None,
+                "legacy_modules": dict(modules),
+                "patients": {},
+            }
+
+        if schema_version != self.schema_version:
             raise ValueError("Unsupported task config schema.")
 
-        modules = payload.get("modules")
-
-        if not isinstance(modules, dict):
-            raise ValueError("Task config modules must be an object.")
+        active_patient_id = payload.get("active_patient_id")
+        if active_patient_id is not None and not isinstance(active_patient_id, str):
+            raise ValueError("Active task-config patient must be a string or null.")
+        legacy_modules = payload.get("legacy_modules")
+        patients = payload.get("patients")
+        if not isinstance(legacy_modules, dict):
+            raise ValueError("Legacy task config modules must be an object.")
+        if not isinstance(patients, dict) or any(
+            not isinstance(patient_modules, dict) for patient_modules in patients.values()
+        ):
+            raise ValueError("Patient task configs must be an object of module objects.")
 
         return {
             "schema_version": self.schema_version,
-            "modules": dict(modules),
+            "active_patient_id": active_patient_id,
+            "legacy_modules": dict(legacy_modules),
+            "patients": {
+                str(patient_id): dict(patient_modules)
+                for patient_id, patient_modules in patients.items()
+            },
         }
 
     def _write(self, document: dict[str, Any]) -> None:

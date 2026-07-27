@@ -1,135 +1,111 @@
-# OculiDoC
+<p align="center">
+  <img src="src/oculidoc/assets/brand_wordmark_blue.png" width="460" alt="OculiDoC">
+</p>
 
-OculiDoC 是面向意识障碍患者的眼动评估、交互、沟通与训练平台。
+<p align="center">
+  面向意识障碍患者的眼动仪操作界面与实验数据台
+</p>
 
-联合开发者：
+<p align="center">
+  Windows 10/11 · Python 3.11 · 当前版本 v0.1.0
+</p>
 
-- Etymodes
-- TiantanDoC（首都医科大学天坛医院意识障碍团队）
+> **权属与使用限制**
+>
+> OculiDoC 为**首都医科大学天坛医院意识障碍病区所有**。未经书面授权，不得擅自复制、
+> 传播、改作、再发布或用于商业及临床服务。需要使用本软件或报告问题，请联系
+> [he_jianghong@sina.cn](mailto:he_jianghong@sina.cn?cc=peterpig123456@gmail.com&subject=OculiDoC)
+> 并抄送 [peterpig123456@gmail.com](mailto:peterpig123456@gmail.com)。
 
-## 当前里程碑：M3D12J
+## 软件界面
 
-M3D12J 在兼容采样、姓名展示和患者综合报告基础上，修复高分辨率、高 DPI 与不同宽高比显示器上的选项任务布局，并补充标准化图片素材收集清单。
-在原有 engineering validation build 基础上，当前能力包括：
+| 区域 | 用途 |
+| --- | --- |
+| 患者工作台 | 选择、停用和管理患者；查看当前测试进度、下一任务与最近结果 |
+| 编排本次测试 | 按意识状态进阶顺序选择任务；眼动采集与复核为可选项 |
+| 患者显示端 | 独立显示刺激、倒计时、任务状态与大字提示 |
+| 手机控制端 | 局域网内设置任务、直接启动、重播语音和投送提示 |
+| 设备设置 | 选择原生、兼容或模拟眼动来源；执行实时视线自检与任务前预检 |
+| 实验历史与报告 | 保存逐试次结果、热力图、轨迹、数据质量和患者跨次趋势 |
 
-- PySide6 管理员主窗口和独立患者显示端；
-- 患者、实验会话与结构化任务记录；
-- 眼动采集与复核工作台；
-- 追踪球、左右/上下二分问答和分阶段拼音屏幕打字；
-- 图片选择按任意多选类别与风格形成候选池，每次随机目标、干扰图、正确选项和左右位置；患者屏幕只显示大图，不显示图片名称；
-- 图片库支持上传、修改元数据和删除自定义图片；上传文件复制到 OculiDoC 数据目录，原文件移动后仍可使用；
-- `docs/OculiDoC_内置图片素材分类收集清单.txt` 提供 54 类、1,391 个语义单项、11 种视觉风格以及人工搜图/AI 生成、版权和临床可用性验收规范；
-- 随指令注视提供九个预定义屏幕 AOI，可组合仅目标、目标伴干扰和无目标试次并随机平衡位置；
-- 随指令注视的目标描述、形状、颜色、大小、干扰物、试次数、持续注视阈值和单试次时长可由电脑端或手机端设置；
-- 每个试次记录首次进入目标 AOI、稳定注视潜伏期、最长连续注视、干扰区稳定注视及有效样本率，并进入患者历史与 HTML 报告；
-- 无目标试次仅描述是否出现干扰区稳定注视，不自动输出意识判断；
-- 左右/上下二分问答内置管理员工作簿中的 66 条原题，可直接修改保存，并可设置随机抽题数与随机题序；
-- 连续二分题答错重试、答对后显示勾，按空格或 Enter 手动进入下一题；每题独立随机左右/上下位置；
-- 连续文字题与图片题按每题时长计算总时限，并将逐题答案、正确性和错误尝试写入报告；
-- 2–12 个文字选项的多选项问答，支持自动宫格和环形排列；
-- 多选项可用注视停留逐项选择，同一选项再次选择即可取消，且不会因选择自动结束；
-- 多选项没有固定正确答案或自动评分，可由管理员持续提问并通过任务窗口或手机端手动终止；
-- 多选项问题、数量、文字、布局、停留阈值、最长时长、字号和位置随机化可在电脑端或手机端调整；
-- 多选项选择/取消、显示位置、首次选择反应时间、AOI 和最终选择集合进入患者实验记录与报告；
-- 多选项改用浅色高对比界面，并增高、上移选项区域；
-- 左右/上下二选、多选宫格、图片选择和屏幕打字的选项控件改为随 Qt 布局单元双向扩展，不再依赖只适合 1080p 的固定按钮高度；图片图标同步按实际选项区域缩放；
-- 上下二分问答复用左右任务的问题库、字体、停留、计时、评分和语音设置，仅把选项与中性区改为纵向；
-- 上下任务使用视线纵坐标判定顶部/底部选项，独立保存版本化配置，并记录上下 AOI 与布局方向；
-- 屏幕打字按“声母 → 确认 → 韵腹/组合韵母 → 确认 → 韵尾 → 确认 → 可选声调 → 确认”输入；
-- 上半屏保留已输入文字，下半屏使用大尺寸选项，并提供删除、空格、朗读和清空；
-- 屏幕打字的停留阈值、任务时长、声调步骤和三类字号可在电脑端或手机端调整；
-- 输入过程、最终文本和每个阶段的眼动 AOI 均进入患者实验记录；
-- 输入结果通过患者显示状态同步到独立患者端和手机端；
-- 所有已实现眼动任务默认自动语音播报，手机端可发送“重播语音”命令；
-- 追踪球开始时播报易理解的跟随提示，运行中不反复打扰患者；
-- 追踪球可从共享默认图片库选择目标，也可按格式、大小和比例指引上传并持久保存新图片；
-- 水平追踪轨迹可设在屏幕上/中/下，垂直轨迹可设在左/中/右；
-- Tobii Eye Tracker 5 原生 Stream Engine 数据源；
-- GazeCollect / HPF `*_gaze.json` 只读兼容采样源，以及 JustNeedToSee 随附 Stream Engine DLL 显式兼容源；
-- EyePosition 仅作为管理员摆位检查工具，不参与视线采样；旧版兼容源不进入自动检测，避免同时抢占设备；
-- 自动检测会依次验证 Tobii 原生驱动及第三方/自制传感器兼容桥接，只有收到真实眼动样本才判定成功，且绝不回退模拟数据；
-- 第三方/自制传感器可通过可配置地址的 TCP NDJSON 桥接提供归一化 `x`、`y`、`valid` 数据；
-- 模拟眼动和兼容桥接数据源；
-- FastAPI 本地后台基础入口；
-- 追踪球、左右/上下二分问答、屏幕打字、图片选择和随指令注视共享版本化、原子保存的任务配置；
-- 手机端保存设置并直接启动任务，桌面端校验配置版本；
-- 设置冲突返回最新版本，不静默覆盖另一端修改；
-- 患者显示端常驻，并与桌面端、手机端共享原子状态文件；
-- 任务在管理员确认设置后显示 READY 与 3 秒倒计时，再进入 RUNNING；
-- 任务完成、取消和异常分别进入 RESULT、IDLE 和 ERROR；
-- 手机端与桌面端均可投送患者大字提示，运行中状态不可被普通投屏覆盖；
-- 软件内选择并原子保存眼动源、Stream Engine DLL 与 3–10 秒预检策略；
-- 自动发现 Tobii Stream Engine DLL，并提供 Tobii Experience 校准入口；
-- 任务前强制采样预检，默认最低有效率由 60% 调整为 35%，低于阈值时仍阻止任务且不回退 mock；
-- 任务结束与失败提示为非阻塞提示，显示 6 秒后自动关闭，避免覆盖下一任务设置；
-- 手机任务下拉框仅在选项实际变化时重建，不再被每秒状态轮询反复刷新；
-- 设备设置可直接打开 Tobii Experience 和 Tobii Ghost，分别用于校准与实时视线检查；
-- 管理员端提供“检查更新”，只允许官方仓库的干净工作区进行快进更新；
-- 患者管理可把全部患者资料、终态实验会话、清单及会话目录中的 Parquet、JSON、图片和视频一次导出为单个 UTF-8 CSV；
-- 实验文件以小于常见表格单元格上限的 Base64 分块写入，导入前逐文件核对大小与 SHA-256；运行中的实验会阻止导出；
-- 一键导入保留患者、会话和清单 UUID，按患者编号整名跳过重复数据，并继续兼容旧版基本资料 JSON；
-- 患者实验记录可由管理员人工改为已完成、已取消或失败，数据库与 `session.json` 同步更新；不允许人工制造新的运行中状态；
-- 实验记录可经二次确认删除，数据库记录与文件清单原子移除，原始会话目录转移到 `deleted_sessions/` 恢复区；真实任务进程仍在运行时禁止修改或删除；
-- 前端工作台、实验历史和 HTML 报告显示患者姓名与患者编号，不显示内部患者 UUID；
-- 单次报告的热力图叠加目标与实际视线轨迹，并提供误差时序图、RMSE 和每区块中文简要分析；
-- 实验历史可一键生成该患者全部任务综合报告，包含综合热力图、数据质量、追踪/问答趋势和通俗中文解读；
-- 桌面端与手机端显示设备 URL、实时采样率和有效率，mock 始终以灰色模拟模式标记；
-- Windows PyInstaller 打包和自动化测试；
-- 患者数据与源码仓库隔离规则。
+总设置可在默认“患者工作台”和原有“经典皮肤”之间切换，不改变既有数据与任务逻辑。
 
-当前版本已经完成真实 Tobii 工程验证，但仍不是医疗器械或临床正式版本，
-不能作为单独的诊断、预后或治疗依据。
+## 十个功能入口
+
+| 编号 | 功能 | 主要记录 |
+| --- | --- | --- |
+| 0 | 眼动采集与复核（可选） | 摄像头画面、双眼区域与人工复核结果 |
+| 1 | 视觉偏好 | 成对换边后的图片关注与固定侧偏 |
+| 2 | 追踪球 | 注视时长、有效率与视线—目标轨迹匹配 |
+| 3 | 眼动游戏 | 点亮花园与视觉寻宝两种模式 |
+| 4 | 随指令注视 | 目标 AOI、潜伏期、最长连续注视与干扰区表现 |
+| 5 | 语音图片选择 | 目标、干扰图、选择位置、反应时间与正确性 |
+| 6 | 左右二分问答 | 左右答案、停留确认、错误尝试与评分 |
+| 7 | 上下二分问答 | 上下答案、停留确认、错误尝试与评分 |
+| 8 | 多选项问答 | 选择、取消、最终集合与手动结束状态 |
+| 9 | 屏幕打字 | 高频需求直选、分步拼音输入与最终文本 |
+
+内置图库包含 76 张透明背景刺激图。所有已实现的患者交互任务支持自动语音播报，
+任务完成、人工退出、眼动中断和异常状态分别记录，不以模拟数据替代真实设备断流。
 
 ## 安装
 
-新电脑只需 Windows 10/11、网络和系统自带的 `winget`（App Installer）。即使没有
-Git、Python 或 pip，也可在 PowerShell 中用下面一整行自动补齐环境、克隆仓库并安装。
-命令固定使用仓库内 `.venv`，完成依赖与启动导入检查后自动创建桌面快捷方式。
-若提示找不到 `winget`，请先在 Microsoft Store 安装或更新“应用安装程序”，再重新执行：
+### 0 依赖便携版
+
+适用于没有 Git、Python 或开发环境的 Windows 10/11 电脑。复制下面一整行到 PowerShell；
+脚本会下载最新 Release、核对 SHA-256、安装到当前用户目录并创建桌面快捷方式。更新便携版
+时重复运行同一命令，既有 `data` 患者数据目录会先备份再恢复。
 
 ```powershell
-& { $ErrorActionPreference="Stop"; $Winget=Get-Command winget -ErrorAction SilentlyContinue; if (-not $Winget) { throw "未找到 winget。请先在 Microsoft Store 安装或更新“应用安装程序”，再重试。" }; $WingetExe=$Winget.Source; if (-not (Get-Command git -ErrorAction SilentlyContinue)) { & $WingetExe install --id Git.Git -e --source winget --silent --accept-source-agreements --accept-package-agreements --disable-interactivity; if ($LASTEXITCODE -ne 0) { throw "Git 自动安装失败" } }; $PyReady=$false; $PyCommand=Get-Command py -ErrorAction SilentlyContinue; if ($PyCommand) { $PyProbe=$PyCommand.Source; & $PyProbe -3.11 -c "import sys; assert sys.version_info[:2] == (3, 11)" 2>$null; $PyReady=($LASTEXITCODE -eq 0) }; if (-not $PyReady) { & $WingetExe install --id Python.Python.3.11 -e --source winget --silent --accept-source-agreements --accept-package-agreements --disable-interactivity; if ($LASTEXITCODE -ne 0) { throw "Python 3.11 自动安装失败" } }; $env:Path=[Environment]::GetEnvironmentVariable("Path","Machine")+";"+[Environment]::GetEnvironmentVariable("Path","User"); $Git=(Get-Command git -ErrorAction Stop).Source; $Py=(Get-Command py -ErrorAction Stop).Source; & $Py -3.11 -c "import sys; assert sys.version_info[:2] == (3, 11)"; if ($LASTEXITCODE -ne 0) { throw "Python 3.11 核验失败" }; $Root=Join-Path ([Environment]::GetFolderPath("MyDocuments")) "OculiDoC-Development"; $Repo=Join-Path $Root "OculiDoC"; $Branch="feature/gaze-tasks-mvp"; New-Item -ItemType Directory -Force -Path $Root | Out-Null; if (-not (Test-Path (Join-Path $Repo ".git"))) { if (Test-Path $Repo) { throw "目标目录已存在但不是 Git 仓库：$Repo" }; & $Git clone --branch $Branch --single-branch https://github.com/Etymodes/OculiDoC.git $Repo; if ($LASTEXITCODE -ne 0) { throw "克隆 OculiDoC 失败" } } else { $Origin=(& $Git -C $Repo remote get-url origin).Trim(); if ($Origin -notmatch "(?i)Etymodes/OculiDoC(\.git)?$") { throw "现有目录属于其他仓库：$Origin" }; $CurrentBranch=(& $Git -C $Repo branch --show-current).Trim(); if ($CurrentBranch -ne $Branch) { throw "现有仓库当前位于 $CurrentBranch 分支，应为 $Branch；为保护文件，安装已停止。" } }; Set-Location $Repo; & $Py -3.11 -m venv .venv; if ($LASTEXITCODE -ne 0) { throw "创建或修复虚拟环境失败" }; $VenvPython=Join-Path $Repo ".venv\Scripts\python.exe"; $VenvPythonw=Join-Path $Repo ".venv\Scripts\pythonw.exe"; & $VenvPython -m ensurepip --upgrade; if ($LASTEXITCODE -ne 0) { throw "虚拟环境 pip 初始化失败" }; & $VenvPython -m pip install --upgrade pip setuptools wheel; if ($LASTEXITCODE -ne 0) { throw "升级安装工具失败" }; & $VenvPython -m pip install --prefer-binary -e ".[dev,research]"; if ($LASTEXITCODE -ne 0) { throw "安装 OculiDoC 完整依赖失败" }; & $VenvPython -m pip check; if ($LASTEXITCODE -ne 0) { throw "依赖版本核验失败" }; & $VenvPython -c "import PySide6, matplotlib; import oculidoc.app; print('OculiDoC startup dependencies OK')"; if ($LASTEXITCODE -ne 0) { throw "OculiDoC 启动依赖核验失败" }; if (-not (Test-Path $VenvPythonw)) { throw "未找到 pythonw.exe：$VenvPythonw" }; $Desktop=[Environment]::GetFolderPath("Desktop"); $ShortcutPath=Join-Path $Desktop "OculiDoC.lnk"; $Shell=New-Object -ComObject WScript.Shell; $Shortcut=$Shell.CreateShortcut($ShortcutPath); $Shortcut.TargetPath=$VenvPythonw; $Shortcut.Arguments="-m oculidoc"; $Shortcut.WorkingDirectory=$Repo; $Shortcut.Description="启动 OculiDoC"; $Shortcut.WindowStyle=1; $Icon=Join-Path $Repo "src\oculidoc\assets\app_icon.ico"; if (Test-Path $Icon) { $Shortcut.IconLocation="$($Icon),0" }; $Shortcut.Save(); if (-not (Test-Path $ShortcutPath)) { throw "桌面快捷方式创建失败" }; Write-Host "OculiDoC 安装完成，桌面快捷方式已创建：$ShortcutPath" -ForegroundColor Green }
+$ErrorActionPreference="Stop"; $b="https://github.com/Etymodes/OculiDoC/releases/latest/download"; $p=Join-Path $env:TEMP "Install-OculiDoC.ps1"; Invoke-WebRequest "$b/Install-OculiDoC.ps1" -UseBasicParsing -OutFile $p; Invoke-WebRequest "$b/Install-OculiDoC.ps1.sha256" -UseBasicParsing -OutFile "$p.sha256"; $e=((Get-Content "$p.sha256" -Raw).Trim() -split "\s+")[0].ToLowerInvariant(); if($e -notmatch "^[0-9a-f]{64}$" -or (Get-FileHash $p -Algorithm SHA256).Hash.ToLowerInvariant() -ne $e){throw "安装脚本 SHA-256 校验失败"}; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p
 ```
 
-同一台电脑可重复执行上面的一键命令：它会复用已核验的仓库和 `.venv`，不会删除
-`var/` 中的患者数据。若仓库来源或当前分支不正确，命令会停止而不是覆盖现有文件。
+也可从 [Releases](https://github.com/Etymodes/OculiDoC/releases) 下载
+`OculiDoC-*-windows-x64-portable.zip`，在离线电脑解压后直接运行 `OculiDoC.exe`。
 
-## 测试
+### 已克隆源码版
+
+在仓库根目录执行：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
-## 启动桌面程序
+安装脚本固定使用仓库内 `.venv`，不会读写旧 `ops` 环境，也不会删除 `data` 或 `var`。
+
+## 一键检查与更新
+
+源码版完整自检：
 
 ```powershell
-.\.venv\Scripts\python.exe -m oculidoc
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\check.ps1
 ```
 
-## 启动本地后台
+源码版安全更新：
 
 ```powershell
-.\.venv\Scripts\python.exe -m oculidoc.api
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\update.ps1
 ```
 
-健康检查：
+更新仅接受官方仓库 `main` 分支的干净工作区和快进合并；发现本地修改或分叉时会停止。
+便携版更新请重新运行上面的“0 依赖便携版”命令。
 
-```text
-http://127.0.0.1:8000/health
-```
+## 上报 Bug
 
-API 文档：
+请发送邮件至 [he_jianghong@sina.cn](mailto:he_jianghong@sina.cn?cc=peterpig123456@gmail.com&subject=OculiDoC%20Bug)
+并 **CC** [peterpig123456@gmail.com](mailto:peterpig123456@gmail.com)，附上：
 
-```text
-http://127.0.0.1:8000/docs
-```
+- OculiDoC 版本号和 Windows 版本；
+- 使用的眼动设备与数据源；
+- 问题发生前后的操作；
+- 报错截图或日志；
+- 是否涉及真实患者数据（邮件中不得直接附患者身份或原始数据）。
 
-桌面程序会自动启动局域网后台。鼠标悬停或点击主界面底部的
-“本地后台”状态，可显示带短期配对令牌的二维码。手机与电脑
-连接同一局域网后扫码，可进行文字投屏、待机恢复和任务预览。
+## 使用边界
 
-局域网控制默认不返回完整患者身份，不应将端口暴露到公网。
+OculiDoC 当前是内部科研与工程平台，不是医疗器械，不能单独用于诊断、预后或治疗决策。
+首次真实患者使用前，必须使用具有适用授权的合规硬件，并针对实际电脑、显示器、驱动、
+病房环境和操作流程完成独立现场确认。患者身份、实验记录、眼动轨迹、数据库、日志和导出
+文件不得提交到 GitHub。
 
-## 数据安全
-
-患者身份、实验记录、眼动轨迹、数据库、日志和导出 CSV 不得提交到 GitHub。完整 CSV 可能包含视频等大文件，也包含敏感患者数据，应只保存到受控存储并按医院制度传输。运行数据与删除记录的恢复目录默认存放于被 Git 忽略的 `var/`。
+详见 [NOTICE.md](NOTICE.md)。

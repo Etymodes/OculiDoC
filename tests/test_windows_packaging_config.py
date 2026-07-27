@@ -29,6 +29,8 @@ def test_pyinstaller_spec_has_branding_and_onedir() -> None:
     assert "COLLECT(" in source
     assert '"assets/*.ico"' in source
     assert '"assets/*.png"' in source
+    assert '"assets/stimuli/*.json"' in source
+    assert '"assets/stimuli/*.png"' in source
     assert "collect_submodules(" in source
     assert '"oculidoc.package_smoke"' in source
 

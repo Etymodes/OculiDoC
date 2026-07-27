@@ -22,6 +22,8 @@ REMOTE_GAZE_MODULE_IDS = frozenset(
         "multiple_choice",
         "image_choice",
         "instruction_fixation",
+        "gaze_games",
+        "visual_preference",
     }
 )
 
@@ -107,6 +109,20 @@ class LanCommand:
             raise ValueError("config_revision cannot be negative.")
 
         return revision
+
+    @property
+    def game_mode(self) -> str | None:
+        value = self.payload.get("game_mode")
+
+        if value is None:
+            return None
+
+        normalized = str(value).strip()
+
+        if normalized not in {"garden", "treasure_hunt"}:
+            raise ValueError("game_mode must be garden or treasure_hunt.")
+
+        return normalized
 
     def to_dict(self) -> dict[str, object]:
         return {

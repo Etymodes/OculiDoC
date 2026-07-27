@@ -1206,7 +1206,7 @@ class BinaryQuestionSetupDialog(QDialog):
 
         for size in sorted(FIXED_BINARY_QUESTION_FORMS):
             self.fixed_form_combo.addItem(
-                f"固定 {size} 题标准卷（前半客观、后半开放）",
+                f"固定 {size} 题型（每次抽题；前半客观、后半主观）",
                 size,
             )
 
@@ -1477,11 +1477,15 @@ class BinaryQuestionSetupDialog(QDialog):
 
     def _apply_fixed_form(self, *_args: object) -> None:
         size = int(self.fixed_form_combo.currentData() or 0)
-        fixed_ids = set(FIXED_BINARY_QUESTION_FORMS.get(size, ()))
         enabled = size == 0
         self.sequence_question_list.setEnabled(enabled)
         self.question_count_spin.setEnabled(enabled)
         self.randomize_question_order_check.setEnabled(enabled)
+        self.randomize_question_order_check.setText(
+            "每次任务随机抽题并排列题目"
+            if enabled
+            else "固定题型：每次随机抽题，保持前半客观、后半主观"
+        )
 
         if enabled:
             return
@@ -1490,14 +1494,11 @@ class BinaryQuestionSetupDialog(QDialog):
 
         for index in range(self.sequence_question_list.count()):
             item = self.sequence_question_list.item(index)
-            template_id = str(item.data(Qt.ItemDataRole.UserRole))
-            item.setCheckState(
-                Qt.CheckState.Checked if template_id in fixed_ids else Qt.CheckState.Unchecked
-            )
+            item.setCheckState(Qt.CheckState.Unchecked)
 
         self.sequence_question_list.blockSignals(False)
         self.question_count_spin.setValue(0)
-        self.randomize_question_order_check.setChecked(False)
+        self.randomize_question_order_check.setChecked(True)
         self._refresh_question_count_limit()
 
     def _set_all_sequence_questions(self, checked: bool) -> None:
@@ -1688,19 +1689,34 @@ def binary_question_sequence(
     if not config.question_template_ids and not config.fixed_form_size:
         return (("binary-question-1", config),)
 
-    templates = {template.template_id: template for template in store.load()}
-    template_ids = list(
-        FIXED_BINARY_QUESTION_FORMS[config.fixed_form_size]
-        if config.fixed_form_size
-        else config.question_template_ids
-    )
+    loaded_templates = store.load()
+    templates = {template.template_id: template for template in loaded_templates}
     seed = (
         config.randomization_seed if config.randomization_seed is not None else secrets.randbits(63)
     )
     rng = random.Random(seed)
 
-    if config.randomize_question_order and not config.fixed_form_size:
-        rng.shuffle(template_ids)
+    if config.fixed_form_size:
+        half = config.fixed_form_size // 2
+        objective_pool = [
+            template.template_id
+            for template in loaded_templates
+            if template.question_type.is_scored
+        ]
+        subjective_pool = [
+            template.template_id
+            for template in loaded_templates
+            if not template.question_type.is_scored
+        ]
+        if len(objective_pool) < half or len(subjective_pool) < half:
+            raise ValueError(
+                f"固定 {config.fixed_form_size} 题型需要至少 {half} 道客观题和 {half} 道主观题。"
+            )
+        template_ids = rng.sample(objective_pool, half) + rng.sample(subjective_pool, half)
+    else:
+        template_ids = list(config.question_template_ids)
+        if config.randomize_question_order:
+            rng.shuffle(template_ids)
 
     if config.question_count and not config.fixed_form_size:
         if config.question_count > len(template_ids):

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import cast
 
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QSizePolicy
 from pytestqt.qtbot import QtBot
 
 from oculidoc.image_library import ImageLibraryStore
@@ -46,11 +47,27 @@ def test_image_questions_are_generated_from_category_without_visible_names(
     assert task.right_button.icon().isNull() is False
     assert task.left_button.text() == ""
     assert task.right_button.text() == ""
+    assert task.left_button.sizePolicy().horizontalPolicy() is QSizePolicy.Policy.Ignored
+    assert task.left_button.sizePolicy().verticalPolicy() is QSizePolicy.Policy.Ignored
+    assert task.right_button.sizePolicy() == task.left_button.sizePolicy()
 
     task.resize(3_840, 2_160)
     task.show()
     qtbot.wait(10)
 
+    task_size = task.size()
+    icon_sizes = (task.left_button.iconSize(), task.right_button.iconSize())
+    layout = task.layout()
+    assert layout is not None
+
+    for _ in range(10):
+        task._refresh_icon_sizes()
+        layout.activate()
+        qtbot.wait(1)
+
+    assert task.size() == task_size
+    assert (task.left_button.iconSize(), task.right_button.iconSize()) == icon_sizes
+    assert task.left_button.width() + task.right_button.width() <= task.width()
     assert task.left_button.iconSize().height() > 760
     assert task.left_button.icon().actualSize(task.left_button.iconSize()) == (
         task.left_button.iconSize()
@@ -59,7 +76,27 @@ def test_image_questions_are_generated_from_category_without_visible_names(
     result = task.recording_result("time_limit")
     assert result["correct_image_id"] in {"banana", "apple"}
     assert result["option_1_image_category"] == "水果"
-    assert result["option_2_image_style"] == "彩色图标"
+    assert result["option_2_image_style"] == "图标"
+
+
+def test_image_filters_merge_legacy_aliases() -> None:
+    config = ImageChoiceConfig(
+        category_filters=(
+            "C12 家养与农场动物",
+            "C13 野生陆生动物",
+            "动物",
+        ),
+        style_filters=(
+            "S03 写实孤立照片",
+            "S04 写实情境照片",
+            "实物照片",
+            "实拍",
+            "情境",
+        ),
+    )
+
+    assert config.category_filters == ("动物",)
+    assert config.style_filters == ("写实",)
 
 
 def test_sequential_questions_require_correct_answer_and_manual_advance(

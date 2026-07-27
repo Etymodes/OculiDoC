@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
-from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -26,20 +25,17 @@ from PySide6.QtWidgets import (
 )
 
 from oculidoc.config import GazeDeviceConfig, GazeDeviceConfigStore, Settings
-from oculidoc.devices.preflight import GazePreflightResult
+from oculidoc.devices.preflight import GazePreflightResult, GazePreflightStore
 from oculidoc.devices.tobii_stream_engine import discover_tobii_stream_engine_dll
-from oculidoc.integrations.legacy_tobii_tools import (
-    open_eye_position,
-    open_gaze_collect_player,
-)
+from oculidoc.ui.gaze_self_check import GazeSelfCheckDialog
+from oculidoc.ui.opoin_thesis import OpoinThesisDialog
 
 _SOURCE_ITEMS = (
-    ("自动检测传感器（推荐）", "auto"),
-    ("模拟模式（仅工程测试）", "mock"),
-    ("Tobii Eye Tracker 5（原生 Stream Engine）", "tobii_stream_engine"),
-    ("兼容桥接（第三方/自制传感器）", "tobii_legacy_bridge"),
-    ("GazeCollect / HPF 旧系统兼容", "gaze_collect_legacy"),
-    ("JustNeedToSee 内置 Tobii DLL 兼容", "just_need_to_see_bundle"),
+    ("Tobii 原生 Stream（推荐）", "tobii_stream_engine"),
+    ("工程模拟测试", "mock"),
+    ("原监听兼容", "tobii_hospital_bridge"),
+    ("Tobii DLL兼容", "just_need_to_see_bundle"),
+    ("第三方兼容", "tobii_legacy_bridge"),
 )
 
 
@@ -71,9 +67,66 @@ def find_tobii_experience_shortcut() -> Path | None:
     return _find_tobii_shortcut("*Tobii*Experience*.lnk")
 
 
-def find_tobii_ghost_shortcut() -> Path | None:
-    """Find Tobii Ghost in either the user or system Start menu."""
-    return _find_tobii_shortcut("*Tobii*Ghost*.lnk")
+def find_tobii_experience_app_id() -> str | None:
+    """Resolve the registered Start-menu app id used by Store/MSIX installs."""
+    if sys.platform != "win32":
+        return None
+
+    script = (
+        "$app = Get-StartApps | "
+        "Where-Object { $_.Name -like '*Tobii*Experience*' } | "
+        "Select-Object -First 1; "
+        "if ($app) { $app.AppID }"
+    )
+    try:
+        completed = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError:
+        return None
+
+    app_id = completed.stdout.strip()
+    return app_id if completed.returncode == 0 and app_id else None
+
+
+def _open_windows_shell_target(target: str | Path) -> bool:
+    try:
+        subprocess.Popen(
+            ["explorer.exe", str(target)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError:
+        return False
+    return True
+
+
+def launch_tobii_experience() -> bool:
+    """Open either a classic shortcut or the registered Store application."""
+    shortcut = find_tobii_experience_shortcut()
+    if shortcut is not None and _open_windows_shell_target(shortcut):
+        return True
+
+    app_id = find_tobii_experience_app_id()
+    return bool(
+        app_id
+        and _open_windows_shell_target(
+            rf"shell:AppsFolder\{app_id}",
+        )
+    )
 
 
 class DeviceSettingsDialog(QDialog):
@@ -91,15 +144,23 @@ class DeviceSettingsDialog(QDialog):
         self.store = store
         self.setWindowTitle("眼动设备设置")
         self.setMinimumWidth(720)
+        self._preflight_store = GazePreflightStore(
+            settings.data_dir.expanduser() / "runtime" / "gaze_preflight.json"
+        )
 
         current = store.load(GazeDeviceConfig.from_settings(settings))
+        self.current_config = current
         root = QVBoxLayout(self)
         form = QFormLayout()
 
         self.source_combo = QComboBox()
         for label, value in _SOURCE_ITEMS:
             self.source_combo.addItem(label, value)
-        source_index = self.source_combo.findData(current.gaze_source)
+        visible_source = {
+            "auto": "tobii_stream_engine",
+            "gaze_collect_legacy": "tobii_legacy_bridge",
+        }.get(current.gaze_source, current.gaze_source)
+        source_index = self.source_combo.findData(visible_source)
         self.source_combo.setCurrentIndex(max(0, source_index))
         self.source_combo.currentIndexChanged.connect(self._update_source_controls)
 
@@ -126,57 +187,30 @@ class DeviceSettingsDialog(QDialog):
         bridge_row.addWidget(self.bridge_port_spin)
         self.bridge_controls = (self.bridge_host_edit, self.bridge_port_spin)
 
-        self.gaze_collect_json_edit = QLineEdit(str(current.gaze_collect_json_root))
-        self.gaze_collect_json_edit.setObjectName("gazeCollectJsonRootEdit")
-        gaze_collect_json_browse = QPushButton("浏览…")
-        gaze_collect_json_browse.clicked.connect(self._browse_gaze_collect_json)
-        gaze_collect_json_row = QHBoxLayout()
-        gaze_collect_json_row.addWidget(self.gaze_collect_json_edit, 1)
-        gaze_collect_json_row.addWidget(gaze_collect_json_browse)
-
-        self.gaze_collect_player_edit = QLineEdit(
-            str(current.gaze_collect_player_executable or "")
-        )
-        self.gaze_collect_player_edit.setObjectName("gazeCollectPlayerEdit")
-        gaze_collect_player_browse = QPushButton("浏览…")
-        gaze_collect_player_browse.clicked.connect(self._browse_gaze_collect_player)
-        self.open_gaze_collect_button = QPushButton("打开 HPF")
-        self.open_gaze_collect_button.setObjectName("openGazeCollectPlayerButton")
-        self.open_gaze_collect_button.clicked.connect(self._open_gaze_collect_player)
-        gaze_collect_player_row = QHBoxLayout()
-        gaze_collect_player_row.addWidget(self.gaze_collect_player_edit, 1)
-        gaze_collect_player_row.addWidget(gaze_collect_player_browse)
-        gaze_collect_player_row.addWidget(self.open_gaze_collect_button)
-        self.gaze_collect_controls = (
-            self.gaze_collect_json_edit,
-            gaze_collect_json_browse,
-            self.gaze_collect_player_edit,
-            gaze_collect_player_browse,
-            self.open_gaze_collect_button,
+        self.third_party_json_edit = QLineEdit()
+        self.third_party_json_edit.setObjectName("thirdPartyJsonRootEdit")
+        self.third_party_json_edit.setPlaceholderText("留空时沿用已保存的兼容数据目录")
+        third_party_json_browse = QPushButton("浏览…")
+        third_party_json_browse.clicked.connect(self._browse_third_party_json)
+        third_party_json_row = QHBoxLayout()
+        third_party_json_row.addWidget(self.third_party_json_edit, 1)
+        third_party_json_row.addWidget(third_party_json_browse)
+        self.third_party_json_controls = (
+            self.third_party_json_edit,
+            third_party_json_browse,
         )
 
-        self.eye_position_path_edit = QLineEdit(str(current.eye_position_executable or ""))
-        self.eye_position_path_edit.setObjectName("eyePositionPathEdit")
-        eye_position_browse = QPushButton("浏览…")
-        eye_position_browse.clicked.connect(self._browse_eye_position)
-        open_eye_position_button = QPushButton("打开眼位检查")
-        open_eye_position_button.setObjectName("openEyePositionButton")
-        open_eye_position_button.clicked.connect(self._open_legacy_eye_position)
-        eye_position_row = QHBoxLayout()
-        eye_position_row.addWidget(self.eye_position_path_edit, 1)
-        eye_position_row.addWidget(eye_position_browse)
-        eye_position_row.addWidget(open_eye_position_button)
-
-        self.just_need_to_see_root_edit = QLineEdit(str(current.just_need_to_see_root))
-        self.just_need_to_see_root_edit.setObjectName("justNeedToSeeRootEdit")
-        just_need_to_see_browse = QPushButton("浏览…")
-        just_need_to_see_browse.clicked.connect(self._browse_just_need_to_see_root)
-        just_need_to_see_row = QHBoxLayout()
-        just_need_to_see_row.addWidget(self.just_need_to_see_root_edit, 1)
-        just_need_to_see_row.addWidget(just_need_to_see_browse)
-        self.just_need_to_see_controls = (
-            self.just_need_to_see_root_edit,
-            just_need_to_see_browse,
+        self.compatibility_dll_edit = QLineEdit()
+        self.compatibility_dll_edit.setObjectName("compatibilityDllEdit")
+        self.compatibility_dll_edit.setPlaceholderText("留空时沿用已保存的 tobii_stream_engine.dll")
+        compatibility_dll_browse = QPushButton("浏览…")
+        compatibility_dll_browse.clicked.connect(self._browse_compatibility_dll)
+        compatibility_dll_row = QHBoxLayout()
+        compatibility_dll_row.addWidget(self.compatibility_dll_edit, 1)
+        compatibility_dll_row.addWidget(compatibility_dll_browse)
+        self.compatibility_dll_controls = (
+            self.compatibility_dll_edit,
+            compatibility_dll_browse,
         )
 
         self.preflight_seconds_spin = QSpinBox()
@@ -191,22 +225,20 @@ class DeviceSettingsDialog(QDialog):
         self.minimum_validity_spin.setValue(current.gaze_minimum_valid_ratio * 100)
 
         form.addRow("眼动源：", self.source_combo)
-        form.addRow("Stream Engine DLL：", dll_row)
-        form.addRow("兼容桥接地址：", bridge_row)
-        form.addRow("GazeCollect JSON：", gaze_collect_json_row)
-        form.addRow("HPFMediaPlayer：", gaze_collect_player_row)
-        form.addRow("EyePosition：", eye_position_row)
-        form.addRow("JustNeedToSee 目录：", just_need_to_see_row)
+        form.addRow("原生 Stream DLL：", dll_row)
+        form.addRow("兼容地址：", bridge_row)
+        form.addRow("第三方数据目录：", third_party_json_row)
+        form.addRow("Tobii 兼容 DLL：", compatibility_dll_row)
         form.addRow("任务前预检：", self.preflight_seconds_spin)
         form.addRow("最低有效率：", self.minimum_validity_spin)
         root.addLayout(form)
 
         source_tip = QLabel(
-            "自动模式会依次检测 Tobii 原生驱动和兼容桥接，绝不回退到模拟数据。"
-            "第三方或自制传感器需要其程序在上述地址输出换行分隔 JSON，"
-            "至少包含归一化 x、y 和 valid；仅插入 USB/串口设备无法推断视线坐标。\n"
-            "GazeCollect 模式只读取 HPF 新写入的 JSON，HPF 需由管理员手动打开；"
-            "EyePosition 仅辅助摆位。JustNeedToSee DLL 模式使用前必须关闭 JustNeedToSee.exe。"
+            "这里选择的是连接方式；实际传感器名称和可用数据字段以自检结果为准。"
+            "Tobii 原生 Stream 保留为推荐主链路。原监听兼容用于既有 TCP 发送程序；"
+            "它由 OculiDoC 在 0.0.0.0 和所设端口（原版为 9999）建立服务端。"
+            "Tobii DLL兼容使用管理员明确选择的 Stream Engine DLL；第三方兼容会先尝试"
+            "通用 NDJSON 桥接，再尝试所选目录中的 *_gaze.json。兼容模式均不会回退到模拟数据。"
         )
         source_tip.setWordWrap(True)
         source_tip.setStyleSheet("color:#5a7184;")
@@ -220,8 +252,33 @@ class DeviceSettingsDialog(QDialog):
         )
         root.addWidget(self.preflight_label)
 
+        self_check_row = QHBoxLayout()
+        self.self_check_button = QPushButton("运行自检")
+        self.self_check_button.setObjectName("runGazeSelfCheckButton")
+        self.self_check_button.clicked.connect(self._open_self_check)
+        self_check_tip = QLabel(
+            "识别当前连接的实际设备、采样率、有效率及注视点、瞳孔和三维眼位能力。"
+        )
+        self_check_tip.setWordWrap(True)
+        self_check_row.addWidget(self.self_check_button)
+        self_check_row.addWidget(self_check_tip, 1)
+        root.addLayout(self_check_row)
+
+        opoin_thesis_row = QHBoxLayout()
+        self.opoin_thesis_button = QPushButton("打开 OpoinThesis")
+        self.opoin_thesis_button.setObjectName("openOpoinThesisButton")
+        self.opoin_thesis_button.clicked.connect(self._open_opoin_thesis)
+        opoin_thesis_tip = QLabel(
+            "主观查看左右眼位置；不计算有效率，不保存，也不纳入自检或任务报告。"
+        )
+        opoin_thesis_tip.setWordWrap(True)
+        opoin_thesis_row.addWidget(self.opoin_thesis_button)
+        opoin_thesis_row.addWidget(opoin_thesis_tip, 1)
+        root.addLayout(opoin_thesis_row)
+
         calibration_row = QHBoxLayout()
         open_tobii_button = QPushButton("打开 Tobii Experience / 校准")
+        open_tobii_button.setObjectName("openTobiiExperienceButton")
         open_tobii_button.clicked.connect(self._open_tobii_experience)
         calibration_tip = QLabel(
             "正式任务前请先完成 Display Setup，再在用户资料中执行校准或 Improve calibration。"
@@ -230,16 +287,6 @@ class DeviceSettingsDialog(QDialog):
         calibration_row.addWidget(open_tobii_button)
         calibration_row.addWidget(calibration_tip, 1)
         root.addLayout(calibration_row)
-
-        ghost_row = QHBoxLayout()
-        open_ghost_button = QPushButton("打开 Tobii Ghost / 视线检查")
-        open_ghost_button.setObjectName("openTobiiGhostButton")
-        open_ghost_button.clicked.connect(self._open_tobii_ghost)
-        ghost_tip = QLabel("在正式任务前显示视线气泡，辅助管理员检查实时目光追踪。")
-        ghost_tip.setWordWrap(True)
-        ghost_row.addWidget(open_ghost_button)
-        ghost_row.addWidget(ghost_tip, 1)
-        root.addLayout(ghost_row)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -255,6 +302,11 @@ class DeviceSettingsDialog(QDialog):
             return "尚无设备预检结果。每次正式任务开始前会自动执行。"
 
         details = result.status_text()
+        identity = " ".join(
+            part for part in (result.device_manufacturer, result.device_model) if part
+        )
+        if identity:
+            details += f"\n实际设备：{identity}"
         if result.device_url:
             details += f"\n设备 URL：{result.device_url}"
         if result.library_path:
@@ -263,68 +315,42 @@ class DeviceSettingsDialog(QDialog):
 
     def _update_source_controls(self) -> None:
         source = self.source_combo.currentData()
-        enabled = source in {"auto", "tobii_stream_engine"}
+        enabled = source == "tobii_stream_engine"
         for dll_widget in self.dll_controls:
             dll_widget.setEnabled(enabled)
-        bridge_enabled = source in {"auto", "tobii_legacy_bridge"}
-        for bridge_widget in self.bridge_controls:
-            bridge_widget.setEnabled(bridge_enabled)
-        gaze_collect_enabled = source == "gaze_collect_legacy"
-        for gaze_collect_widget in self.gaze_collect_controls:
-            gaze_collect_widget.setEnabled(gaze_collect_enabled)
-        just_need_to_see_enabled = source == "just_need_to_see_bundle"
-        for just_need_to_see_widget in self.just_need_to_see_controls:
-            just_need_to_see_widget.setEnabled(just_need_to_see_enabled)
+        self.bridge_host_edit.setEnabled(source == "tobii_legacy_bridge")
+        self.bridge_port_spin.setEnabled(
+            source
+            in {
+                "tobii_hospital_bridge",
+                "tobii_legacy_bridge",
+            }
+        )
+        third_party_enabled = source == "tobii_legacy_bridge"
+        for widget in self.third_party_json_controls:
+            widget.setEnabled(third_party_enabled)
+        compatibility_enabled = source == "just_need_to_see_bundle"
+        for widget in self.compatibility_dll_controls:
+            widget.setEnabled(compatibility_enabled)
 
-    def _browse_gaze_collect_json(self) -> None:
+    def _browse_third_party_json(self) -> None:
         path = QFileDialog.getExistingDirectory(
             self,
-            "选择 GazeCollect JSON 目录",
-            self.gaze_collect_json_edit.text(),
+            "选择第三方眼动 JSON 目录",
+            self.third_party_json_edit.text(),
         )
         if path:
-            self.gaze_collect_json_edit.setText(path)
+            self.third_party_json_edit.setText(path)
 
-    def _browse_gaze_collect_player(self) -> None:
+    def _browse_compatibility_dll(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "选择 HPFMediaPlayer.exe",
-            self.gaze_collect_player_edit.text(),
-            "HPFMediaPlayer (HPFMediaPlayer.exe);;Windows 程序 (*.exe)",
+            "选择 Tobii 兼容 DLL",
+            self.compatibility_dll_edit.text(),
+            "Tobii Stream Engine (tobii_stream_engine.dll);;DLL (*.dll)",
         )
         if path:
-            self.gaze_collect_player_edit.setText(path)
-
-    def _browse_eye_position(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "选择 EyePosition.exe",
-            self.eye_position_path_edit.text(),
-            "Windows 程序 (*.exe)",
-        )
-        if path:
-            self.eye_position_path_edit.setText(path)
-
-    def _browse_just_need_to_see_root(self) -> None:
-        path = QFileDialog.getExistingDirectory(
-            self,
-            "选择 JustNeedToSee 目录",
-            self.just_need_to_see_root_edit.text(),
-        )
-        if path:
-            self.just_need_to_see_root_edit.setText(path)
-
-    def _open_gaze_collect_player(self) -> None:
-        try:
-            open_gaze_collect_player(self.gaze_collect_player_edit.text())
-        except (OSError, RuntimeError) as error:
-            QMessageBox.warning(self, "无法打开 HPFMediaPlayer", str(error))
-
-    def _open_legacy_eye_position(self) -> None:
-        try:
-            open_eye_position(self.eye_position_path_edit.text())
-        except (OSError, RuntimeError) as error:
-            QMessageBox.warning(self, "无法打开旧版眼位检查", str(error))
+            self.compatibility_dll_edit.setText(path)
 
     def _browse_dll(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -356,76 +382,74 @@ class DeviceSettingsDialog(QDialog):
             )
             return
 
-        shortcut = find_tobii_experience_shortcut()
-        opened = (
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(shortcut)))
-            if shortcut is not None
-            else QDesktopServices.openUrl(QUrl("ms-search:query=Tobii%20Experience"))
-        )
-        if not opened:
+        if not launch_tobii_experience():
             QMessageBox.warning(
                 self,
                 "无法打开 Tobii Experience",
-                "请从 Windows 开始菜单手动搜索 Tobii Experience。",
+                "Windows 未找到已注册的 Tobii Experience。请确认软件已安装并能从开始菜单打开。",
             )
 
-    def _open_tobii_ghost(self) -> None:
-        if sys.platform != "win32":
-            QMessageBox.information(
-                self,
-                "Tobii Ghost",
-                "Tobii Ghost 需要在连接眼动仪的 Windows 电脑上打开。",
-            )
+    def _open_self_check(self, checked: bool = False) -> None:
+        del checked
+        config = self.build_config()
+        if not self._validate_config(config):
             return
+        applied_settings = config.apply(self.settings)
+        GazeSelfCheckDialog(
+            applied_settings,
+            self,
+            preflight_store=self._preflight_store,
+        ).exec()
+        result = self._preflight_store.load()
+        if result is not None and result.source == applied_settings.gaze_source:
+            self.preflight_label.setText(self._preflight_text(result))
 
-        shortcut = find_tobii_ghost_shortcut()
-        opened = (
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(shortcut)))
-            if shortcut is not None
-            else QDesktopServices.openUrl(QUrl("ms-search:query=Tobii%20Ghost"))
-        )
-
-        if not opened:
-            QMessageBox.warning(
-                self,
-                "无法打开 Tobii Ghost",
-                "请从 Windows 开始菜单手动搜索 Tobii Ghost。",
-            )
+    def _open_opoin_thesis(self, checked: bool = False) -> None:
+        del checked
+        config = self.build_config()
+        if not self._validate_config(config):
+            return
+        applied_settings = config.apply(self.settings)
+        result = self._preflight_store.load()
+        if result is not None and result.source != applied_settings.gaze_source:
+            result = None
+        OpoinThesisDialog(
+            applied_settings,
+            self,
+            preflight_result=result,
+        ).exec()
 
     def build_config(self) -> GazeDeviceConfig:
         dll_text = self.dll_path_edit.text().strip()
-        player_text = self.gaze_collect_player_edit.text().strip()
-        eye_position_text = self.eye_position_path_edit.text().strip()
-        gaze_collect_json_text = (
-            self.gaze_collect_json_edit.text().strip() or str(self.settings.gaze_collect_json_root)
+        third_party_json_text = self.third_party_json_edit.text().strip() or str(
+            self.current_config.gaze_collect_json_root
         )
-        just_need_to_see_root_text = (
-            self.just_need_to_see_root_edit.text().strip()
-            or str(self.settings.just_need_to_see_root)
+        compatibility_dll_text = self.compatibility_dll_edit.text().strip()
+        compatibility_root = (
+            Path(compatibility_dll_text).parent
+            if compatibility_dll_text
+            else self.current_config.just_need_to_see_root
         )
         return GazeDeviceConfig(
             gaze_source=self.source_combo.currentData(),
             tobii_stream_engine_dll=Path(dll_text) if dll_text else None,
             tobii_bridge_host=self.bridge_host_edit.text().strip(),
             tobii_bridge_port=self.bridge_port_spin.value(),
-            gaze_collect_json_root=Path(gaze_collect_json_text),
-            gaze_collect_player_executable=Path(player_text) if player_text else None,
-            eye_position_executable=(Path(eye_position_text) if eye_position_text else None),
-            just_need_to_see_root=Path(just_need_to_see_root_text),
+            gaze_collect_json_root=Path(third_party_json_text),
+            gaze_collect_player_executable=(self.current_config.gaze_collect_player_executable),
+            just_need_to_see_root=compatibility_root,
             gaze_preflight_seconds=self.preflight_seconds_spin.value(),
             gaze_minimum_valid_ratio=self.minimum_validity_spin.value() / 100.0,
         )
 
-    def _save(self) -> None:
-        config = self.build_config()
-        if config.gaze_source in {"auto", "tobii_legacy_bridge"}:
-            if not config.tobii_bridge_host.strip():
-                QMessageBox.warning(
-                    self,
-                    "兼容桥接地址无效",
-                    "请输入第三方/自制传感器桥接程序的主机地址。",
-                )
-                return
+    def _validate_config(self, config: GazeDeviceConfig) -> bool:
+        if config.gaze_source == "tobii_legacy_bridge" and not config.tobii_bridge_host.strip():
+            QMessageBox.warning(
+                self,
+                "兼容地址无效",
+                "请输入兼容程序的主机地址。",
+            )
+            return False
         if config.gaze_source == "tobii_stream_engine" and config.tobii_stream_engine_dll:
             if not config.tobii_stream_engine_dll.is_file():
                 QMessageBox.warning(
@@ -433,24 +457,21 @@ class DeviceSettingsDialog(QDialog):
                     "DLL 路径无效",
                     "所选 tobii_stream_engine.dll 不存在；可清空路径后使用自动发现。",
                 )
-                return
-        if config.gaze_source == "gaze_collect_legacy":
-            if not config.gaze_collect_json_root.is_dir():
-                QMessageBox.warning(
-                    self,
-                    "GazeCollect JSON 目录无效",
-                    "请选择 HPF 正在写入 *_gaze.json 的目录。",
-                )
-                return
+                return False
         if config.gaze_source == "just_need_to_see_bundle":
             bundled_dll = config.just_need_to_see_root / "tobii_stream_engine.dll"
             if not bundled_dll.is_file():
                 QMessageBox.warning(
                     self,
-                    "JustNeedToSee 目录无效",
-                    "所选目录中没有 tobii_stream_engine.dll。",
+                    "Tobii 兼容 DLL 无效",
+                    "请选择存在的 tobii_stream_engine.dll。",
                 )
-                return
+                return False
+        return True
 
+    def _save(self) -> None:
+        config = self.build_config()
+        if not self._validate_config(config):
+            return
         self.store.save(config)
         self.accept()

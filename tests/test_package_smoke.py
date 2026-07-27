@@ -28,6 +28,7 @@ def test_package_smoke_loads_brand_assets(
         "blue_mark_loaded": True,
         "white_mark_loaded": True,
         "wordmark_loaded": True,
+        "reviewed_stimuli_loaded": True,
         "qt_application_named": True,
     }
 

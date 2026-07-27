@@ -245,9 +245,7 @@ def test_delete_session_removes_database_record_and_archives_files(
         )
     )
 
-    archived_directory = runtime.experiment_session_service.delete_session(
-        session.session_id
-    )
+    archived_directory = runtime.experiment_session_service.delete_session(session.session_id)
 
     assert archived_directory is not None
     assert not session_directory.exists()

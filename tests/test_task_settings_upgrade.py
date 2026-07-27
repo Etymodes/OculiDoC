@@ -7,6 +7,7 @@ from math import pi
 from pathlib import Path
 from typing import cast
 
+import pytest
 from PySide6.QtWidgets import QMessageBox
 from pytest import MonkeyPatch
 from pytestqt.qtbot import QtBot
@@ -25,7 +26,9 @@ from oculidoc.tasks.question_bank import (
     CommonQuestionTemplate,
 )
 from oculidoc.tasks.tracking_ball import (
+    TargetEffect,
     TargetPath,
+    TargetShape,
     TrackingBallConfig,
     TrackingBallSetupDialog,
     TrackingBallTask,
@@ -99,6 +102,43 @@ def test_tracking_setup_loads_shared_config(qtbot: QtBot) -> None:
     assert dialog.hit_radius_spin.value() == 1.4
     assert not dialog.show_gaze_cursor_check.isChecked()
     assert dialog.build_config() == shared
+
+
+def test_dynamic_cat_and_running_effect_are_mutually_linked(qtbot: QtBot) -> None:
+    normalized = TrackingBallConfig(
+        shape=TargetShape.CIRCLE,
+        effect=TargetEffect.RUNNING,
+    )
+    assert normalized.shape is TargetShape.ANIMATED_CAT
+    assert normalized.effect is TargetEffect.RUNNING
+
+    dialog = TrackingBallSetupDialog()
+    qtbot.addWidget(dialog)
+    dialog.shape_combo.setCurrentIndex(dialog.shape_combo.findData(TargetShape.ANIMATED_CAT))
+    assert TargetEffect(dialog.effect_combo.currentData()) is TargetEffect.RUNNING
+    assert not dialog.image_combo.isEnabled()
+
+    dialog.shape_combo.setCurrentIndex(dialog.shape_combo.findData(TargetShape.STAR))
+    assert TargetEffect(dialog.effect_combo.currentData()) is TargetEffect.PULSE
+
+    dialog.effect_combo.setCurrentIndex(dialog.effect_combo.findData(TargetEffect.RUNNING))
+    assert TargetShape(dialog.shape_combo.currentData()) is TargetShape.ANIMATED_CAT
+    assert dialog.build_config().image_path is None
+
+
+def test_dynamic_cat_uses_tangent_direction_mirroring_and_visible_stride() -> None:
+    rotation, mirrored = TrackingBallTask.running_cat_transform(1.0, 0.0)
+    assert rotation == 0.0
+    assert mirrored is False
+
+    rotation, mirrored = TrackingBallTask.running_cat_transform(-1.0, 1.0)
+    assert rotation == pytest.approx(315.0)
+    assert mirrored is True
+
+    rotation, mirrored = TrackingBallTask.running_cat_transform(0.0, -1.0)
+    assert rotation == pytest.approx(-90.0)
+    assert mirrored is False
+    assert TrackingBallTask.running_cat_stride(200.0, pi / 8.0) == pytest.approx(32.0)
 
 
 def test_scored_options_randomize_logical_sides(
@@ -269,11 +309,11 @@ def test_binary_sequence_randomly_samples_requested_question_count(tmp_path: Pat
     assert len({question.randomization_seed for _question_id, question in first}) == 3
 
 
-def test_fixed_binary_forms_are_semantic_and_not_randomized(tmp_path: Path) -> None:
+def test_fixed_binary_forms_randomly_sample_the_fixed_type_pattern(tmp_path: Path) -> None:
     store = CommonQuestionStore(tmp_path / "common_questions.json")
     templates = {item.template_id: item for item in store.load()}
 
-    for size, expected_ids in FIXED_BINARY_QUESTION_FORMS.items():
+    for size, expected_types in FIXED_BINARY_QUESTION_FORMS.items():
         config = BinaryQuestionConfig(
             question="备用单题",
             fixed_form_size=size,
@@ -281,16 +321,28 @@ def test_fixed_binary_forms_are_semantic_and_not_randomized(tmp_path: Path) -> N
             randomization_seed=99,
         )
         resolved = binary_question_sequence(config, store)
+        repeated = binary_question_sequence(config, store)
         resolved_ids = tuple(question_id for question_id, _question in resolved)
 
-        assert resolved_ids == expected_ids
-        assert all(templates[item].question_type.is_scored for item in expected_ids[: size // 2])
+        assert resolved == repeated
+        assert len(resolved_ids) == size
+        assert expected_types == ("objective",) * (size // 2) + ("subjective",) * (size // 2)
+        assert all(templates[item].question_type.is_scored for item in resolved_ids[: size // 2])
         assert all(
-            not templates[item].question_type.is_scored for item in expected_ids[size // 2 :]
+            not templates[item].question_type.is_scored for item in resolved_ids[size // 2 :]
         )
+        differently_seeded = binary_question_sequence(
+            BinaryQuestionConfig(
+                question="备用单题",
+                fixed_form_size=size,
+                randomization_seed=100,
+            ),
+            store,
+        )
+        assert tuple(question_id for question_id, _question in differently_seeded) != resolved_ids
 
 
-def test_question_setup_applies_fixed_form_without_random_sampling(
+def test_question_setup_applies_fixed_type_sampling_without_fixed_question_ids(
     qtbot: QtBot,
     tmp_path: Path,
 ) -> None:
@@ -300,10 +352,11 @@ def test_question_setup_applies_fixed_form_without_random_sampling(
     config = dialog.build_config()
 
     assert config.fixed_form_size == 8
-    assert config.question_template_ids == FIXED_BINARY_QUESTION_FORMS[8]
+    assert config.question_template_ids == ()
     assert config.question_count == 0
-    assert config.randomize_question_order is False
+    assert config.randomize_question_order is True
     assert not dialog.sequence_question_list.isEnabled()
+    assert "前半客观、后半主观" in dialog.randomize_question_order_check.text()
 
 
 def test_question_setup_loads_and_saves_templates(

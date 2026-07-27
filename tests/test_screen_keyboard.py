@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import pytest
 from PySide6.QtWidgets import QSizePolicy
 from pytestqt.qtbot import QtBot
 
 from oculidoc.tasks.screen_keyboard import (
     KeyboardStage,
     ScreenKeyboardConfig,
+    ScreenKeyboardMode,
     ScreenKeyboardSetupDialog,
     ScreenKeyboardTask,
     apply_tone,
@@ -25,7 +27,12 @@ def test_tone_marks_follow_pinyin_priority() -> None:
 
 
 def test_staged_keyboard_commits_and_returns_to_initial(qtbot: QtBot) -> None:
-    task = ScreenKeyboardTask(ScreenKeyboardConfig(dwell_time_ms=500))
+    task = ScreenKeyboardTask(
+        ScreenKeyboardConfig(
+            input_mode=ScreenKeyboardMode.ADVANCED,
+            dwell_time_ms=500,
+        )
+    )
     qtbot.addWidget(task)
 
     select(task, "ch")
@@ -45,7 +52,12 @@ def test_staged_keyboard_commits_and_returns_to_initial(qtbot: QtBot) -> None:
 
 
 def test_wrong_confirmation_returns_to_same_selection(qtbot: QtBot) -> None:
-    task = ScreenKeyboardTask(ScreenKeyboardConfig(dwell_time_ms=500))
+    task = ScreenKeyboardTask(
+        ScreenKeyboardConfig(
+            input_mode=ScreenKeyboardMode.ADVANCED,
+            dwell_time_ms=500,
+        )
+    )
     qtbot.addWidget(task)
 
     select(task, "b")
@@ -56,7 +68,13 @@ def test_wrong_confirmation_returns_to_same_selection(qtbot: QtBot) -> None:
 
 
 def test_tone_step_can_be_disabled(qtbot: QtBot) -> None:
-    task = ScreenKeyboardTask(ScreenKeyboardConfig(dwell_time_ms=500, enable_tone_step=False))
+    task = ScreenKeyboardTask(
+        ScreenKeyboardConfig(
+            input_mode=ScreenKeyboardMode.ADVANCED,
+            dwell_time_ms=500,
+            enable_tone_step=False,
+        )
+    )
     qtbot.addWidget(task)
 
     for value in ("b", "yes", "a", "yes", "n", "yes"):
@@ -68,6 +86,7 @@ def test_tone_step_can_be_disabled(qtbot: QtBot) -> None:
 
 def test_setup_preserves_large_font_settings(qtbot: QtBot) -> None:
     config = ScreenKeyboardConfig(
+        input_mode=ScreenKeyboardMode.ADVANCED,
         output_font_size_pt=64,
         instruction_font_size_pt=38,
         option_font_size_pt=42,
@@ -80,7 +99,7 @@ def test_setup_preserves_large_font_settings(qtbot: QtBot) -> None:
 
 
 def test_stage_options_expand_with_high_resolution(qtbot: QtBot) -> None:
-    task = ScreenKeyboardTask(ScreenKeyboardConfig())
+    task = ScreenKeyboardTask(ScreenKeyboardConfig(input_mode=ScreenKeyboardMode.ADVANCED))
     qtbot.addWidget(task)
     task.resize(1_920, 1_080)
     task.show()
@@ -94,3 +113,76 @@ def test_stage_options_expand_with_high_resolution(qtbot: QtBot) -> None:
     assert first.sizePolicy().verticalPolicy() is QSizePolicy.Policy.Expanding
     assert first.height() > small_height * 2
     assert first.width() > 600
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        ScreenKeyboardMode.DIRECT,
+        ScreenKeyboardMode.ADVANCED,
+    ],
+)
+def test_action_buttons_have_a_large_safe_gaze_area_above_screen_edge(
+    qtbot: QtBot,
+    mode: ScreenKeyboardMode,
+) -> None:
+    task = ScreenKeyboardTask(ScreenKeyboardConfig(input_mode=mode))
+    qtbot.addWidget(task)
+    task.resize(1_920, 1_080)
+    task.show()
+    qtbot.wait(10)
+
+    button = task._buttons["action:delete"]
+    bounds = task._button_bounds(button)
+
+    assert button.sizePolicy().verticalPolicy() is QSizePolicy.Policy.Expanding
+    assert button.height() >= round(task.height() * 0.14)
+    assert task.height() - (button.y() + button.height()) >= 36
+    assert bounds is not None
+    assert bounds[3] < 0.97
+    assert bounds[3] - bounds[1] >= 0.13
+
+
+def test_direct_selection_is_default_and_commits_visible_phrase(qtbot: QtBot) -> None:
+    task = ScreenKeyboardTask(ScreenKeyboardConfig(dwell_time_ms=500))
+    qtbot.addWidget(task)
+    spoken: list[str] = []
+    task.speech_requested.connect(spoken.append)
+
+    assert task.config.input_mode is ScreenKeyboardMode.DIRECT
+    assert task.stage is KeyboardStage.DIRECT_CATEGORIES
+
+    select(task, "category:common")
+    assert task.stage is KeyboardStage.DIRECT_PHRASES
+
+    select(task, "phrase:对")
+
+    assert task.output_text == "对"
+    assert spoken[-1] == "对"
+    assert task.recording_result("manual_exit")["committed_phrase_count"] == 1
+
+
+def test_direct_selection_pages_and_returns_to_categories(qtbot: QtBot) -> None:
+    task = ScreenKeyboardTask(ScreenKeyboardConfig(dwell_time_ms=500))
+    qtbot.addWidget(task)
+
+    select(task, "category:daily_care")
+    assert task.composing_text == "生活照护 · 第 1/4 页"
+
+    select(task, "direct:next")
+    assert task.composing_text == "生活照护 · 第 2/4 页"
+
+    select(task, "direct:back")
+    assert task.stage is KeyboardStage.DIRECT_CATEGORIES
+    assert task.composing_text == "请选择需求类别"
+
+
+def test_setup_labels_existing_pinyin_as_advanced_mode(qtbot: QtBot) -> None:
+    dialog = ScreenKeyboardSetupDialog(
+        config=ScreenKeyboardConfig(input_mode=ScreenKeyboardMode.ADVANCED)
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog.mode_combo.currentText() == "进阶模式（拼音）"
+    assert dialog.tone_checkbox.isEnabled()
+    assert dialog.build_config().input_mode is ScreenKeyboardMode.ADVANCED

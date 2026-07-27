@@ -1,7 +1,16 @@
-# Notice
+# OculiDoC 权属与使用声明
 
-Copyright (c) 2026 Etymodes and TiantanDoC.
+Copyright © 2026 首都医科大学天坛医院意识障碍病区。保留所有权利。
 
-The repository does not yet have a finalized open-source license. Clinical use,
-redistribution and commercialization require explicit authorization from the
-project maintainers and all applicable institutional approvals.
+OculiDoC 及随附的源代码、界面、素材、文档和构建产物为首都医科大学天坛医院
+意识障碍病区所有。未经书面授权，不得擅自复制、传播、改作、再发布、商业化，
+也不得用于临床服务。
+
+本仓库未授予开源许可。公开可见不等于获得复制、使用、再分发或衍生开发许可。
+
+需要申请使用或报告问题，请发送邮件至：
+
+- To：he_jianghong@sina.cn
+- CC：peterpig123456@gmail.com
+
+本软件当前为内部科研与工程平台，不是医疗器械，不得作为单独的诊断、预后或治疗依据。

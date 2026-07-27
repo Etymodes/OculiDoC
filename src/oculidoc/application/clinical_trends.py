@@ -24,6 +24,7 @@ from oculidoc.application.experiment_session_service import (
     RegisterSessionArtifactRequest,
 )
 from oculidoc.application.gaze_report import (
+    CLINICAL_USE_NOTICE,
     _build_metrics,
     _load_rows,
     _screen_heatmap,
@@ -57,6 +58,17 @@ _COMPARABLE_METRICS = (
     "target_acquisition_ratio",
     "mean_first_target_acquired_ms",
     "no_target_false_fixation_count",
+    "aoi_exploration_coverage",
+    "contingent_activation_count",
+    "contingent_target_dwell_ratio",
+    "replay_target_dwell_ratio",
+    "failed_or_timeout_trial_count",
+    "catch_false_selection_ratio",
+    "usable_trial_ratio",
+    "any_image_entry_ratio",
+    "image_dwell_share_a",
+    "left_dwell_share",
+    "side_swap_consistency",
 )
 
 
@@ -69,12 +81,16 @@ class PatientTrendArtifacts:
     aggregate_heatmap_path: Path | None
     tracking_path: Path | None
     binary_path: Path | None
+    attention_path: Path | None
 
 
 def _safe_number(
     value: object,
 ) -> float | None:
     if value is None or isinstance(value, bool):
+        return None
+
+    if not isinstance(value, (int, float, str)):
         return None
 
     try:
@@ -132,6 +148,27 @@ def _normalized_error_mean(
         return None
 
     return _safe_number(value.get("mean"))
+
+
+def _comparison_signature(
+    result: dict[str, object],
+    metric_family: str,
+) -> str:
+    configuration = result.get("configuration")
+
+    if not isinstance(configuration, dict):
+        return f"{metric_family}:configuration-unavailable"
+
+    return (
+        metric_family
+        + ":"
+        + json.dumps(
+            configuration,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
 
 
 def _warning(
@@ -254,6 +291,92 @@ def _build_point(
         "valid_sample_ratio": (valid_sample_ratio),
     }
     metric_family = "general"
+    game_mode = str(result.get("game_mode") or "")
+
+    if task_kind == "gaze_games" and game_mode == "garden":
+        metric_family = "gaze_garden"
+        metrics.update(
+            {
+                "aoi_exploration_coverage": _metric(
+                    result,
+                    "aoi_exploration_coverage",
+                ),
+                "contingent_activation_count": _safe_integer(
+                    result.get("contingent_activation_count")
+                ),
+                "contingent_target_dwell_ratio": _metric(
+                    result,
+                    "contingent_target_dwell_ratio",
+                ),
+                "replay_target_dwell_ratio": _metric(
+                    result,
+                    "replay_target_dwell_ratio",
+                ),
+                "replay_reward_on_target_ratio": _metric(
+                    result,
+                    "replay_reward_on_target_ratio",
+                ),
+                "loss_and_reacquisition_count": _safe_integer(
+                    result.get("loss_and_reacquisition_count")
+                ),
+            }
+        )
+
+    if task_kind == "gaze_games" and game_mode == "treasure_hunt":
+        metric_family = "visual_hunt"
+        metrics.update(
+            {
+                "target_acquisition_ratio": _metric(
+                    result,
+                    "target_acquisition_ratio",
+                ),
+                "failed_or_timeout_trial_count": _safe_integer(
+                    result.get("failed_or_timeout_trial_count")
+                ),
+                "median_target_acquisition_ms": _metric(
+                    result,
+                    "median_target_acquisition_ms",
+                ),
+                "distractor_dwell_ratio": _metric(
+                    result,
+                    "distractor_dwell_ratio",
+                ),
+                "catch_false_selection_ratio": _metric(
+                    result,
+                    "catch_false_selection_ratio",
+                ),
+            }
+        )
+
+    if task_kind == "visual_preference":
+        metric_family = "visual_preference"
+        metrics.update(
+            {
+                "usable_trial_ratio": _metric(
+                    result,
+                    "usable_trial_ratio",
+                ),
+                "any_image_entry_ratio": _metric(
+                    result,
+                    "any_image_entry_ratio",
+                ),
+                "image_dwell_share_a": _metric(
+                    result,
+                    "image_dwell_share_a",
+                ),
+                "left_dwell_share": _metric(
+                    result,
+                    "left_dwell_share",
+                ),
+                "side_swap_consistency": _metric(
+                    result,
+                    "side_swap_consistency",
+                ),
+                "side_swap_pair_denominator": _safe_integer(
+                    result.get("side_swap_pair_denominator")
+                ),
+            }
+        )
 
     is_tracking = task_kind == "tracking_ball" or any(
         key in result
@@ -304,7 +427,10 @@ def _build_point(
             }
         )
 
-    if task_kind == "instruction_fixation" or "target_acquisition_ratio" in result:
+    if task_kind == "instruction_fixation" or (
+        task_kind not in {"gaze_games", "visual_preference"}
+        and "target_acquisition_ratio" in result
+    ):
         metric_family = "instruction_fixation"
         metrics.update(
             {
@@ -372,6 +498,16 @@ def _build_point(
         valid_sample_ratio=(valid_sample_ratio),
     )
     completion_status = result.get("completion_status")
+    is_attention_family = metric_family in {
+        "gaze_garden",
+        "visual_hunt",
+        "visual_preference",
+    }
+    sufficient_quality = (
+        not is_attention_family
+        or valid_sample_ratio is None
+        or valid_sample_ratio >= LOW_VALID_SAMPLE_RATIO
+    )
     usable_for_trend = (
         entry.status is ExperimentSessionStatus.COMPLETED
         and result.get("recording_failed") is not True
@@ -380,7 +516,9 @@ def _build_point(
             "interrupted",
             "unanswered",
         }
+        and sufficient_quality
     )
+    comparison_signature = _comparison_signature(result, metric_family)
 
     return {
         "session_id": str(entry.session_id),
@@ -388,6 +526,7 @@ def _build_point(
         "module_id": entry.module_id,
         "task_kind": task_kind,
         "metric_family": metric_family,
+        "comparison_signature": comparison_signature,
         "created_at_utc": (entry.created_at.astimezone(UTC).isoformat()),
         "started_at_utc": (
             entry.started_at.astimezone(UTC).isoformat() if entry.started_at is not None else None
@@ -409,7 +548,7 @@ def _add_comparisons(
     points: list[dict[str, object]],
 ) -> None:
     previous_by_key: dict[
-        tuple[str, str],
+        tuple[str, str, str],
         dict[str, object],
     ] = {}
 
@@ -420,6 +559,7 @@ def _add_comparisons(
         key = (
             str(point.get("module_id")),
             str(point.get("metric_family")),
+            str(point.get("comparison_signature")),
         )
         previous = previous_by_key.get(key)
 
@@ -493,10 +633,13 @@ def build_patient_trend_document(
             task_results,
             start=1,
         ):
+            if not isinstance(task_record, dict):
+                continue
+
             points.append(
                 _build_point(
                     entry,
-                    dict(task_record),
+                    task_record,
                     task_index=task_index,
                 )
             )
@@ -579,12 +722,8 @@ def build_patient_trend_document(
             "automatic_improvement_label": False,
             "cross_task_comparison": False,
         },
-        "clinical_use_notice": (
-            "本纵向摘要仅用于研究和临床辅助观察。"
-            "不同任务参数、患者觉醒度、药物、疲劳、"
-            "视听条件和设备质量均可能影响结果；"
-            "变化值不能单独解释为意识水平改善或恶化。"
-        ),
+        "clinical_use_notice": CLINICAL_USE_NOTICE
+        + " 不同关键配置之间不计算前次差值，变化值不能单独解释为改善或恶化。",
     }
 
 
@@ -948,6 +1087,76 @@ def _binary_plot(
     return True
 
 
+def _attention_plot(
+    points: list[dict[str, object]],
+    output_path: Path,
+) -> bool:
+    """Plot new descriptive families as unconnected points across configurations."""
+    metric_by_family = {
+        "gaze_garden": ("contingent_target_dwell_ratio", "Garden target dwell"),
+        "visual_hunt": ("target_acquisition_ratio", "Visual-hunt acquisition"),
+        "visual_preference": ("any_image_entry_ratio", "Preference image entry"),
+    }
+    selected: list[tuple[dict[str, object], float, str]] = []
+
+    for point in points:
+        family = str(point.get("metric_family") or "")
+
+        if family not in metric_by_family or not point.get("usable_for_trend"):
+            continue
+
+        metrics = point.get("metrics")
+
+        if not isinstance(metrics, dict):
+            continue
+
+        value = _safe_number(metrics.get(metric_by_family[family][0]))
+
+        if value is not None:
+            selected.append((point, value, family))
+
+    if not selected:
+        return False
+
+    figure, axis = plt.subplots(
+        figsize=(max(8, len(selected) * 1.1), 4.8),
+    )
+    colors = {
+        "gaze_garden": "#4f8fb5",
+        "visual_hunt": "#8a5aa9",
+        "visual_preference": "#70ad74",
+    }
+
+    for family, (_metric_name, label) in metric_by_family.items():
+        family_points = [
+            (index, value)
+            for index, (_point, value, point_family) in enumerate(selected, start=1)
+            if point_family == family
+        ]
+
+        if family_points:
+            axis.scatter(
+                [index for index, _value in family_points],
+                [value for _index, value in family_points],
+                color=colors[family],
+                label=label,
+                s=55,
+            )
+
+    axis.set_ylim(0.0, 1.05)
+    axis.set_xticks(
+        list(range(1, len(selected) + 1)),
+        _labels([point for point, _value, _family in selected]),
+        rotation=25,
+        ha="right",
+    )
+    axis.set_ylabel("Descriptive ratio")
+    axis.set_title("Attention-task metrics (different families are not directly comparable)")
+    axis.legend()
+    _atomic_save_figure(figure, output_path)
+    return True
+
+
 def _ratio_text(
     value: object,
 ) -> str:
@@ -1038,6 +1247,41 @@ def _point_summary(
                 ),
                 "无目标试次干扰稳定注视 "
                 + _number_text(metrics.get("no_target_false_fixation_count")),
+            )
+        )
+
+    if family == "gaze_garden":
+        return "；".join(
+            (
+                "花朵探索 " + _ratio_text(metrics.get("aoi_exploration_coverage")),
+                "联动触发 " + _number_text(metrics.get("contingent_activation_count")),
+                "联动目标停留 " + _ratio_text(metrics.get("contingent_target_dwell_ratio")),
+                "回放目标停留 " + _ratio_text(metrics.get("replay_target_dwell_ratio")),
+            )
+        )
+
+    if family == "visual_hunt":
+        return "；".join(
+            (
+                "目标获得 " + _ratio_text(metrics.get("target_acquisition_ratio")),
+                "未成功/超时 " + _number_text(metrics.get("failed_or_timeout_trial_count")),
+                "获得中位潜伏期 "
+                + _number_text(
+                    metrics.get("median_target_acquisition_ms"),
+                    suffix=" ms",
+                ),
+                "目标缺失假选择 " + _ratio_text(metrics.get("catch_false_selection_ratio")),
+            )
+        )
+
+    if family == "visual_preference":
+        return "；".join(
+            (
+                "可用试次 " + _ratio_text(metrics.get("usable_trial_ratio")),
+                "图片进入 " + _ratio_text(metrics.get("any_image_entry_ratio")),
+                "图片 A 停留 " + _ratio_text(metrics.get("image_dwell_share_a")),
+                "固定左侧停留 " + _ratio_text(metrics.get("left_dwell_share")),
+                "换边一致性 " + _ratio_text(metrics.get("side_swap_consistency")),
             )
         )
 
@@ -1185,6 +1429,30 @@ def _binary_trend_analysis(points: list[dict[str, object]]) -> str:
     )
 
 
+def _attention_trend_analysis(points: list[dict[str, object]]) -> str:
+    selected = [
+        point
+        for point in points
+        if point.get("metric_family") in {"gaze_garden", "visual_hunt", "visual_preference"}
+    ]
+    low_quality = 0
+
+    for point in selected:
+        warnings = point.get("quality_warnings")
+
+        if isinstance(warnings, list) and any(
+            isinstance(warning, dict) and warning.get("code") == "low_valid_sample_ratio"
+            for warning in warnings
+        ):
+            low_quality += 1
+
+    return (
+        f"共显示 {len(selected)} 个花园、寻宝或视觉偏好结果点，其中 "
+        f"{low_quality} 个带低有效率提示。图中不同颜色代表不同范式，"
+        "不同关键配置不连线、不计算前次差值，也不能互相比高低。"
+    )
+
+
 def _aggregate_gaze_rows(
     service: ExperimentSessionService,
     patient_id: UUID,
@@ -1212,6 +1480,7 @@ def _html_document(
     has_quality_plot: bool,
     has_tracking_plot: bool,
     has_binary_plot: bool,
+    has_attention_plot: bool,
 ) -> str:
     points = _flatten_points(document)
     rows = []
@@ -1276,6 +1545,15 @@ def _html_document(
             '<img src="binary_timing.png" '
             'alt="Binary timing trend">'
             + _analysis_html(_binary_trend_analysis(points))
+            + "</section>"
+        )
+
+    if has_attention_plot:
+        chart_sections.append(
+            "<section><h2>花园、寻宝与视觉偏好趋势</h2>"
+            '<img src="attention_tasks.png" '
+            'alt="Attention task descriptive metrics">'
+            + _analysis_html(_attention_trend_analysis(points))
             + "</section>"
         )
 
@@ -1429,6 +1707,7 @@ def generate_patient_trend_report(
     data_quality_path = report_directory / "data_quality.png"
     tracking_path = report_directory / "tracking_trend.png"
     binary_path = report_directory / "binary_timing.png"
+    attention_path = report_directory / "attention_tasks.png"
     points = _flatten_points(document)
     aggregate_rows, gaze_session_count, unreadable_gaze_session_count = _aggregate_gaze_rows(
         service,
@@ -1470,6 +1749,10 @@ def generate_patient_trend_report(
         points,
         binary_path,
     )
+    has_attention_plot = _attention_plot(
+        points,
+        attention_path,
+    )
 
     _atomic_write_json(
         report_json_path,
@@ -1483,6 +1766,7 @@ def generate_patient_trend_report(
             has_quality_plot=(has_quality_plot),
             has_tracking_plot=(has_tracking_plot),
             has_binary_plot=(has_binary_plot),
+            has_attention_plot=(has_attention_plot),
         ),
     )
 
@@ -1508,6 +1792,10 @@ def generate_patient_trend_report(
             has_binary_plot,
             binary_path,
         ),
+        (
+            has_attention_plot,
+            attention_path,
+        ),
     ):
         if has_plot:
             produced.append(path)
@@ -1528,4 +1816,5 @@ def generate_patient_trend_report(
         aggregate_heatmap_path=(aggregate_heatmap_path if has_aggregate_heatmap else None),
         tracking_path=(tracking_path if has_tracking_plot else None),
         binary_path=(binary_path if has_binary_plot else None),
+        attention_path=(attention_path if has_attention_plot else None),
     )

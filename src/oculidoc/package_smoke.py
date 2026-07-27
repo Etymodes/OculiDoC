@@ -14,6 +14,7 @@ from oculidoc.branding import (
     brand_mark_pixmap,
     brand_wordmark_pixmap,
 )
+from oculidoc.image_library import BUILT_IN_IMAGE_ASSETS
 
 _BRAND_ASSETS = (
     "app_icon.ico",
@@ -56,6 +57,9 @@ def build_package_smoke_report() -> dict[str, object]:
         max_width=480,
         max_height=440,
     )
+    reviewed_stimuli = tuple(
+        asset for asset in BUILT_IN_IMAGE_ASSETS if asset.relative_path is not None
+    )
 
     checks = {
         "all_assets_present": all(
@@ -71,6 +75,7 @@ def build_package_smoke_report() -> dict[str, object]:
         "blue_mark_loaded": (not blue_mark.isNull()),
         "white_mark_loaded": (not white_mark.isNull()),
         "wordmark_loaded": (not wordmark.isNull()),
+        "reviewed_stimuli_loaded": len(reviewed_stimuli) == 76,
         "qt_application_named": (app.applicationName() == "OculiDoC"),
     }
 

@@ -1,4 +1,4 @@
-"""Compatibility adapter for a locally installed GazeCollect/HPF system."""
+"""Compatibility adapter for third-party JSON gaze files."""
 
 from __future__ import annotations
 
@@ -26,11 +26,13 @@ def _is_windows() -> bool:
 
 
 class GazeCollectLegacyDevice:
-    """Read new gaze samples written by HPFMediaPlayer into GazeCollect JSON files.
+    """Read new gaze samples written by a third-party program into JSON files.
 
-    This adapter deliberately does not load the copied Tobii DLLs. HPFMediaPlayer owns
-    the Tobii connection; OculiDoC only consumes its output, avoiding two processes
-    subscribing to the same consumer eye tracker at once.
+    This adapter deliberately does not load another program's copied Tobii DLLs.
+    The producer owns the Tobii connection; OculiDoC only consumes its output,
+    avoiding two processes subscribing to the same consumer eye tracker at once.
+    GazeCollect ``*_origin.json`` values remain in their recorded physical
+    coordinate system; they are not guessed into normalized track-box positions.
     """
 
     def __init__(
@@ -60,13 +62,13 @@ class GazeCollectLegacyDevice:
         self._consumed = 0
         self._player: subprocess.Popen[bytes] | None = None
         self._info = DeviceInfo(
-            device_id="gaze-collect-legacy-file-bridge",
+            device_id="third-party-json-file-bridge",
             kind=DeviceKind.EYE_TRACKER,
-            name="GazeCollect / HPF 兼容模式",
-            manufacturer="Tobii / HPF legacy system",
-            model="HPFMediaPlayer JSON bridge",
+            name="第三方文件兼容",
+            manufacturer="第三方设备",
+            model="JSON file bridge",
             is_simulated=False,
-            capabilities=("screen_pixel_gaze", "json_file_bridge", "legacy_hpf"),
+            capabilities=("screen_pixel_gaze", "json_file_bridge", "third_party"),
         )
 
     @property
@@ -83,15 +85,13 @@ class GazeCollectLegacyDevice:
 
     def connect(self) -> None:
         if self._state is not DeviceState.DISCONNECTED:
-            raise InvalidDeviceStateError("Only a disconnected GazeCollect bridge can connect.")
+            raise InvalidDeviceStateError("Only a disconnected file bridge can connect.")
         if not _is_windows():
-            raise DeviceConnectionError("GazeCollect compatibility mode requires Windows.")
+            raise DeviceConnectionError("第三方文件兼容模式需要 Windows。")
         if not self.json_root.is_dir():
-            raise DeviceConnectionError(
-                f"GazeCollect JSON directory does not exist: {self.json_root}"
-            )
+            raise DeviceConnectionError(f"第三方眼动 JSON 目录不存在：{self.json_root}")
         if self.player_executable is not None and not self.player_executable.is_file():
-            raise DeviceConnectionError(f"HPFMediaPlayer does not exist: {self.player_executable}")
+            raise DeviceConnectionError(f"第三方采集程序不存在：{self.player_executable}")
         self._state = DeviceState.CONNECTED
 
     def disconnect(self) -> None:
@@ -105,7 +105,7 @@ class GazeCollectLegacyDevice:
 
     def start_stream(self) -> None:
         if self._state is not DeviceState.CONNECTED:
-            raise InvalidDeviceStateError("Connect the GazeCollect bridge before streaming.")
+            raise InvalidDeviceStateError("Connect the file bridge before streaming.")
         if self.player_executable is not None:
             self._player = subprocess.Popen(
                 [str(self.player_executable)],
@@ -131,7 +131,7 @@ class GazeCollectLegacyDevice:
 
     def stop_stream(self) -> None:
         if self._state is not DeviceState.STREAMING:
-            raise InvalidDeviceStateError("The GazeCollect bridge is not streaming.")
+            raise InvalidDeviceStateError("The file bridge is not streaming.")
         self._file = None
         self._consumed = 0
         self._state = DeviceState.CONNECTED
@@ -147,11 +147,11 @@ class GazeCollectLegacyDevice:
 
     def _next_payload(self) -> dict[str, object]:
         if self._state is not DeviceState.STREAMING:
-            raise InvalidDeviceStateError("The GazeCollect bridge is not streaming.")
+            raise InvalidDeviceStateError("The file bridge is not streaming.")
         newest = self._newest_gaze_file()
         if newest is None:
             sleep(self.poll_seconds)
-            raise TimeoutError("No GazeCollect gaze JSON file is available.")
+            raise TimeoutError("没有可读取的第三方眼动 JSON 文件。")
         if newest != self._file:
             self._file = newest
             self._consumed = 0
@@ -159,19 +159,19 @@ class GazeCollectLegacyDevice:
             records = json.loads(newest.read_text(encoding="utf-8-sig"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
             sleep(self.poll_seconds)
-            raise TimeoutError("GazeCollect is still writing the gaze JSON file.") from error
+            raise TimeoutError("第三方程序仍在写入眼动 JSON 文件。") from error
         if not isinstance(records, list):
-            raise DeviceReadError(f"GazeCollect gaze file must contain a JSON array: {newest}")
+            raise DeviceReadError(f"第三方眼动文件必须包含 JSON 数组：{newest}")
         if len(records) < self._consumed:
             # HPF rewrites the JSON array for a new run instead of appending forever.
             self._consumed = 0
         if self._consumed >= len(records):
             sleep(self.poll_seconds)
-            raise TimeoutError("No new GazeCollect sample is available.")
+            raise TimeoutError("暂无新的第三方眼动样本。")
         payload = records[self._consumed]
         self._consumed += 1
         if not isinstance(payload, dict):
-            raise DeviceReadError("GazeCollect sample must be a JSON object.")
+            raise DeviceReadError("第三方眼动样本必须是 JSON 对象。")
         return payload
 
     def read_sample(self) -> EyeTrackerSample:
@@ -186,7 +186,7 @@ class GazeCollectLegacyDevice:
             x_px = float(x_value)
             y_px = float(y_value)
         except (KeyError, TypeError, ValueError) as error:
-            raise DeviceReadError("GazeCollect sample requires numeric x and y.") from error
+            raise DeviceReadError("第三方眼动样本必须包含数值 x 和 y。") from error
         valid = payload.get("validity") in {1, "1"}
         if (
             not isfinite(x_px)
@@ -199,22 +199,21 @@ class GazeCollectLegacyDevice:
         # Observed HPF files use .NET ticks despite the historical timestamp_us name.
         try:
             if isinstance(source_timestamp, bool) or (
-                source_timestamp is not None
-                and not isinstance(source_timestamp, (int, float, str))
+                source_timestamp is not None and not isinstance(source_timestamp, (int, float, str))
             ):
                 raise TypeError
             source_timestamp_ns = (
                 int(source_timestamp) * 100 if source_timestamp is not None else None
             )
         except (TypeError, ValueError) as error:
-            raise DeviceReadError("GazeCollect timestamp_us must be an integer.") from error
+            raise DeviceReadError("第三方眼动 timestamp_us 必须是整数。") from error
         sample = EyeTrackerSample(
             timestamp=DeviceTimestamp(
                 sequence=self._sequence,
                 monotonic_timestamp_ns=monotonic_ns(),
                 utc_timestamp=datetime.now(UTC),
                 source_timestamp_ns=source_timestamp_ns,
-                source_clock_id="gaze-collect-hpf-dotnet-ticks",
+                source_clock_id="third-party-dotnet-ticks",
             ),
             gaze_x_normalized=x_px / self.screen_width_px if valid else None,
             gaze_y_normalized=y_px / self.screen_height_px if valid else None,

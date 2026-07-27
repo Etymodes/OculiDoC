@@ -34,7 +34,6 @@ def test_saved_gaze_device_config_overrides_next_launch(tmp_path: Path) -> None:
     dll_path = tmp_path / "tobii_stream_engine.dll"
     gaze_collect_root = tmp_path / "gaze-json"
     hpf_player = tmp_path / "HPFMediaPlayer.exe"
-    eye_position = tmp_path / "EyePosition.exe"
     just_need_to_see_root = tmp_path / "JustNeedToSee"
     store.save(
         GazeDeviceConfig(
@@ -44,7 +43,6 @@ def test_saved_gaze_device_config_overrides_next_launch(tmp_path: Path) -> None:
             tobii_bridge_port=8765,
             gaze_collect_json_root=gaze_collect_root,
             gaze_collect_player_executable=hpf_player,
-            eye_position_executable=eye_position,
             just_need_to_see_root=just_need_to_see_root,
             gaze_preflight_seconds=7,
             gaze_minimum_valid_ratio=0.75,
@@ -59,7 +57,6 @@ def test_saved_gaze_device_config_overrides_next_launch(tmp_path: Path) -> None:
     assert applied.tobii_bridge_port == 8765
     assert applied.gaze_collect_json_root == gaze_collect_root
     assert applied.gaze_collect_player_executable == hpf_player
-    assert applied.eye_position_executable == eye_position
     assert applied.just_need_to_see_root == just_need_to_see_root
     assert applied.gaze_preflight_seconds == 7
     assert applied.gaze_minimum_valid_ratio == 0.75
@@ -101,6 +98,28 @@ def test_saved_pre_compatibility_config_uses_new_path_defaults(tmp_path: Path) -
 
     assert applied.gaze_collect_json_root == Path(r"D:\GazeCollect\HPFData\json")
     assert applied.just_need_to_see_root == Path(r"D:\JustNeedToSee")
+
+
+def test_saved_external_eye_position_setting_is_ignored(tmp_path: Path) -> None:
+    settings = Settings(environment="test", data_dir=tmp_path)
+    store = GazeDeviceConfigStore.for_settings(settings)
+    store.path.parent.mkdir(parents=True)
+    store.path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "config": {
+                    **GazeDeviceConfig.from_settings(settings).to_dict(),
+                    "eye_position_executable": r"D:\EyePosition\EyePosition.exe",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = store.load(GazeDeviceConfig.from_settings(settings))
+
+    assert "eye_position_executable" not in loaded.to_dict()
 
 
 def test_saved_former_default_validity_threshold_is_migrated(tmp_path: Path) -> None:

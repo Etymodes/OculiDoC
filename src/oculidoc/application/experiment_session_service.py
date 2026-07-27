@@ -315,9 +315,7 @@ class ExperimentSessionService:
         """Delete one record while retaining its files in a recovery area."""
         session = self.get_session(session_id)
         archived_directory = (
-            self._workspace.archive_for_deletion(session)
-            if self._workspace is not None
-            else None
+            self._workspace.archive_for_deletion(session) if self._workspace is not None else None
         )
 
         try:

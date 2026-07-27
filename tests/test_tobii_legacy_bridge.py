@@ -68,6 +68,29 @@ def test_parse_pixel_gaze_payload() -> None:
     assert sample.gaze_valid is True
 
 
+def test_parse_optional_binocular_eye_positions() -> None:
+    sample = parse_tobii_bridge_payload(
+        {
+            "x": 0.5,
+            "y": 0.5,
+            "valid": True,
+            "eye_positions": {
+                "left_eye_position_normalized": {
+                    "x": 0.25,
+                    "y": 0.45,
+                    "z": 0.35,
+                },
+                "rightEyePositionNormalized": [0.75, 0.55, 0.65],
+            },
+        },
+        fallback_sequence=0,
+    )
+
+    assert sample.left_eye_position_normalized == (0.25, 0.45, 0.35)
+    assert sample.right_eye_position_normalized == (0.75, 0.55, 0.65)
+    assert sample.eye_position_available
+
+
 def test_bridge_reads_newline_json() -> None:
     listener = socket.socket(
         socket.AF_INET,

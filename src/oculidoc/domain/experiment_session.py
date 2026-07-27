@@ -236,7 +236,8 @@ class ExperimentSession:
         self.status = status
         self.failure_reason = (
             normalized_reason
-            if status in {
+            if status
+            in {
                 ExperimentSessionStatus.ABORTED,
                 ExperimentSessionStatus.FAILED,
             }

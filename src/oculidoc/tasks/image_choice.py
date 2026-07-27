@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -31,6 +32,8 @@ from oculidoc.image_library import (
     ImageLibraryDialog,
     ImageLibraryStore,
     asset_preview_pixmap,
+    normalize_image_category,
+    normalize_image_style,
 )
 from oculidoc.tasks.binary_question import BinaryQuestionConfig, BinaryQuestionTask
 from oculidoc.tasks.question_bank import BinaryQuestionType
@@ -61,8 +64,10 @@ class ImageChoiceConfig:
     question_ids: tuple[str, ...] = ()  # M3D12D compatibility; fixed pairings are ignored.
 
     def __post_init__(self) -> None:
-        categories = tuple(str(value).strip() for value in self.category_filters)
-        styles = tuple(str(value).strip() for value in self.style_filters)
+        categories = tuple(
+            dict.fromkeys(normalize_image_category(value) for value in self.category_filters)
+        )
+        styles = tuple(dict.fromkeys(normalize_image_style(value) for value in self.style_filters))
         legacy_ids = tuple(str(value).strip() for value in self.question_ids)
 
         for name, values in (
@@ -236,6 +241,15 @@ class ImageChoiceTask(BinaryQuestionTask):
         }
         self._feedback_by_option: dict[str, str] = {}
         self._rendered_icon_sizes: dict[str, int] = {}
+
+        for button in self._button_by_side.values():
+            # The icon follows the allocated button size, so its size hint must not
+            # feed back into the layout when Windows changes DPI at run time.
+            button.setSizePolicy(
+                QSizePolicy.Policy.Ignored,
+                QSizePolicy.Policy.Ignored,
+            )
+
         self._apply_image_icons()
 
     def _layout_payload(self) -> dict[str, object]:

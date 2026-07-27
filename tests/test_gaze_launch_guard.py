@@ -228,7 +228,7 @@ def test_duplicate_module_launch_is_blocked(
 
     assert completed.status is ExperimentSessionStatus.COMPLETED
     assert button.isEnabled() is True
-    assert button.text() == "打开项目"
+    assert button.text() == "追踪球"
     assert "tracking_ball" not in window._active_gaze_module_ids
 
     window.close()
@@ -259,7 +259,7 @@ def test_start_failure_releases_module_guard(
     assert not window._gaze_launches
     assert "binary_horizontal" not in window._active_gaze_module_ids
     assert button.isEnabled() is True
-    assert button.text() == "打开项目"
+    assert button.text() == "左右二分问答"
     assert any("无法启动眼动任务" in str(message) for call in messages for message in call)
     assert window._lan_state_store.load().mode is PatientDisplayMode.ERROR
 
