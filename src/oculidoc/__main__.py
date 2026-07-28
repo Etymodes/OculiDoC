@@ -51,6 +51,20 @@ def dispatch(
         print(json.dumps(result))
         return 0
 
+    if arguments == ["--install-latest-release"]:
+        import json
+
+        from oculidoc.updater import install_latest_release
+
+        try:
+            result = install_latest_release()
+        except Exception as error:  # noqa: BLE001 -- command boundary returns structured failure.
+            print(json.dumps({"status": "error", "message": str(error)}))
+            return 1
+
+        print(json.dumps(result))
+        return 0
+
     if arguments[:1] == ["--task"]:
         if len(arguments) < 2:
             raise SystemExit("--task requires a task command.")

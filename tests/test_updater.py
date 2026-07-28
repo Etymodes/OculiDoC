@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 import oculidoc.updater as updater
-from oculidoc.updater import UpdateError, find_repository_root, perform_update
+from oculidoc.updater import (
+    UpdateError,
+    _asset_url,
+    _version_tuple,
+    find_repository_root,
+    perform_update,
+)
 
 
 def _git(repo: Path, *arguments: str) -> str:
@@ -26,6 +32,21 @@ def test_find_repository_root_walks_from_source_file(tmp_path: Path) -> None:
     source.write_text("", encoding="utf-8")
 
     assert find_repository_root(source) == tmp_path
+
+
+def test_release_versions_compare_numerically() -> None:
+    assert _version_tuple("v0.10.0") > _version_tuple("0.9.9")
+    assert _version_tuple("v1.2.3") == (1, 2, 3)
+
+
+def test_release_asset_requires_https() -> None:
+    release = {
+        "assets": [
+            {"name": "OculiDoC-Setup.exe", "browser_download_url": "http://example.test/a"}
+        ]
+    }
+    with pytest.raises(UpdateError, match="不是 HTTPS"):
+        _asset_url(release, "OculiDoC-Setup.exe")
 
 
 def test_updater_refuses_dirty_checkout_before_network_access(tmp_path: Path) -> None:
