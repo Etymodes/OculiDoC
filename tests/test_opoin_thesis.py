@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from pytestqt.qtbot import QtBot
 
 import oculidoc.ui.opoin_thesis as opoin_thesis_module
@@ -20,6 +21,9 @@ from oculidoc.ui.opoin_thesis import (
 def _sample(
     left: tuple[float, float, float] | None,
     right: tuple[float, float, float] | None,
+    *,
+    left_mm: tuple[float, float, float] | None = None,
+    right_mm: tuple[float, float, float] | None = None,
 ) -> EyeTrackerSample:
     return EyeTrackerSample(
         timestamp=DeviceTimestamp(
@@ -33,6 +37,8 @@ def _sample(
         right_eye_valid=right is not None,
         left_eye_position_normalized=left,
         right_eye_position_normalized=right,
+        left_eye_position_mm=left_mm,
+        right_eye_position_mm=right_mm,
     )
 
 
@@ -44,13 +50,18 @@ def test_opoin_thesis_tracks_eye_positions_without_metrics(qtbot: QtBot) -> None
         _sample(
             (-0.2, 0.4, 0.3),
             (1.2, 0.6, 0.7),
+            left_mm=(-30.0, 0.0, 600.0),
+            right_mm=(30.0, 0.0, 620.0),
         )
     )
 
-    assert canvas.eye_positions == (
-        (-0.2, 0.4, 0.3),
-        (1.2, 0.6, 0.7),
-    )
+    left_eye, right_eye = canvas.eye_positions
+
+    assert left_eye == pytest.approx((1.2, 0.4))
+    assert right_eye == pytest.approx((-0.2, 0.6))
+    assert canvas.positioning_parameters is not None
+    assert canvas.positioning_parameters.distance_mm == 610.0
+    assert canvas.positioning_parameters.is_distance_in_range is True
     assert not hasattr(canvas, "valid_ratio")
 
 
@@ -103,7 +114,8 @@ def test_opoin_thesis_uses_capability_observed_by_matching_self_check() -> None:
         ),
     )
     assert "不支持" in diagnostic
-    assert "JustNeedToSee" in diagnostic
+    assert "JustNeedToSee" not in diagnostic
+    assert "tobii_stream_engine.dll" in diagnostic
     assert "组合注视有效率：100%" in diagnostic
     assert "Python：" in diagnostic
     assert "不能据此补造瞳孔或逐眼数据" in diagnostic

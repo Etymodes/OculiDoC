@@ -8,11 +8,11 @@ import oculidoc
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_first_release_uses_one_consistent_version() -> None:
+def test_release_uses_one_consistent_version() -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert metadata["project"]["version"] == "0.1.0"
-    assert oculidoc.__version__ == "0.1.0"
+    assert metadata["project"]["version"] == "0.1.1"
+    assert oculidoc.__version__ == "0.1.1"
 
 
 def test_public_readme_has_product_ownership_and_support_path() -> None:
@@ -24,6 +24,35 @@ def test_public_readme_has_product_ownership_and_support_path() -> None:
     assert "peterpig123456@gmail.com" in readme
     assert "feature/gaze-tasks-mvp" not in readme
     assert "M3D13" not in readme
+    assert "ὀποῖν θέσις" in readme
+    assert "open thesis" in readme
+    assert "TOBII_OFFICIAL_INTEGRATION.md" in readme
+
+
+def test_repository_workflow_uses_current_github_repo_as_source_of_truth() -> None:
+    workflow = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "Etymodes/OculiDoC" in workflow
+    assert "不得为了“重新理解项目”而反复解压、扫描或比较" in workflow
+    assert "医院眼动仪.zip" in workflow
+
+
+def test_tobii_integrations_remain_external_and_optional() -> None:
+    policy = (ROOT / "TOBII_OFFICIAL_INTEGRATION.md").read_text(encoding="utf-8")
+    metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependency_text = "\n".join(
+        metadata["project"]["dependencies"]
+        + [
+            dependency
+            for group in metadata["project"]["optional-dependencies"].values()
+            for dependency in group
+        ]
+    )
+
+    assert "Tobii Pro SDK" in policy
+    assert "Tobii Pro Glasses 3 API" in policy
+    assert "普通 Eye Tracker 5 是纯游戏设备，不能用于开发" in policy
+    assert "tobii_research" not in dependency_text
 
 
 def test_public_release_excludes_internal_development_documents() -> None:

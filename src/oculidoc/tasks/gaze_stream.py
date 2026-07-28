@@ -3,6 +3,7 @@
 from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from time import monotonic
 
@@ -139,7 +140,10 @@ def create_eye_position_tracker(settings: Settings) -> EyeTrackerDevice:
         if not compatibility_dll.is_file():
             continue
         candidates.append(
-            lambda dll=compatibility_dll: TobiiStreamEngineDevice(library_path=dll)
+            partial(
+                TobiiStreamEngineDevice,
+                library_path=compatibility_dll,
+            )
         )
     candidates.append(
         lambda: TobiiLegacyBridgeDevice(

@@ -197,7 +197,7 @@ class PatientSessionHistoryDialog(QDialog):
         self.result_button.setObjectName("viewSessionResultButton")
         self.result_button.clicked.connect(self._show_result)
 
-        self.report_button = QPushButton("生成报告")
+        self.report_button = QPushButton("生成单次报告…")
         self.report_button.setObjectName("generateGazeReportButton")
         self.report_button.clicked.connect(self._generate_report)
 
@@ -287,7 +287,7 @@ class PatientSessionHistoryDialog(QDialog):
         self._entries = {entry.session_id: entry for entry in filtered}
 
         self.table.clearSelection()
-        self.table.setCurrentItem(None)
+        self.table.setCurrentCell(-1, -1)
         self.table.setRowCount(len(filtered))
 
         for row, entry in enumerate(filtered):
@@ -620,17 +620,9 @@ class PatientSessionHistoryDialog(QDialog):
         """Generate and open a gaze report."""
 
         del checked
-        entry = self._require_entry()
+        entry = self._select_single_report_entry()
 
         if entry is None:
-            return
-
-        if entry.status is not ExperimentSessionStatus.COMPLETED:
-            QMessageBox.information(
-                self,
-                "无法生成报告",
-                "仅已完成的实验会话可以生成报告。",
-            )
             return
 
         try:
@@ -656,6 +648,81 @@ class PatientSessionHistoryDialog(QDialog):
             )
 
         self.refresh_sessions()
+
+    def _single_report_options(
+        self,
+    ) -> tuple[tuple[SessionHistoryEntry, str], ...]:
+        entries = build_patient_session_history(
+            self.service,
+            self.patient.patient_id,
+        )
+        completed = tuple(
+            entry for entry in entries if entry.status is ExperimentSessionStatus.COMPLETED
+        )
+        occurrence_by_session: dict[UUID, int] = {}
+        counts_by_module: dict[str, int] = {}
+
+        for entry in reversed(entries):
+            occurrence = counts_by_module.get(entry.module_id, 0) + 1
+            counts_by_module[entry.module_id] = occurrence
+            occurrence_by_session[entry.session_id] = occurrence
+
+        return tuple(
+            (
+                entry,
+                " · ".join(
+                    [
+                        entry.created_at.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                        _MODULE_TITLES.get(entry.module_id, entry.module_id),
+                        f"第 {occurrence_by_session[entry.session_id]} 次",
+                        (
+                            f"样本 {entry.sample_count}"
+                            if entry.sample_count is not None
+                            else "样本 —"
+                        ),
+                        f"有效率 {_format_ratio(entry.valid_sample_ratio)}",
+                    ]
+                ),
+            )
+            for entry in completed
+        )
+
+    def _select_single_report_entry(
+        self,
+    ) -> SessionHistoryEntry | None:
+        options = self._single_report_options()
+
+        if not options:
+            QMessageBox.information(
+                self,
+                "没有可生成的单次报告",
+                "该患者目前没有已完成的实验会话。",
+            )
+            return None
+
+        current = self._current_entry()
+        initial_index = next(
+            (
+                index
+                for index, (entry, _label) in enumerate(options)
+                if current is not None and entry.session_id == current.session_id
+            ),
+            0,
+        )
+        labels = [label for _entry, label in options]
+        selected_label, accepted = QInputDialog.getItem(
+            self,
+            "选择单次报告",
+            "请选择要生成报告的具体一次实验：",
+            labels,
+            initial_index,
+            False,
+        )
+
+        if not accepted:
+            return None
+
+        return next(entry for entry, label in options if label == selected_label)
 
     def _default_archive_name(
         self,

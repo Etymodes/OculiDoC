@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from PySide6.QtWidgets import (
+    QInputDialog,
     QMessageBox,
 )
 from pytest import MonkeyPatch
@@ -118,6 +119,11 @@ def test_history_generates_and_opens_report(
         "information",
         lambda *args: None,
     )
+    monkeypatch.setattr(
+        QInputDialog,
+        "getItem",
+        lambda _parent, _title, _prompt, items, _current, _editable: (items[0], True),
+    )
 
     dialog = PatientSessionHistoryDialog(
         runtime.experiment_session_service,
@@ -125,10 +131,78 @@ def test_history_generates_and_opens_report(
     )
     qtbot.addWidget(dialog)
 
+    assert dialog.report_button.text() == "生成单次报告…"
     dialog.report_button.click()
 
     assert len(generated) == 1
     assert len(opened) == 1
+
+    dialog.close()
+    runtime.dispose()
+
+
+def test_single_report_popup_selects_exact_session_without_table_preselection(
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    runtime = initialize_database(
+        tmp_path / "oculidoc.sqlite3",
+        data_root=tmp_path / "data",
+    )
+    patient = _completed_patient(runtime)
+    second_launch = create_gaze_task_launch(
+        runtime.experiment_session_service,
+        patient_id=patient.patient_id,
+        module_id="binary_horizontal",
+    )
+    finalize_gaze_task_launch(
+        runtime.experiment_session_service,
+        second_launch,
+        exit_code=0,
+    )
+    report_path = tmp_path / "selected-report.html"
+    report_path.write_text("<html></html>", encoding="utf-8")
+    generated: list[object] = []
+
+    monkeypatch.setattr(
+        history_module,
+        "generate_gaze_session_report",
+        lambda _service, session_id: (
+            generated.append(session_id) or SimpleNamespace(html_path=report_path)
+        ),
+    )
+    monkeypatch.setattr(
+        history_module.QDesktopServices,
+        "openUrl",
+        lambda _url: True,
+    )
+
+    dialog = PatientSessionHistoryDialog(
+        runtime.experiment_session_service,
+        patient,
+    )
+    qtbot.addWidget(dialog)
+    options = dialog._single_report_options()
+    target_entry, target_label = next(
+        option for option in options if option[0].session_id != second_launch.session_id
+    )
+
+    dialog.table.clearSelection()
+    dialog.table.setCurrentCell(-1, -1)
+    monkeypatch.setattr(
+        QInputDialog,
+        "getItem",
+        lambda _parent, _title, _prompt, items, _current, _editable: (
+            target_label if target_label in items else "",
+            target_label in items,
+        ),
+    )
+
+    dialog.report_button.click()
+
+    assert generated == [target_entry.session_id]
+    assert "第 1 次" in target_label
 
     dialog.close()
     runtime.dispose()

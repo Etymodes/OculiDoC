@@ -212,6 +212,8 @@ class EyeTrackerSample:
     right_pupil_diameter_mm: float | None = None
     left_eye_position_normalized: tuple[float, float, float] | None = None
     right_eye_position_normalized: tuple[float, float, float] | None = None
+    left_eye_position_mm: tuple[float, float, float] | None = None
+    right_eye_position_mm: tuple[float, float, float] | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -236,6 +238,8 @@ class EyeTrackerSample:
         for field_name in (
             "left_eye_position_normalized",
             "right_eye_position_normalized",
+            "left_eye_position_mm",
+            "right_eye_position_mm",
         ):
             _validate_optional_point_3d(
                 getattr(self, field_name),
