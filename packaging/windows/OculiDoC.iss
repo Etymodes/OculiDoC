@@ -13,7 +13,7 @@
 AppId={{0D948729-9AE7-43F4-99E7-4C2A156C970A}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=首都医科大学天坛医院意识障碍病区
+AppPublisher=Etymodes
 AppPublisherURL=https://github.com/Etymodes/OculiDoC
 AppSupportURL=https://github.com/Etymodes/OculiDoC/issues
 AppUpdatesURL=https://github.com/Etymodes/OculiDoC/releases
@@ -26,7 +26,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#OutputDir}
 OutputBaseFilename=OculiDoC-Setup
-SetupIconFile={#SourceDir}\assets\app_icon.ico
+SetupIconFile={#SourceDir}\_internal\oculidoc\assets\app_icon.ico
 UninstallDisplayIcon={app}\OculiDoC.exe
 Compression=lzma2
 SolidCompression=yes

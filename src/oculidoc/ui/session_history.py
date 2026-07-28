@@ -300,7 +300,8 @@ nav{{display:flex;gap:8px;padding:12px 16px;background:#fff;border-bottom:1px so
 button{{padding:9px 18px;border:1px solid #9eb4c5;border-radius:8px;background:#fff;cursor:pointer}}
 button.active{{background:#176b87;color:#fff;border-color:#176b87}}
 main{{height:calc(100% - 62px)}} section{{display:none;height:100%}} section.active{{display:block}}
-iframe{{width:100%;height:100%;border:0;background:#fff}} .empty{{margin:28px;padding:28px;background:#fff;border-radius:12px}}
+iframe{{width:100%;height:100%;border:0;background:#fff}}
+.empty{{margin:28px;padding:28px;background:#fff;border-radius:12px}}
 </style>
 </head>
 <body>

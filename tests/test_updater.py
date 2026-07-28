@@ -76,6 +76,7 @@ def test_updater_applies_only_clean_fast_forward(tmp_path: Path, monkeypatch) ->
     _git(author, "push", "-q", "origin", "main")
     expected = _git(author, "rev-parse", "HEAD")
     monkeypatch.setattr(updater, "PUBLIC_REPOSITORY_URL", str(remote))
+    monkeypatch.setattr(updater, "PUBLIC_REPOSITORY_SSH_443_URL", str(remote))
 
     result = perform_update(checkout)
 
