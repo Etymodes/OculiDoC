@@ -383,8 +383,7 @@ class MergePatientDialog(QDialog):
         tip.setStyleSheet("color:#5a7184;")
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok
-            | QDialogButtonBox.StandardButton.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -400,9 +399,7 @@ class MergePatientDialog(QDialog):
         patient = self.patients[index]
         self.patient_code_edit.setText(patient.patient_code)
         self.family_name_edit.setText(patient.family_name)
-        self.sex_combo.setCurrentIndex(
-            self.sex_combo.findData(patient.sex.value)
-        )
+        self.sex_combo.setCurrentIndex(self.sex_combo.findData(patient.sex.value))
         self.diagnosis_combo.setCurrentIndex(
             self.diagnosis_combo.findData(patient.clinical_diagnosis.value)
         )
@@ -434,9 +431,7 @@ class PatientManagementDialog(QDialog):
 
         self.patient_list = QListWidget()
         self.patient_list.setObjectName("patientList")
-        self.patient_list.setSelectionMode(
-            QAbstractItemView.SelectionMode.ExtendedSelection
-        )
+        self.patient_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.patient_list.itemDoubleClicked.connect(self._select_patient)
 
         self.patient_list.currentItemChanged.connect(self._refresh_detail)
@@ -534,7 +529,9 @@ class PatientManagementDialog(QDialog):
             return
 
         keep_id = UUID(str(dialog.keep_combo.currentData()))
-        source_id = next(patient.patient_id for patient in patients if patient.patient_id != keep_id)
+        source_id = next(
+            patient.patient_id for patient in patients if patient.patient_id != keep_id
+        )
         answer = QMessageBox.question(
             self,
             "确认合并患者",
@@ -553,18 +550,14 @@ class PatientManagementDialog(QDialog):
                 patient_code=dialog.patient_code_edit.text(),
                 family_name=dialog.family_name_edit.text(),
                 sex=Sex(str(dialog.sex_combo.currentData())),
-                clinical_diagnosis=ClinicalDiagnosis(
-                    str(dialog.diagnosis_combo.currentData())
-                ),
+                clinical_diagnosis=ClinicalDiagnosis(str(dialog.diagnosis_combo.currentData())),
             )
         except (KeyError, TypeError, ValueError) as error:
             QMessageBox.warning(self, "患者合并失败", str(error))
             return
 
         if self.experiment_session_service is not None:
-            self.experiment_session_service.synchronize_patient_metadata(
-                merged.patient_id
-            )
+            self.experiment_session_service.synchronize_patient_metadata(merged.patient_id)
         self.refresh_patients(merged.patient_id)
         QMessageBox.information(self, "患者已合并", merged.display_label)
 

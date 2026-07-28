@@ -72,8 +72,7 @@ def test_partial_identity_collision_imports_with_diff_code(
         patients = destination.patient_service.list_patients()
         assert summary.imported_count == 1
         assert any(
-            patient.patient_code == "DOC-COLLISION-001_01diff"
-            and patient.family_name == "同名"
+            patient.patient_code == "DOC-COLLISION-001_01diff" and patient.family_name == "同名"
             for patient in patients
         )
     finally:

@@ -399,9 +399,7 @@ class OpoinThesisDialog(QDialog):
     def _show_undetected(self, detail: str) -> None:
         self._set_status("未检测到眼位状态", error=True)
         self.canvas.set_empty_message("未检测到眼位状态")
-        self.diagnostic_label.setText(
-            f"{self._diagnostic_base_text}\n自动检测详情：{detail}"
-        )
+        self.diagnostic_label.setText(f"{self._diagnostic_base_text}\n自动检测详情：{detail}")
         if self._failure_shown:
             return
         self._failure_shown = True

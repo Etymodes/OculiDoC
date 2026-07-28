@@ -177,7 +177,7 @@ begin
   except
     MsgBox(
       GetExceptionMessage +
-      #13#10#13#10 +
+      Chr(13) + Chr(10) + Chr(13) + Chr(10) +
       '请返回并选择“离线安装当前版本”。',
       mbError,
       MB_OK

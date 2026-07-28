@@ -60,9 +60,7 @@ def test_build_outputs_are_ignored() -> None:
 
 
 def test_inno_installer_supports_online_offline_upgrade_and_shortcuts() -> None:
-    source = (
-        ROOT / "packaging" / "windows" / "OculiDoC.iss"
-    ).read_text(encoding="utf-8")
+    source = (ROOT / "packaging" / "windows" / "OculiDoC.iss").read_text(encoding="utf-8")
 
     assert "AppId={{0D948729-9AE7-43F4-99E7-4C2A156C970A}" in source
     assert "UsePreviousAppDir=yes" in source
@@ -76,9 +74,7 @@ def test_inno_installer_supports_online_offline_upgrade_and_shortcuts() -> None:
 
 
 def test_release_packager_builds_standard_installer() -> None:
-    source = (
-        ROOT / "scripts" / "package_windows_release.ps1"
-    ).read_text(encoding="utf-8")
+    source = (ROOT / "scripts" / "package_windows_release.ps1").read_text(encoding="utf-8")
 
     assert "Inno Setup 6" in source
     assert "ISCC.exe" in source

@@ -41,9 +41,7 @@ def test_release_versions_compare_numerically() -> None:
 
 def test_release_asset_requires_https() -> None:
     release = {
-        "assets": [
-            {"name": "OculiDoC-Setup.exe", "browser_download_url": "http://example.test/a"}
-        ]
+        "assets": [{"name": "OculiDoC-Setup.exe", "browser_download_url": "http://example.test/a"}]
     }
     with pytest.raises(UpdateError, match="不是 HTTPS"):
         _asset_url(release, "OculiDoC-Setup.exe")

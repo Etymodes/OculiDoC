@@ -543,10 +543,7 @@ class AdminMainWindow(QMainWindow):
                 "并启动安装器。"
                 "安装器启动后 OculiDoC 将退出。继续吗？"
                 if frozen
-                else (
-                    "将从官方仓库检查当前分支，并且只在工作区干净且可快进时"
-                    "更新。继续吗？"
-                )
+                else ("将从官方仓库检查当前分支，并且只在工作区干净且可快进时更新。继续吗？")
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,

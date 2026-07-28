@@ -138,9 +138,7 @@ def create_eye_position_tracker(settings: Settings) -> EyeTrackerDevice:
     for compatibility_dll in compatibility_dlls:
         if not compatibility_dll.is_file():
             continue
-        candidates.append(
-            lambda dll=compatibility_dll: TobiiStreamEngineDevice(library_path=dll)
-        )
+        candidates.append(lambda dll=compatibility_dll: TobiiStreamEngineDevice(library_path=dll))
     candidates.append(
         lambda: TobiiLegacyBridgeDevice(
             host=settings.tobii_bridge_host,

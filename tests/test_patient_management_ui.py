@@ -174,11 +174,10 @@ def test_merge_patients_preserves_both_session_histories(tmp_path) -> None:
 
         assert len(runtime.patient_service.list_patients()) == 1
         assert merged.notes == "第一段\n第二段"
-        assert len(
-            runtime.experiment_session_service.list_sessions_for_patient(
-                merged.patient_id
-            )
-        ) == 2
+        assert (
+            len(runtime.experiment_session_service.list_sessions_for_patient(merged.patient_id))
+            == 2
+        )
     finally:
         runtime.dispose()
 

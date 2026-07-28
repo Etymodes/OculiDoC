@@ -282,9 +282,7 @@ class PatientSessionHistoryDialog(QDialog):
         trend_url: str,
     ) -> str:
         if single_url:
-            single_content = (
-                f'<iframe title="单次实验报告" src="{escape(single_url)}"></iframe>'
-            )
+            single_content = f'<iframe title="单次实验报告" src="{escape(single_url)}"></iframe>'
         else:
             single_content = (
                 '<div class="empty"><h2>本次实验尚不能生成正式报告</h2>'

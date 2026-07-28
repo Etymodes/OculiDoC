@@ -157,9 +157,7 @@ class SQLitePatientRepository:
                 .values(patient_id=str(target.patient_id))
             )
             session.execute(
-                delete(PatientRecord).where(
-                    PatientRecord.patient_id == str(source_patient_id)
-                )
+                delete(PatientRecord).where(PatientRecord.patient_id == str(source_patient_id))
             )
             session.commit()
             session.refresh(target_record)
