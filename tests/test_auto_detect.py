@@ -25,6 +25,13 @@ class FakeHardwareEyeTracker(SimulatedEyeTrackerDevice):
             is_simulated=False,
         )
 
+    def read_sample(self):
+        return replace(
+            super().read_sample(),
+            left_eye_position_normalized=None,
+            right_eye_position_normalized=None,
+        )
+
 
 def test_auto_detect_tries_candidates_until_one_emits_a_sample() -> None:
     calls: list[str] = []

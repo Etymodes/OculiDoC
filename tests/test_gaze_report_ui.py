@@ -109,9 +109,24 @@ def test_history_generates_and_opens_report(
         fake_generate,
     )
     monkeypatch.setattr(
-        history_module.QDesktopServices,
-        "openUrl",
-        lambda url: opened.append(url) or True,
+        history_module,
+        "generate_patient_trend_report",
+        fake_generate,
+    )
+
+    class StubWebView(history_module.QWidget):
+        def setUrl(self, url: object) -> None:
+            opened.append(url)
+
+    monkeypatch.setattr(
+        history_module,
+        "QWebEngineView",
+        StubWebView,
+    )
+    monkeypatch.setattr(
+        history_module.QDialog,
+        "exec",
+        lambda _self: 0,
     )
     monkeypatch.setattr(
         QMessageBox,
@@ -125,10 +140,19 @@ def test_history_generates_and_opens_report(
     )
     qtbot.addWidget(dialog)
 
-    dialog.report_button.click()
+    selected = dialog._current_entry()
 
-    assert len(generated) == 1
+    assert selected is not None
+
+    dialog.summary_button.click()
+
+    assert len(generated) == 2
     assert len(opened) == 1
+
+    summary_path = selected.session_directory / "reports" / "report_summary.html"
+
+    assert summary_path.is_file()
+    assert Path(opened[0].toLocalFile()).resolve() == summary_path.resolve()
 
     dialog.close()
     runtime.dispose()
