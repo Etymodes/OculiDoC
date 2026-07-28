@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from oculidoc.config import Settings
@@ -72,6 +74,40 @@ def test_auto_detect_rejects_simulation_even_if_configured_as_a_candidate() -> N
 
     with pytest.raises(DeviceConnectionError, match="禁止使用模拟眼动源"):
         device.connect()
+
+
+def test_auto_detect_skips_samples_that_do_not_meet_required_capability() -> None:
+    calls: list[str] = []
+
+    def gaze_only_factory():
+        calls.append("gaze-only")
+        return FakeHardwareEyeTracker(max_samples=2)
+
+    class EyePositionHardware(FakeHardwareEyeTracker):
+        def read_sample(self):
+            return replace(
+                super().read_sample(),
+                left_eye_position_normalized=(0.4, 0.5, 0.6),
+            )
+
+    def eye_position_factory():
+        calls.append("eye-position")
+        return EyePositionHardware(max_samples=2)
+
+    device = AutoDetectEyeTrackerDevice(
+        (gaze_only_factory, eye_position_factory),
+        probe_timeout_seconds=0.05,
+        sample_predicate=lambda sample: sample.eye_position_available,
+        required_sample_description="左右眼三维眼位",
+    )
+
+    device.connect()
+
+    assert calls == ["gaze-only", "eye-position"]
+    device.start_stream()
+    assert device.read_sample().eye_position_available
+    device.stop_stream()
+    device.disconnect()
 
 
 def test_configured_auto_source_contains_only_hardware_candidates() -> None:

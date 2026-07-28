@@ -16,6 +16,7 @@ from oculidoc.devices.contracts import (
 from oculidoc.devices.errors import DeviceConnectionError, InvalidDeviceStateError
 
 EyeTrackerFactory = Callable[[], EyeTrackerDevice]
+SamplePredicate = Callable[[EyeTrackerSample], bool]
 
 
 class AutoDetectEyeTrackerDevice:
@@ -26,6 +27,8 @@ class AutoDetectEyeTrackerDevice:
         candidate_factories: tuple[EyeTrackerFactory, ...],
         *,
         probe_timeout_seconds: float = 1.25,
+        sample_predicate: SamplePredicate | None = None,
+        required_sample_description: str = "眼动样本",
     ) -> None:
         if not candidate_factories:
             raise ValueError("Auto-detection requires at least one hardware candidate.")
@@ -34,6 +37,8 @@ class AutoDetectEyeTrackerDevice:
 
         self.candidate_factories = candidate_factories
         self.probe_timeout_seconds = float(probe_timeout_seconds)
+        self.sample_predicate = sample_predicate or (lambda _sample: True)
+        self.required_sample_description = required_sample_description.strip() or "眼动样本"
         self._device: EyeTrackerDevice | None = None
         self._prefetched_sample: EyeTrackerSample | None = None
         self._state = DeviceState.DISCONNECTED
@@ -79,10 +84,15 @@ class AutoDetectEyeTrackerDevice:
         deadline = monotonic() + self.probe_timeout_seconds
         while monotonic() < deadline:
             try:
-                return candidate.read_sample()
+                sample = candidate.read_sample()
             except TimeoutError:
                 sleep(0.005)
-        raise DeviceConnectionError("已连接接口，但检测时限内没有收到眼动样本。")
+                continue
+            if self.sample_predicate(sample):
+                return sample
+        raise DeviceConnectionError(
+            f"已连接接口，但检测时限内没有收到{self.required_sample_description}。"
+        )
 
     def connect(self) -> None:
         if self._state is not DeviceState.DISCONNECTED:
