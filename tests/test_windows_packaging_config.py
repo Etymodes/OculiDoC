@@ -57,3 +57,30 @@ def test_build_outputs_are_ignored() -> None:
 
     assert "build/pyinstaller/" in source
     assert "dist/windows/" in source
+
+
+def test_inno_installer_supports_online_offline_upgrade_and_shortcuts() -> None:
+    source = (
+        ROOT / "packaging" / "windows" / "OculiDoC.iss"
+    ).read_text(encoding="utf-8")
+
+    assert "AppId={{0D948729-9AE7-43F4-99E7-4C2A156C970A}" in source
+    assert "UsePreviousAppDir=yes" in source
+    assert "在线安装最新版本" in source
+    assert "离线安装当前版本" in source
+    assert "DownloadTemporaryFile(" in source
+    assert "GetSHA256OfFile(" in source
+    assert "HasCommandLineParam('/OFFLINE')" in source
+    assert r"{autodesktop}\OculiDoC" in source
+    assert r"{autoprograms}\OculiDoC" in source
+
+
+def test_release_packager_builds_standard_installer() -> None:
+    source = (
+        ROOT / "scripts" / "package_windows_release.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert "Inno Setup 6" in source
+    assert "ISCC.exe" in source
+    assert "OculiDoC-Setup.exe" in source
+    assert '"$setupPath.sha256"' in source

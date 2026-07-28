@@ -50,18 +50,29 @@
 
 ## 安装
 
+### Windows 安装包（推荐）
+
+适用于没有 Git、Python 或开发环境的 Windows 10/11 电脑。直接下载并双击
+[OculiDoC-Setup.exe](https://github.com/Etymodes/OculiDoC/releases/latest/download/OculiDoC-Setup.exe)。
+安装界面可以选择：
+
+- **在线安装最新版本**：下载并核验 GitHub 最新正式安装包；
+- **离线安装当前版本**：使用安装包内置文件，不需要联网。
+
+安装器会识别已有标准安装和旧便携版默认目录，显示并沿用原路径；也可以自选路径。
+安装完成后自动创建桌面及开始菜单快捷方式，并可在 Windows“已安装的应用”中卸载。
+
 ### 0 依赖便携版
 
-适用于没有 Git、Python 或开发环境的 Windows 10/11 电脑。复制下面一整行到 PowerShell；
-脚本会下载最新 Release、核对 SHA-256、安装到当前用户目录并创建桌面快捷方式。更新便携版
-时重复运行同一命令，既有 `data` 患者数据目录会先备份再恢复。
+不希望登记安装信息时，可从 [Releases](https://github.com/Etymodes/OculiDoC/releases)
+下载 `OculiDoC-*-windows-x64-portable.zip`，解压后运行 `OculiDoC.exe`。
+
+旧式 PowerShell 一行安装仍保留作应急方案。以下命令不包含易受路径空格和括号影响的
+本地路径拼接，并会安装到当前用户目录、创建桌面快捷方式：
 
 ```powershell
-$ErrorActionPreference="Stop"; $b="https://github.com/Etymodes/OculiDoC/releases/latest/download"; $p=Join-Path $env:TEMP "Install-OculiDoC.ps1"; Invoke-WebRequest "$b/Install-OculiDoC.ps1" -UseBasicParsing -OutFile $p; Invoke-WebRequest "$b/Install-OculiDoC.ps1.sha256" -UseBasicParsing -OutFile "$p.sha256"; $e=((Get-Content "$p.sha256" -Raw).Trim() -split "\s+")[0].ToLowerInvariant(); if($e -notmatch "^[0-9a-f]{64}$" -or (Get-FileHash $p -Algorithm SHA256).Hash.ToLowerInvariant() -ne $e){throw "安装脚本 SHA-256 校验失败"}; & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $p
+irm "https://github.com/Etymodes/OculiDoC/releases/latest/download/Install-OculiDoC.ps1" | iex
 ```
-
-也可从 [Releases](https://github.com/Etymodes/OculiDoC/releases) 下载
-`OculiDoC-*-windows-x64-portable.zip`，在离线电脑解压后直接运行 `OculiDoC.exe`。
 
 ### 已克隆源码版
 
@@ -88,7 +99,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\update.ps1
 ```
 
 更新仅接受官方仓库 `main` 分支的干净工作区和快进合并；发现本地修改或分叉时会停止。
-便携版更新请重新运行上面的“0 依赖便携版”命令。
+安装版更新请重新运行安装器并选择“在线安装最新版本”；便携版可重新运行应急命令。
 
 ## 上报 Bug
 

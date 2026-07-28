@@ -62,3 +62,14 @@ def test_ci_builds_and_tag_workflow_publishes_verified_portable_package() -> Non
     assert "permissions:\n  contents: write" in release
     assert "gh release create" in release
     assert "package_windows_release.ps1" in release
+    assert "choco install innosetup" in release
+
+
+def test_readme_recommends_installer_and_keeps_short_emergency_command() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert "OculiDoC-Setup.exe" in readme
+    assert "在线安装最新版本" in readme
+    assert "离线安装当前版本" in readme
+    assert 'irm "https://github.com/Etymodes/OculiDoC/releases/latest/download/' in readme
+    assert "Join-Path $env:TEMP" not in readme
