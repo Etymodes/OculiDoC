@@ -252,7 +252,7 @@ def test_trend_report_generates_and_registers_artifacts(
 
     html_text = artifacts.html_path.read_text(encoding="utf-8")
 
-    assert "患者全部任务综合报告" in html_text
+    assert "OculiDoC 患者全部任务综合报告" in html_text
     assert patient.display_label in html_text
     assert str(patient.patient_id) not in html_text
     assert "全部任务综合热力图" in html_text

@@ -46,9 +46,7 @@ from oculidoc.application.gaze_task_session import (
     create_gaze_task_launch,
     finalize_gaze_task_launch,
 )
-from oculidoc.branding import (
-    brand_mark_pixmap,
-)
+from oculidoc.branding import brand_mark_pixmap
 from oculidoc.config import (
     AdminUiMode,
     AdminUiPreferences,
