@@ -36,3 +36,7 @@ class PatientRepository(Protocol):
     def update(self, patient: Patient) -> Patient:
         """Persist changes to an existing patient."""
         ...
+
+    def merge(self, source_patient_id: UUID, target: Patient) -> Patient:
+        """Move source history into target and remove the source patient."""
+        ...

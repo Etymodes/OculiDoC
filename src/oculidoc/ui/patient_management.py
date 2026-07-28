@@ -8,6 +8,7 @@ from uuid import UUID
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDateEdit,
@@ -338,6 +339,75 @@ class EditPatientDialog(RegisterPatientDialog):
         )
 
 
+class MergePatientDialog(QDialog):
+    """Choose the retained identity before merging exactly two patients."""
+
+    def __init__(
+        self,
+        patients: tuple[Patient, Patient],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.patients = patients
+        self.merged_patient: Patient | None = None
+        self.setWindowTitle("合并患者")
+        self.setMinimumWidth(480)
+
+        self.keep_combo = QComboBox()
+        for patient in patients:
+            self.keep_combo.addItem(patient.display_label, str(patient.patient_id))
+        self.patient_code_edit = QLineEdit()
+        self.family_name_edit = QLineEdit()
+        self.sex_combo = QComboBox()
+        for sex in Sex:
+            self.sex_combo.addItem(SEX_LABELS[sex], sex.value)
+        self.diagnosis_combo = QComboBox()
+        for diagnosis in ClinicalDiagnosis:
+            self.diagnosis_combo.addItem(
+                diagnosis_display_name(diagnosis),
+                diagnosis.value,
+            )
+
+        form = QFormLayout()
+        form.addRow("保留患者：", self.keep_combo)
+        form.addRow("患者编号：", self.patient_code_edit)
+        form.addRow("患者姓名：", self.family_name_edit)
+        form.addRow("性别：", self.sex_combo)
+        form.addRow("标准临床诊断：", self.diagnosis_combo)
+
+        tip = QLabel(
+            "另一患者的实验、审计记录及文本资料会并入保留患者；"
+            "重复文本只保留一份。出生日期优先保留所选患者，入组日期取较早者。"
+        )
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color:#5a7184;")
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        self.keep_combo.currentIndexChanged.connect(self._load_identity)
+
+        root = QVBoxLayout(self)
+        root.addLayout(form)
+        root.addWidget(tip)
+        root.addWidget(buttons)
+        self._load_identity(0)
+
+    def _load_identity(self, index: int) -> None:
+        patient = self.patients[index]
+        self.patient_code_edit.setText(patient.patient_code)
+        self.family_name_edit.setText(patient.family_name)
+        self.sex_combo.setCurrentIndex(
+            self.sex_combo.findData(patient.sex.value)
+        )
+        self.diagnosis_combo.setCurrentIndex(
+            self.diagnosis_combo.findData(patient.clinical_diagnosis.value)
+        )
+
+
 class PatientManagementDialog(QDialog):
     """Manage registered patients and choose the active patient."""
 
@@ -364,6 +434,9 @@ class PatientManagementDialog(QDialog):
 
         self.patient_list = QListWidget()
         self.patient_list.setObjectName("patientList")
+        self.patient_list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
         self.patient_list.itemDoubleClicked.connect(self._select_patient)
 
         self.patient_list.currentItemChanged.connect(self._refresh_detail)
@@ -393,6 +466,10 @@ class PatientManagementDialog(QDialog):
         self.status_button.setObjectName("togglePatientStatusButton")
         self.status_button.clicked.connect(self._toggle_patient_status)
 
+        self.merge_button = QPushButton("合并两个患者")
+        self.merge_button.setObjectName("mergePatientsButton")
+        self.merge_button.clicked.connect(self._merge_patients)
+
         self.export_button = QPushButton("一键导出患者与实验数据")
         self.export_button.setObjectName("exportPatientDataButton")
         self.export_button.clicked.connect(self._export_patient_data)
@@ -412,6 +489,7 @@ class PatientManagementDialog(QDialog):
         actions.addWidget(self.new_button)
         actions.addWidget(self.edit_button)
         actions.addWidget(self.status_button)
+        actions.addWidget(self.merge_button)
         actions.addStretch(1)
         actions.addWidget(self.select_button)
         actions.addWidget(close_button)
@@ -432,6 +510,63 @@ class PatientManagementDialog(QDialog):
         root.addLayout(actions)
 
         self.refresh_patients()
+
+    def _merge_patients(self, checked: bool = False) -> None:
+        del checked
+        selected_ids = [
+            UUID(str(item.data(Qt.ItemDataRole.UserRole)))
+            for item in self.patient_list.selectedItems()
+        ]
+        if len(selected_ids) != 2:
+            QMessageBox.information(
+                self,
+                "请选择两个患者",
+                "请按住 Ctrl 勾选恰好两个患者后再合并。",
+            )
+            return
+        patients = tuple(self.patient_service.get_patient(value) for value in selected_ids)
+        if any(patient.patient_code.casefold() == "beta00" for patient in patients):
+            QMessageBox.warning(self, "不能合并", "内置虚拟患者 Beta00 不能参与合并。")
+            return
+
+        dialog = MergePatientDialog(patients, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        keep_id = UUID(str(dialog.keep_combo.currentData()))
+        source_id = next(patient.patient_id for patient in patients if patient.patient_id != keep_id)
+        answer = QMessageBox.question(
+            self,
+            "确认合并患者",
+            "合并后，被合并的患者记录会删除，其全部实验和文本资料会转入保留患者。"
+            "\n此操作不可自动拆分，是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            merged = self.patient_service.merge_patients(
+                target_patient_id=keep_id,
+                source_patient_id=source_id,
+                patient_code=dialog.patient_code_edit.text(),
+                family_name=dialog.family_name_edit.text(),
+                sex=Sex(str(dialog.sex_combo.currentData())),
+                clinical_diagnosis=ClinicalDiagnosis(
+                    str(dialog.diagnosis_combo.currentData())
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            QMessageBox.warning(self, "患者合并失败", str(error))
+            return
+
+        if self.experiment_session_service is not None:
+            self.experiment_session_service.synchronize_patient_metadata(
+                merged.patient_id
+            )
+        self.refresh_patients(merged.patient_id)
+        QMessageBox.information(self, "患者已合并", merged.display_label)
 
     def _export_patient_data(self, checked: bool = False) -> None:
         """Export every patient and completed experiment to one CSV file."""
@@ -461,7 +596,7 @@ class PatientManagementDialog(QDialog):
         QMessageBox.information(
             self,
             "患者与实验数据已导出",
-            f"已将 {len(patients)} 名患者及其全部实验数据导出为一个 CSV。\n{path}",
+            f"已导出除 Beta00 外的患者及其全部实验数据。\n{path}",
         )
 
     def _import_patient_data(self, checked: bool = False) -> None:
@@ -506,7 +641,8 @@ class PatientManagementDialog(QDialog):
             f"新增 {summary.imported_count} 名；"
             f"恢复 {summary.imported_session_count} 次实验、"
             f"{summary.imported_file_count} 个文件；"
-            f"同编号已存在并整名跳过 {summary.skipped_duplicate_count} 名。",
+            f"同编号同姓名已合并或 Beta00 已跳过 "
+            f"{summary.skipped_duplicate_count} 名。",
         )
 
     def refresh_patients(

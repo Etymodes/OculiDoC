@@ -181,6 +181,11 @@ class ExperimentSessionService:
         """Return sessions belonging to one patient."""
         return self._session_repository.list_for_patient(patient_id)
 
+    def synchronize_patient_metadata(self, patient_id: UUID) -> None:
+        """Rewrite session metadata after a patient-record merge."""
+        for session in self.list_sessions_for_patient(patient_id):
+            self._write_metadata(session)
+
     def restore_session(
         self,
         session: ExperimentSession,

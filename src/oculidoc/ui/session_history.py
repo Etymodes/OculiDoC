@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from html import escape
 from pathlib import Path
 from uuid import UUID
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
+from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -193,18 +195,10 @@ class PatientSessionHistoryDialog(QDialog):
         self.open_button.setObjectName("openSessionDirectoryButton")
         self.open_button.clicked.connect(self._open_directory)
 
-        self.result_button = QPushButton("查看结果")
-        self.result_button.setObjectName("viewSessionResultButton")
-        self.result_button.clicked.connect(self._show_result)
-
-        self.report_button = QPushButton("生成报告")
-        self.report_button.setObjectName("generateGazeReportButton")
-        self.report_button.clicked.connect(self._generate_report)
-
-        self.trend_button = QPushButton("一键综合报告")
-        self.trend_button.setObjectName("generatePatientTrendReportButton")
-        self.trend_button.setToolTip("汇总该患者全部任务、综合热力图与纵向变化")
-        self.trend_button.clicked.connect(self._generate_trend_report)
+        self.summary_button = QPushButton("报告总结")
+        self.summary_button.setObjectName("openReportSummaryButton")
+        self.summary_button.setToolTip("在同一窗口切换单次实验与患者全部实验总结")
+        self.summary_button.clicked.connect(self._open_report_summary)
 
         self.export_button = QPushButton("导出 ZIP")
         self.export_button.setObjectName("exportSessionZipButton")
@@ -226,9 +220,7 @@ class PatientSessionHistoryDialog(QDialog):
 
         actions = QHBoxLayout()
         actions.addWidget(self.open_button)
-        actions.addWidget(self.result_button)
-        actions.addWidget(self.report_button)
-        actions.addWidget(self.trend_button)
+        actions.addWidget(self.summary_button)
         actions.addWidget(self.export_button)
         actions.addWidget(self.status_button)
         actions.addWidget(self.delete_button)
@@ -243,6 +235,96 @@ class PatientSessionHistoryDialog(QDialog):
         root.addLayout(actions)
 
         self.refresh_sessions()
+
+    def _open_report_summary(self, checked: bool = False) -> None:
+        """Build one local HTML shell for single-session and longitudinal reports."""
+        del checked
+        entry = self._require_entry()
+        if entry is None:
+            return
+
+        try:
+            trend = generate_patient_trend_report(self.service, entry.session_id)
+            single_url = ""
+            if entry.status is ExperimentSessionStatus.COMPLETED:
+                single = generate_gaze_session_report(self.service, entry.session_id)
+                single_url = single.html_path.resolve().as_uri()
+            summary_path = entry.session_directory / "reports" / "report_summary.html"
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text(
+                self._report_summary_html(
+                    entry,
+                    single_url=single_url,
+                    trend_url=trend.html_path.resolve().as_uri(),
+                ),
+                encoding="utf-8",
+            )
+        except Exception as error:
+            QMessageBox.critical(self, "报告总结生成失败", str(error))
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"{self.patient.display_label} · 报告总结")
+        dialog.resize(1180, 780)
+        browser = QWebEngineView(dialog)
+        browser.setUrl(QUrl.fromLocalFile(str(summary_path)))
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(browser)
+        dialog.exec()
+        self.refresh_sessions()
+
+    def _report_summary_html(
+        self,
+        entry: SessionHistoryEntry,
+        *,
+        single_url: str,
+        trend_url: str,
+    ) -> str:
+        if single_url:
+            single_content = (
+                f'<iframe title="单次实验报告" src="{escape(single_url)}"></iframe>'
+            )
+        else:
+            single_content = (
+                '<div class="empty"><h2>本次实验尚不能生成正式报告</h2>'
+                f"<p>状态：{escape(_STATUS_LABELS[entry.status])}</p>"
+                "<p>仅已完成的实验会话生成单次报告；可切换到“全部实验总结”。</p></div>"
+            )
+        return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>OculiDoC 报告总结</title>
+<style>
+html,body{{height:100%;margin:0;background:#f4f7fa;font-family:"Microsoft YaHei",sans-serif}}
+nav{{display:flex;gap:8px;padding:12px 16px;background:#fff;border-bottom:1px solid #d9e3ec}}
+button{{padding:9px 18px;border:1px solid #9eb4c5;border-radius:8px;background:#fff;cursor:pointer}}
+button.active{{background:#176b87;color:#fff;border-color:#176b87}}
+main{{height:calc(100% - 62px)}} section{{display:none;height:100%}} section.active{{display:block}}
+iframe{{width:100%;height:100%;border:0;background:#fff}} .empty{{margin:28px;padding:28px;background:#fff;border-radius:12px}}
+</style>
+</head>
+<body>
+<nav>
+<button class="active" data-tab="single">单次实验</button>
+<button data-tab="all">全部实验总结</button>
+</nav>
+<main>
+<section id="single" class="active">{single_content}</section>
+<section id="all"><iframe title="全部实验总结" src="{escape(trend_url)}"></iframe></section>
+</main>
+<script>
+for (const button of document.querySelectorAll("button[data-tab]")) {{
+  button.addEventListener("click", () => {{
+    document.querySelectorAll("button, section").forEach(x => x.classList.remove("active"));
+    button.classList.add("active");
+    document.getElementById(button.dataset.tab).classList.add("active");
+  }});
+}}
+</script>
+</body>
+</html>"""
 
     def _current_entry(
         self,

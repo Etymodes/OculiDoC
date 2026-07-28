@@ -64,6 +64,13 @@ class FakePatientRepository:
         self.patients[patient.patient_id] = patient
         return patient
 
+    def merge(self, source_patient_id: UUID, target: Patient) -> Patient:
+        if source_patient_id not in self.patients:
+            raise KeyError(source_patient_id)
+        del self.patients[source_patient_id]
+        self.patients[target.patient_id] = target
+        return target
+
 
 def create_service() -> tuple[
     PatientService,

@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QMessageBox
 from pytestqt.qtbot import QtBot
 
 from oculidoc.application import (
+    CreateExperimentSessionRequest,
     RegisterPatientRequest,
     UpdatePatientRequest,
 )
@@ -127,8 +128,59 @@ def test_patient_management_exposes_import_and_export_buttons(
 
     assert dialog.export_button.text() == "一键导出患者与实验数据"
     assert dialog.import_button.text() == "一键导入患者与实验数据"
+    assert dialog.merge_button.text() == "合并两个患者"
 
     runtime.dispose()
+
+
+def test_merge_patients_preserves_both_session_histories(tmp_path) -> None:
+    runtime = initialize_database(tmp_path / "patients.sqlite3", data_root=tmp_path)
+    try:
+        first = runtime.patient_service.register_patient(
+            RegisterPatientRequest(
+                patient_code="DOC-MERGE-001",
+                family_name="保留",
+                notes="第一段",
+            )
+        )
+        second = runtime.patient_service.register_patient(
+            RegisterPatientRequest(
+                patient_code="DOC-MERGE-002",
+                family_name="并入",
+                notes="第二段",
+            )
+        )
+        runtime.experiment_session_service.create_session(
+            CreateExperimentSessionRequest(
+                patient_id=first.patient_id,
+                module_id="tracking_ball",
+            )
+        )
+        runtime.experiment_session_service.create_session(
+            CreateExperimentSessionRequest(
+                patient_id=second.patient_id,
+                module_id="visual_preference",
+            )
+        )
+
+        merged = runtime.patient_service.merge_patients(
+            target_patient_id=first.patient_id,
+            source_patient_id=second.patient_id,
+            patient_code="DOC-MERGED",
+            family_name="合并",
+            sex=Sex.UNKNOWN,
+            clinical_diagnosis=ClinicalDiagnosis.UNKNOWN,
+        )
+
+        assert len(runtime.patient_service.list_patients()) == 1
+        assert merged.notes == "第一段\n第二段"
+        assert len(
+            runtime.experiment_session_service.list_sessions_for_patient(
+                merged.patient_id
+            )
+        ) == 2
+    finally:
+        runtime.dispose()
 
 
 def test_main_window_refreshes_and_clears_current_patient(
