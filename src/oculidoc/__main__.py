@@ -45,10 +45,10 @@ def dispatch(
         try:
             result = perform_update(Path(arguments[2]))
         except Exception as error:  # noqa: BLE001 -- command boundary returns structured failure.
-            print(json.dumps({"status": "error", "message": str(error)}, ensure_ascii=False))
+            print(json.dumps({"status": "error", "message": str(error)}))
             return 1
 
-        print(json.dumps(result, ensure_ascii=False))
+        print(json.dumps(result))
         return 0
 
     if arguments[:1] == ["--task"]:

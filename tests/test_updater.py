@@ -64,3 +64,15 @@ def test_updater_applies_only_clean_fast_forward(tmp_path: Path, monkeypatch) ->
     assert result["after"] == expected
     assert _git(checkout, "rev-parse", "HEAD") == expected
     assert perform_update(checkout)["status"] == "up_to_date"
+
+
+def test_updater_refuses_non_main_branch(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q", "-b", "feature/test", str(tmp_path)], check=True)
+    _git(tmp_path, "config", "user.name", "OculiDoC Test")
+    _git(tmp_path, "config", "user.email", "test@example.invalid")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='oculidoc'\n", encoding="utf-8")
+    _git(tmp_path, "add", "pyproject.toml")
+    _git(tmp_path, "commit", "-qm", "initial")
+
+    with pytest.raises(UpdateError, match="只更新 main"):
+        perform_update(tmp_path)

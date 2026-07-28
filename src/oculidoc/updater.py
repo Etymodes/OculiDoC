@@ -8,6 +8,10 @@ import subprocess
 from pathlib import Path
 
 PUBLIC_REPOSITORY_URL = "https://github.com/Etymodes/OculiDoC.git"
+PUBLIC_REPOSITORY_SSH_443_URL = (
+    "ssh://git@ssh.github.com:443/Etymodes/OculiDoC.git"
+)
+PUBLIC_BRANCH = "main"
 
 
 class UpdateError(RuntimeError):
@@ -33,9 +37,9 @@ def _git(repo: Path, *arguments: str, check: bool = True) -> subprocess.Complete
         check=False,
         capture_output=True,
         text=True,
-        encoding="utf-8",
+        encoding=None,
         errors="replace",
-        timeout=120,
+        timeout=30,
     )
 
     if check and completed.returncode != 0:
@@ -45,8 +49,54 @@ def _git(repo: Path, *arguments: str, check: bool = True) -> subprocess.Complete
     return completed
 
 
+def _public_sources(repo: Path) -> list[str]:
+    sources: list[str] = []
+    remotes = _git(repo, "remote", check=False).stdout.splitlines()
+
+    for remote in remotes:
+        url = _git(repo, "remote", "get-url", remote, check=False).stdout.strip()
+        normalized = url.lower().removesuffix(".git").replace("\\", "/")
+        if normalized.endswith("etymodes/oculidoc"):
+            sources.append(remote)
+
+    for fallback in (PUBLIC_REPOSITORY_SSH_443_URL, PUBLIC_REPOSITORY_URL):
+        if fallback not in sources:
+            sources.append(fallback)
+
+    return sources
+
+
+def _fetch_public_main(repo: Path) -> str:
+    errors: list[str] = []
+
+    for source in _public_sources(repo):
+        try:
+            fetched = _git(
+                repo,
+                "fetch",
+                "--quiet",
+                source,
+                f"refs/heads/{PUBLIC_BRANCH}",
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            errors.append(f"{source}: 连接超时")
+            continue
+
+        if fetched.returncode == 0:
+            return _git(repo, "rev-parse", "FETCH_HEAD").stdout.strip()
+
+        message = fetched.stderr.strip() or fetched.stdout.strip() or "连接失败"
+        errors.append(f"{source}: {message}")
+
+    raise UpdateError(
+        "无法连接 OculiDoC 官方 main 分支。请检查网络或 GitHub SSH 配置。\n"
+        + "\n".join(errors)
+    )
+
+
 def perform_update(repo_root: str | Path) -> dict[str, object]:
-    """Fetch the current branch over HTTPS and apply only a clean fast-forward."""
+    """Fetch public main and apply only a clean fast-forward."""
     repo = Path(repo_root).expanduser().resolve()
 
     if find_repository_root(repo) != repo:
@@ -59,10 +109,14 @@ def perform_update(repo_root: str | Path) -> dict[str, object]:
 
     if not branch:
         raise UpdateError("当前仓库处于 detached HEAD，无法一键更新。")
+    if branch != PUBLIC_BRANCH:
+        raise UpdateError(
+            f"当前位于 {branch} 分支；一键更新只更新 {PUBLIC_BRANCH}。"
+            f"请先切换到 {PUBLIC_BRANCH}。"
+        )
 
     before = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    _git(repo, "fetch", "--quiet", PUBLIC_REPOSITORY_URL, f"refs/heads/{branch}")
-    available = _git(repo, "rev-parse", "FETCH_HEAD").stdout.strip()
+    available = _fetch_public_main(repo)
 
     if before == available:
         return {
@@ -99,10 +153,10 @@ def main() -> int:
     try:
         result = perform_update(args.repo)
     except (OSError, subprocess.SubprocessError, UpdateError) as error:
-        print(json.dumps({"status": "error", "message": str(error)}, ensure_ascii=False))
+        print(json.dumps({"status": "error", "message": str(error)}))
         return 1
 
-    print(json.dumps(result, ensure_ascii=False))
+    print(json.dumps(result))
     return 0
 
 
