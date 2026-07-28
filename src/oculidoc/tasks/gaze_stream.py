@@ -3,6 +3,7 @@
 from contextlib import suppress
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from time import monotonic
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -117,6 +118,44 @@ def create_eye_tracker(
     raise ValueError(f"Unsupported gaze source: {settings.gaze_source}")
 
 
+def create_eye_position_tracker(settings: Settings) -> EyeTrackerDevice:
+    """Try every real adapter that can expose normalized three-dimensional eye position."""
+    candidates: list[EyeTrackerFactory] = [
+        lambda: TobiiStreamEngineDevice(library_path=settings.tobii_stream_engine_dll),
+    ]
+    compatibility_roots = (
+        settings.just_need_to_see_root,
+        Path("D:/EyePosition"),
+        Path.home() / "Documents" / "EyePosition",
+        Path.home() / "Downloads" / "EyePosition",
+    )
+    compatibility_dlls = tuple(
+        dict.fromkeys(
+            (root.expanduser().resolve() / "tobii_stream_engine.dll")
+            for root in compatibility_roots
+        )
+    )
+    for compatibility_dll in compatibility_dlls:
+        if not compatibility_dll.is_file():
+            continue
+        candidates.append(
+            lambda dll=compatibility_dll: TobiiStreamEngineDevice(library_path=dll)
+        )
+    candidates.append(
+        lambda: TobiiLegacyBridgeDevice(
+            host=settings.tobii_bridge_host,
+            port=settings.tobii_bridge_port,
+            connect_timeout_seconds=0.75,
+        )
+    )
+    return AutoDetectEyeTrackerDevice(
+        tuple(candidates),
+        probe_timeout_seconds=1.5,
+        sample_predicate=lambda sample: sample.eye_position_available,
+        required_sample_description="左右眼三维眼位",
+    )
+
+
 class GazeStreamWorker(QThread):
     """Read eye-tracker samples away from the Qt UI thread."""
 
@@ -132,13 +171,14 @@ class GazeStreamWorker(QThread):
         *,
         preflight_seconds: float | None = None,
         preflight_store: GazePreflightStore | None = None,
+        device: EyeTrackerDevice | None = None,
     ) -> None:
         super().__init__(parent)
         if preflight_seconds is not None and preflight_seconds < 0:
             raise ValueError("preflight_seconds cannot be negative.")
 
         self._settings = settings
-        self._device = create_eye_tracker(settings)
+        self._device = device or create_eye_tracker(settings)
         self._preflight_seconds = preflight_seconds
         self._preflight_store = preflight_store
         self._sample_delivery_enabled = preflight_seconds is None

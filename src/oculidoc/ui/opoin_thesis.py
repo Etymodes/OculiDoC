@@ -10,7 +10,7 @@ import sys
 from contextlib import suppress
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QLabel,
-    QPushButton,
+    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
@@ -31,7 +31,10 @@ from PySide6.QtWidgets import (
 from oculidoc.config import Settings
 from oculidoc.devices.contracts import EyeTrackerSample
 from oculidoc.devices.preflight import GazePreflightResult
-from oculidoc.tasks.gaze_stream import GazeStreamWorker
+from oculidoc.tasks.gaze_stream import (
+    GazeStreamWorker,
+    create_eye_position_tracker,
+)
 
 NormalizedOcularPosition = tuple[float, float, float]
 TRACK_STATUS_EXECUTABLE = "TobiiDynavox.EyeAssist.Smorgasbord.exe"
@@ -319,38 +322,16 @@ class OpoinThesisDialog(QDialog):
         root.setSpacing(12)
 
         explanation = QLabel(
-            "供操作者主观观察患者双眼是否位于追踪范围。优先读取当前眼动源的真实"
-            "左右眼位；当前源不提供时使用兼容眼位窗口。此处不设合格阈值，不计算"
-            "有效率，不保存结果，也不参与设备自检或正式任务报告。"
+            "供操作者主观观察患者双眼是否位于追踪范围。窗口打开后会自动尝试"
+            "Tobii 原生 Stream、已配置的兼容 DLL、通用桥接和 Tobii Experience"
+            "自带追踪状态；无需手动选择连接方式。此处不设合格阈值，不计算有效率，"
+            "不保存结果，也不参与设备自检或正式任务报告。"
         )
         explanation.setWordWrap(True)
         root.addWidget(explanation)
 
         self._compatibility_executable = find_track_status_executable(settings)
-        current_eye_position = self_check_supports_current_eye_position(
-            settings,
-            preflight_result,
-        )
-        matching_preflight = (
-            preflight_result is not None and preflight_result.source == settings.gaze_source
-        )
-        if not matching_preflight:
-            initial_status = (
-                "尚无匹配自检 · 可手动打开兼容眼位窗口"
-                if self._compatibility_executable is not None
-                else "尚无匹配自检 · 未找到兼容眼位组件"
-            )
-        elif current_eye_position:
-            assert preflight_result is not None
-            initial_status = f"自检已确认：{preflight_result.device_name} 提供三维眼位，准备连接…"
-        else:
-            assert preflight_result is not None
-            initial_status = f"自检设备 {preflight_result.device_name} 未输出三维眼位" + (
-                "，准备打开兼容眼位窗口…"
-                if self._compatibility_executable is not None
-                else "，且未找到兼容眼位组件"
-            )
-        self.status_label = QLabel(initial_status)
+        self.status_label = QLabel("正在自动检测眼位状态…")
         self.status_label.setObjectName("opoinThesisStatus")
         root.addWidget(self.status_label)
 
@@ -371,50 +352,36 @@ class OpoinThesisDialog(QDialog):
         root.addWidget(self.canvas, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        self.compatibility_button = QPushButton("打开兼容眼位")
-        buttons.addButton(
-            self.compatibility_button,
-            QDialogButtonBox.ButtonRole.ActionRole,
-        )
-        self.compatibility_button.clicked.connect(self._open_compatibility_view)
         buttons.rejected.connect(self.close)
         root.addWidget(buttons)
 
         self._settings = settings
-        self._preflight_result = preflight_result
-        self._use_current_source = current_eye_position
-        self._worker = GazeStreamWorker(settings, self)
-        self._worker.status_changed.connect(self.status_label.setText)
+        self._worker = GazeStreamWorker(
+            settings,
+            self,
+            device=create_eye_position_tracker(settings),
+        )
+        self._worker.status_changed.connect(self._update_worker_status)
         self._worker.sample_received.connect(self._consume_sample)
         self._worker.stream_error.connect(self._show_error)
-        self._fallback_timer = QTimer(self)
-        self._fallback_timer.setSingleShot(True)
-        self._fallback_timer.setInterval(2_500)
-        self._fallback_timer.timeout.connect(self._open_compatibility_view)
         self._compatibility_process: subprocess.Popen[bytes] | None = None
-        self.compatibility_button.setEnabled(
-            sys.platform == "win32" and self._compatibility_executable is not None
-        )
-        self._auto_open_compatibility = bool(
-            matching_preflight
-            and not current_eye_position
-            and self.compatibility_button.isEnabled()
-        )
-
-        if not self.compatibility_button.isEnabled():
-            self.compatibility_button.setToolTip("未找到兼容眼位组件")
-
+        self._failure_shown = False
         self._started = False
 
     def _set_status(self, text: str, *, error: bool = False) -> None:
         self.status_label.setText(text)
         self.status_label.setStyleSheet("color:#b42318;" if error else "")
 
+    def _update_worker_status(self, text: str) -> None:
+        process = self._compatibility_process
+        if self._failure_shown or (process is not None and process.poll() is None):
+            return
+        self._set_status(text)
+
     def _consume_sample(self, sample: EyeTrackerSample) -> None:
         self.canvas.consume_sample(sample)
 
         if sample.eye_position_available:
-            self._fallback_timer.stop()
             self._set_status("已连接 · 正在显示主观眼位")
         else:
             detail = getattr(
@@ -427,7 +394,24 @@ class OpoinThesisDialog(QDialog):
 
     def _show_error(self, message: str) -> None:
         if not self._open_compatibility_view():
-            self._set_status(f"无法显示眼位：{message}", error=True)
+            self._show_undetected(message)
+
+    def _show_undetected(self, detail: str) -> None:
+        self._set_status("未检测到眼位状态", error=True)
+        self.canvas.set_empty_message("未检测到眼位状态")
+        self.diagnostic_label.setText(
+            f"{self._diagnostic_base_text}\n自动检测详情：{detail}"
+        )
+        if self._failure_shown:
+            return
+        self._failure_shown = True
+        QMessageBox.warning(
+            self,
+            "未检测到眼位状态",
+            "已尝试所有可用眼位连接方式，但未检测到眼位状态。\n"
+            "请确认眼动仪已连接、Tobii Experience 服务正在运行，"
+            "或在设备设置中检查 DLL/桥接路径。",
+        )
 
     def _open_compatibility_view(self, checked: bool = False) -> bool:
         del checked
@@ -440,17 +424,12 @@ class OpoinThesisDialog(QDialog):
         process = launch_track_status(self._settings)
 
         if process is None:
-            self._set_status(
-                "当前眼动源未提供三维眼位，且未找到兼容眼位组件。",
-                error=True,
-            )
             return False
 
         self._compatibility_process = process
-        self._fallback_timer.stop()
         self._worker.stop()
-        self.canvas.set_empty_message("兼容眼位窗口已打开")
-        self._set_status("已打开兼容眼位窗口 · 仅供人工观察")
+        self.canvas.set_empty_message("已打开 Tobii Experience 眼位状态")
+        self._set_status("已打开 Tobii Experience 眼位状态 · 仅供人工观察")
         executable = self._compatibility_executable
         if executable is not None:
             self.diagnostic_label.setText(
@@ -465,16 +444,9 @@ class OpoinThesisDialog(QDialog):
 
         if not self._started:
             self._started = True
-            if self._use_current_source:
-                self._worker.start()
-                self._fallback_timer.start()
-            elif self._auto_open_compatibility:
-                QTimer.singleShot(0, self._open_compatibility_view)
-            else:
-                self.canvas.set_empty_message("尚未连接；可手动打开兼容眼位，正式任务前请重新自检")
+            self._worker.start()
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self._fallback_timer.stop()
         self._worker.stop()
         process = self._compatibility_process
 

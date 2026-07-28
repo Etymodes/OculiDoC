@@ -109,7 +109,7 @@ def test_opoin_thesis_uses_capability_observed_by_matching_self_check() -> None:
     assert "不能据此补造瞳孔或逐眼数据" in diagnostic
 
 
-def test_opoin_thesis_uses_existing_evidence_without_forcing_new_self_check(
+def test_opoin_thesis_automatically_builds_eye_position_fallback_chain(
     qtbot: QtBot,
     tmp_path: Path,
     monkeypatch,
@@ -126,21 +126,10 @@ def test_opoin_thesis_uses_existing_evidence_without_forcing_new_self_check(
 
     without_evidence = OpoinThesisDialog(settings)
     qtbot.addWidget(without_evidence)
-    assert without_evidence.compatibility_button.isEnabled()
-    assert not without_evidence._auto_open_compatibility
-    assert "不会据此推断设备能力" in without_evidence.diagnostic_label.text()
-
-    unsupported = OpoinThesisDialog(
-        settings,
-        preflight_result=_preflight(
-            observed=("gaze_point",),
-            capability_notes=("左右眼三维眼位：不支持（driver status 3）",),
-        ),
-    )
-    qtbot.addWidget(unsupported)
-    assert unsupported._auto_open_compatibility
-    assert "driver status 3" in unsupported.diagnostic_label.text()
-    assert str(executable) in unsupported.diagnostic_label.text()
+    assert not hasattr(without_evidence, "compatibility_button")
+    assert without_evidence.status_label.text() == "正在自动检测眼位状态…"
+    assert without_evidence._compatibility_executable == executable
+    assert without_evidence._worker.device.required_sample_description == "左右眼三维眼位"
 
 
 def test_opoin_thesis_finds_legacy_track_status_next_to_bundle(
