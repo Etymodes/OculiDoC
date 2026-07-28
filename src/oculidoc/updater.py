@@ -8,9 +8,7 @@ import subprocess
 from pathlib import Path
 
 PUBLIC_REPOSITORY_URL = "https://github.com/Etymodes/OculiDoC.git"
-PUBLIC_REPOSITORY_SSH_443_URL = (
-    "ssh://git@ssh.github.com:443/Etymodes/OculiDoC.git"
-)
+PUBLIC_REPOSITORY_SSH_443_URL = "ssh://git@ssh.github.com:443/Etymodes/OculiDoC.git"
 PUBLIC_BRANCH = "main"
 
 
@@ -90,8 +88,7 @@ def _fetch_public_main(repo: Path) -> str:
         errors.append(f"{source}: {message}")
 
     raise UpdateError(
-        "无法连接 OculiDoC 官方 main 分支。请检查网络或 GitHub SSH 配置。\n"
-        + "\n".join(errors)
+        "无法连接 OculiDoC 官方 main 分支。请检查网络或 GitHub SSH 配置。\n" + "\n".join(errors)
     )
 
 
@@ -111,8 +108,7 @@ def perform_update(repo_root: str | Path) -> dict[str, object]:
         raise UpdateError("当前仓库处于 detached HEAD，无法一键更新。")
     if branch != PUBLIC_BRANCH:
         raise UpdateError(
-            f"当前位于 {branch} 分支；一键更新只更新 {PUBLIC_BRANCH}。"
-            f"请先切换到 {PUBLIC_BRANCH}。"
+            f"当前位于 {branch} 分支；一键更新只更新 {PUBLIC_BRANCH}。请先切换到 {PUBLIC_BRANCH}。"
         )
 
     before = _git(repo, "rev-parse", "HEAD").stdout.strip()
