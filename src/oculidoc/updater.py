@@ -3,17 +3,136 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
+import shutil
 import subprocess
+import tempfile
+import urllib.request
+from importlib.metadata import version
 from pathlib import Path
+from urllib.parse import urlparse
 
 PUBLIC_REPOSITORY_URL = "https://github.com/Etymodes/OculiDoC.git"
 PUBLIC_REPOSITORY_SSH_443_URL = "ssh://git@ssh.github.com:443/Etymodes/OculiDoC.git"
 PUBLIC_BRANCH = "main"
+LATEST_RELEASE_API = "https://api.github.com/repos/Etymodes/OculiDoC/releases/latest"
+SETUP_ASSET_NAME = "OculiDoC-Setup.exe"
+SETUP_HASH_ASSET_NAME = "OculiDoC-Setup.exe.sha256"
 
 
 class UpdateError(RuntimeError):
     """The source checkout cannot be updated safely."""
+
+
+def installed_version() -> str:
+    return version("oculidoc")
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    numeric = value.strip().lower().removeprefix("v").split("-", 1)[0]
+    try:
+        return tuple(int(part) for part in numeric.split("."))
+    except ValueError as error:
+        raise UpdateError(f"无法识别版本号：{value}") from error
+
+
+def _latest_release() -> dict[str, object]:
+    request = urllib.request.Request(
+        LATEST_RELEASE_API,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "OculiDoC-Updater",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.load(response)
+    except (OSError, ValueError) as error:
+        raise UpdateError(f"无法获取 OculiDoC 最新正式版本：{error}") from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("tag_name"), str):
+        raise UpdateError("GitHub 返回的最新版本信息无效。")
+    return payload
+
+
+def check_release_update(current_version: str | None = None) -> dict[str, object]:
+    current = current_version or installed_version()
+    release = _latest_release()
+    latest = str(release["tag_name"]).removeprefix("v")
+    return {
+        "status": (
+            "update_available" if _version_tuple(latest) > _version_tuple(current) else "up_to_date"
+        ),
+        "current_version": current,
+        "latest_version": latest,
+    }
+
+
+def _asset_url(release: dict[str, object], name: str) -> str:
+    assets = release.get("assets")
+    if not isinstance(assets, list):
+        raise UpdateError("最新版本没有可下载文件。")
+    for asset in assets:
+        if (
+            isinstance(asset, dict)
+            and asset.get("name") == name
+            and isinstance(asset.get("browser_download_url"), str)
+        ):
+            url = str(asset["browser_download_url"])
+            if urlparse(url).scheme != "https":
+                raise UpdateError(f"{name} 下载地址不是 HTTPS。")
+            return url
+    raise UpdateError(f"最新正式版本缺少 {name}。")
+
+
+def _download(url: str, destination: Path) -> None:
+    request = urllib.request.Request(url, headers={"User-Agent": "OculiDoC-Updater"})
+    try:
+        with (
+            urllib.request.urlopen(request, timeout=120) as response,
+            destination.open("wb") as output,
+        ):
+            shutil.copyfileobj(response, output)
+    except OSError as error:
+        raise UpdateError(f"下载 {destination.name} 失败：{error}") from error
+
+
+def install_latest_release(current_version: str | None = None) -> dict[str, object]:
+    current = current_version or installed_version()
+    release = _latest_release()
+    latest = str(release["tag_name"]).removeprefix("v")
+    if _version_tuple(latest) <= _version_tuple(current):
+        return {
+            "status": "up_to_date",
+            "current_version": current,
+            "latest_version": latest,
+        }
+
+    download_dir = Path(tempfile.mkdtemp(prefix="OculiDoC-update-"))
+    setup_path = download_dir / SETUP_ASSET_NAME
+    hash_path = download_dir / SETUP_HASH_ASSET_NAME
+    _download(_asset_url(release, SETUP_HASH_ASSET_NAME), hash_path)
+    _download(_asset_url(release, SETUP_ASSET_NAME), setup_path)
+
+    expected_hash = hash_path.read_text(encoding="utf-8-sig").strip().split()[0].lower()
+    with setup_path.open("rb") as setup_file:
+        actual_hash = hashlib.file_digest(setup_file, "sha256").hexdigest()
+    if len(expected_hash) != 64 or actual_hash != expected_hash:
+        setup_path.unlink(missing_ok=True)
+        raise UpdateError("最新版安装包 SHA-256 校验失败，已停止更新。")
+
+    creation_flags = 0x00000008 if os.name == "nt" else 0
+    subprocess.Popen(
+        [str(setup_path), "/OFFLINE"],
+        close_fds=True,
+        creationflags=creation_flags,
+    )
+    return {
+        "status": "installer_started",
+        "current_version": current,
+        "latest_version": latest,
+    }
 
 
 def find_repository_root(start: str | Path) -> Path | None:

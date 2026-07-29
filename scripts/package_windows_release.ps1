@@ -1,5 +1,6 @@
 param(
-    [string]$PythonCommand = "python"
+    [string]$PythonCommand = "python",
+    [string]$InnoCompiler = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,12 +10,17 @@ $bundleRoot = Join-Path $repositoryRoot "dist\windows\OculiDoC"
 $releaseRoot = Join-Path $repositoryRoot "dist\release"
 $verificationSource = Join-Path $repositoryRoot `
     "dist\windows\OculiDoC_build_verification.json"
+$installerDefinition = Join-Path $repositoryRoot `
+    "packaging\windows\OculiDoC.iss"
 
 if (-not (Test-Path (Join-Path $bundleRoot "OculiDoC.exe") -PathType Leaf)) {
     throw "未找到已验证的 Windows 程序目录。"
 }
 if (-not (Test-Path $verificationSource -PathType Leaf)) {
     throw "未找到 Windows 构建核验报告。"
+}
+if (-not (Test-Path $installerDefinition -PathType Leaf)) {
+    throw "未找到 Windows 安装器定义。"
 }
 
 Set-Location $repositoryRoot
@@ -82,6 +88,38 @@ $manifest = [ordered]@{
 $manifest | ConvertTo-Json -Depth 4 |
     Set-Content (Join-Path $releaseRoot "OculiDoC_release_manifest.json") -Encoding utf8
 
+if (-not $InnoCompiler) {
+    $compilerCandidates = @(
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+    )
+    $InnoCompiler = $compilerCandidates |
+        Where-Object { $_ -and (Test-Path $_ -PathType Leaf) } |
+        Select-Object -First 1
+}
+if (-not $InnoCompiler -or -not (Test-Path $InnoCompiler -PathType Leaf)) {
+    throw "未找到 Inno Setup 6 编译器 ISCC.exe。"
+}
+
+& $InnoCompiler `
+    "/DAppVersion=$version" `
+    "/DSourceDir=$bundleRoot" `
+    "/DOutputDir=$releaseRoot" `
+    $installerDefinition
+if ($LASTEXITCODE -ne 0) {
+    throw "Windows 安装器构建失败。"
+}
+
+$setupPath = Join-Path $releaseRoot "OculiDoC-Setup.exe"
+if (-not (Test-Path $setupPath -PathType Leaf)) {
+    throw "未生成 OculiDoC-Setup.exe。"
+}
+$setupHash = (Get-FileHash $setupPath -Algorithm SHA256).Hash.ToLowerInvariant()
+"$setupHash *OculiDoC-Setup.exe" |
+    Set-Content "$setupPath.sha256" -Encoding ascii
+
 Write-Host "RELEASE_PACKAGE=$zipPath"
 Write-Host "RELEASE_SHA256=$zipHash"
+Write-Host "INSTALLER=$setupPath"
+Write-Host "INSTALLER_SHA256=$setupHash"
 Write-Host "WINDOWS_RELEASE_PACKAGE=PASS" -ForegroundColor Green

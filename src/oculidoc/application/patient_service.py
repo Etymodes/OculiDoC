@@ -274,3 +274,47 @@ class PatientService:
             )
 
         return saved_patient
+
+    def merge_patients(
+        self,
+        *,
+        target_patient_id: UUID,
+        source_patient_id: UUID,
+        patient_code: str,
+        family_name: str,
+        sex: Sex,
+        clinical_diagnosis: ClinicalDiagnosis,
+    ) -> Patient:
+        """Merge two records while preserving all sessions and useful text."""
+        target = self.get_patient(target_patient_id)
+        source = self.get_patient(source_patient_id)
+
+        def joined(first: str | None, second: str | None) -> str | None:
+            values = [value.strip() for value in (first, second) if value and value.strip()]
+            return "\n".join(dict.fromkeys(values)) or None
+
+        merged = Patient(
+            patient_id=target.patient_id,
+            patient_code=patient_code,
+            family_name=family_name,
+            sex=sex,
+            date_of_birth=target.date_of_birth or source.date_of_birth,
+            etiology=joined(target.etiology, source.etiology),
+            clinical_diagnosis=clinical_diagnosis,
+            diagnosis_details=joined(
+                target.diagnosis_details,
+                source.diagnosis_details,
+            ),
+            enrollment_date=min(target.enrollment_date, source.enrollment_date),
+            notes=joined(target.notes, source.notes) or "",
+            is_active=target.is_active or source.is_active,
+            created_at=min(target.created_at, source.created_at),
+            updated_at=datetime.now(UTC),
+        )
+        saved = self._repository.merge(source.patient_id, merged)
+        self._record_audit(
+            saved.patient_id,
+            PatientAuditAction.UPDATED,
+            ("merged_patient",),
+        )
+        return saved

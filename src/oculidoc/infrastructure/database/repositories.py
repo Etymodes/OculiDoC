@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from oculidoc.domain import Patient
@@ -10,7 +10,11 @@ from oculidoc.infrastructure.database.mappers import (
     patient_to_record,
     record_to_patient,
 )
-from oculidoc.infrastructure.database.models import PatientRecord
+from oculidoc.infrastructure.database.models import (
+    ExperimentSessionRecord,
+    PatientAuditRecord,
+    PatientRecord,
+)
 
 
 def _apply_patient_to_record(
@@ -119,3 +123,42 @@ class SQLitePatientRepository:
             session.refresh(record)
 
             return record_to_patient(record)
+
+    def merge(self, source_patient_id: UUID, target: Patient) -> Patient:
+        """Atomically move source sessions/audit history into target."""
+        if source_patient_id == target.patient_id:
+            raise ValueError("Cannot merge a patient into itself.")
+
+        with self._session_factory() as session:
+            source = session.get(PatientRecord, str(source_patient_id))
+            target_record = session.get(PatientRecord, str(target.patient_id))
+            if source is None or target_record is None:
+                raise KeyError("Patient not found.")
+
+            duplicate_code = session.scalar(
+                select(PatientRecord).where(
+                    PatientRecord.patient_code == target.patient_code,
+                    PatientRecord.patient_id != str(target.patient_id),
+                    PatientRecord.patient_id != str(source_patient_id),
+                )
+            )
+            if duplicate_code is not None:
+                raise ValueError(f"Patient code already exists: {target.patient_code}")
+
+            _apply_patient_to_record(target, target_record)
+            session.execute(
+                update(ExperimentSessionRecord)
+                .where(ExperimentSessionRecord.patient_id == str(source_patient_id))
+                .values(patient_id=str(target.patient_id))
+            )
+            session.execute(
+                update(PatientAuditRecord)
+                .where(PatientAuditRecord.patient_id == str(source_patient_id))
+                .values(patient_id=str(target.patient_id))
+            )
+            session.execute(
+                delete(PatientRecord).where(PatientRecord.patient_id == str(source_patient_id))
+            )
+            session.commit()
+            session.refresh(target_record)
+            return record_to_patient(target_record)

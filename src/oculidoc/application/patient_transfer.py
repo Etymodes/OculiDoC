@@ -11,17 +11,22 @@ import os
 import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 from typing import TextIO, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
+from oculidoc.application.builtin_test_patient import BUILTIN_TEST_PATIENT_CODE
 from oculidoc.application.experiment_session_service import (
     ExperimentSessionService,
 )
-from oculidoc.application.patient_service import PatientService, RegisterPatientRequest
+from oculidoc.application.patient_service import (
+    PatientService,
+    RegisterPatientRequest,
+    UpdatePatientRequest,
+)
 from oculidoc.domain import ClinicalDiagnosis, Patient, Sex
 from oculidoc.domain.experiment_session import (
     ExperimentSession,
@@ -329,6 +334,11 @@ def write_patient_transfer(
     experiment_session_service: ExperimentSessionService | None = None,
 ) -> Path:
     """Write all patient and experiment data to one atomic UTF-8 CSV file."""
+    patients = [
+        patient
+        for patient in patients
+        if patient.patient_code.casefold() != BUILTIN_TEST_PATIENT_CODE.casefold()
+    ]
     destination = Path(path).expanduser().resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     session_exports = _collect_session_exports(patients, experiment_session_service)
@@ -910,26 +920,78 @@ def import_patient_records(
         else PatientTransferBundle(tuple(records))
     )
     existing_patients = patient_service.list_patients()
-    existing_codes = {patient.patient_code.casefold() for patient in existing_patients}
-    existing_ids = {patient.patient_id for patient in existing_patients}
+    known_patients = list(existing_patients)
+    existing_codes = {patient.patient_code.casefold() for patient in known_patients}
+    existing_ids = {patient.patient_id for patient in known_patients}
     patients_to_import: list[Patient] = []
+    patients_to_merge: list[tuple[Patient, Patient]] = []
     skipped_ids: set[UUID] = set()
+    patient_id_map: dict[UUID, UUID] = {}
+
+    def unique_diff_code(base_code: str) -> str:
+        counter = 1
+        while True:
+            candidate = f"{base_code}_{counter:02d}diff"
+            if candidate.casefold() not in existing_codes:
+                return candidate
+            counter += 1
 
     for patient_record in bundle.patients:
         patient = patient_record.patient
-        if patient.patient_code.casefold() in existing_codes:
+        original_id = patient.patient_id
+        if patient.patient_code.casefold() == BUILTIN_TEST_PATIENT_CODE.casefold():
             skipped_ids.add(patient.patient_id)
             continue
+
+        same_code = next(
+            (
+                existing
+                for existing in known_patients
+                if existing.patient_code.casefold() == patient.patient_code.casefold()
+            ),
+            None,
+        )
+        same_name = next(
+            (
+                existing
+                for existing in known_patients
+                if existing.family_name.casefold() == patient.family_name.casefold()
+            ),
+            None,
+        )
+        if (
+            same_code is not None
+            and same_code.family_name.casefold() == patient.family_name.casefold()
+        ):
+            patient_id_map[original_id] = same_code.patient_id
+            patients_to_merge.append((same_code, patient))
+            skipped_ids.add(original_id)
+            continue
+        if same_code is not None or same_name is not None:
+            patient = replace(patient, patient_code=unique_diff_code(patient.patient_code))
         if patient.patient_id in existing_ids:
-            raise ValueError(f"患者 UUID 已存在但编号不同：{patient.patient_id}")
+            patient = replace(patient, patient_id=uuid4())
+
         patients_to_import.append(patient)
+        patient_id_map[original_id] = patient.patient_id
+        known_patients.append(patient)
         existing_codes.add(patient.patient_code.casefold())
         existing_ids.add(patient.patient_id)
 
-    imported_patient_ids = {patient.patient_id for patient in patients_to_import}
-    sessions_to_import = [
-        record for record in bundle.sessions if record.session.patient_id in imported_patient_ids
-    ]
+    sessions_to_import: list[SessionImportRecord] = []
+    for record in bundle.sessions:
+        mapped_patient_id = patient_id_map.get(record.session.patient_id)
+        if mapped_patient_id is None or (
+            experiment_session_service is not None
+            and _session_exists(experiment_session_service, record.session.session_id)
+        ):
+            continue
+        sessions_to_import.append(
+            replace(
+                record,
+                session=replace(record.session, patient_id=mapped_patient_id),
+            )
+        )
     if sessions_to_import and experiment_session_service is None:
         raise ValueError("该 CSV 包含实验数据，但实验会话服务未连接。")
 
@@ -939,6 +1001,36 @@ def import_patient_records(
                 session_record.session,
                 session_record.artifacts,
             )
+
+    def joined(first: str | None, second: str | None) -> str | None:
+        values = [value.strip() for value in (first, second) if value and value.strip()]
+        return "\n".join(dict.fromkeys(values)) or None
+
+    for current, imported in patients_to_merge:
+        patient_service.update_patient(
+            UpdatePatientRequest(
+                patient_id=current.patient_id,
+                patient_code=current.patient_code,
+                family_name=current.family_name,
+                sex=current.sex if current.sex != Sex.UNKNOWN else imported.sex,
+                date_of_birth=current.date_of_birth,
+                etiology=joined(current.etiology, imported.etiology),
+                clinical_diagnosis=(
+                    current.clinical_diagnosis
+                    if current.clinical_diagnosis != ClinicalDiagnosis.UNKNOWN
+                    else imported.clinical_diagnosis
+                ),
+                diagnosis_details=joined(
+                    current.diagnosis_details,
+                    imported.diagnosis_details,
+                ),
+                enrollment_date=min(
+                    current.enrollment_date,
+                    imported.enrollment_date,
+                ),
+                notes=joined(current.notes, imported.notes) or "",
+            )
+        )
 
     for patient in patients_to_import:
         patient_service.restore_patient(patient)
@@ -968,3 +1060,14 @@ def import_patient_records(
         imported_session_count=imported_session_count,
         imported_file_count=imported_file_count,
     )
+
+
+def _session_exists(
+    service: ExperimentSessionService,
+    session_id: UUID,
+) -> bool:
+    try:
+        service.get_session(session_id)
+    except LookupError:
+        return False
+    return True

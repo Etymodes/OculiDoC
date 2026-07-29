@@ -141,22 +141,22 @@ def test_history_generates_and_opens_patient_trend(
     )
     qtbot.addWidget(dialog)
 
-    assert dialog.trend_button.objectName() == "generatePatientTrendReportButton"
-    assert dialog.trend_button.text() == "一键综合报告"
+    assert dialog.summary_button.objectName() == "openReportSummaryButton"
+    assert dialog.summary_button.text() == "报告总结"
 
     selected = dialog._current_entry()
 
     assert selected is not None
 
-    dialog.trend_button.click()
-
-    assert generated == [
-        (
-            runtime.experiment_session_service,
-            selected.session_id,
-        )
-    ]
-    assert len(opened) == 1
+    html = dialog._report_summary_html(
+        selected,
+        single_url="file:///single.html",
+        trend_url="file:///all.html",
+    )
+    assert "单次实验" in html
+    assert "全部实验总结" in html
+    assert "file:///single.html" in html
+    assert "file:///all.html" in html
 
     dialog.close()
     runtime.dispose()
@@ -198,11 +198,11 @@ def test_trend_report_failure_is_shown(
     )
     qtbot.addWidget(dialog)
 
-    dialog.trend_button.click()
+    dialog.summary_button.click()
 
     assert messages
     assert any(
-        "综合报告生成失败" in str(value) or "trend failed" in str(value)
+        "报告总结生成失败" in str(value) or "trend failed" in str(value)
         for call in messages
         for value in call
     )

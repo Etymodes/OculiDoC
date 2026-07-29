@@ -265,7 +265,7 @@ class DeviceSettingsDialog(QDialog):
         root.addLayout(self_check_row)
 
         opoin_thesis_row = QHBoxLayout()
-        self.opoin_thesis_button = QPushButton("打开 OpoinThesis")
+        self.opoin_thesis_button = QPushButton("打开 OpoinThesis 眼位监测")
         self.opoin_thesis_button.setObjectName("openOpoinThesisButton")
         self.opoin_thesis_button.clicked.connect(self._open_opoin_thesis)
         opoin_thesis_tip = QLabel(
