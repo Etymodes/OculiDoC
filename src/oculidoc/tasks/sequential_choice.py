@@ -70,6 +70,11 @@ class SequentialChoiceTask(QWidget):
         return self._current_task
 
     @property
+    def gaze_coordinate_widget(self) -> BinaryQuestionTask:
+        """Return the current leaf widget used for gaze hit testing."""
+        return self._current_task
+
+    @property
     def current_question_number(self) -> int:
         return self._question_index + 1
 

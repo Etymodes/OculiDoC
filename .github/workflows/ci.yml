@@ -57,12 +57,7 @@ jobs:
           OCULIDOC_ENVIRONMENT: test
           OCULIDOC_GAZE_SOURCE: mock
           QT_QPA_PLATFORM: offscreen
-        run: |
-          python -m pip check
-          python -m ruff format --check .
-          python -m ruff check .
-          python -m pytest
-          python -m compileall -q src tests
+        run: ./scripts/check.ps1 -PythonCommand python
       - name: Build and verify portable package
         shell: pwsh
         run: |

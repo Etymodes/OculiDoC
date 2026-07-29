@@ -27,6 +27,7 @@ def test_public_readme_has_product_ownership_and_support_path() -> None:
     assert "ὀποῖν θέσις" in readme
     assert "open thesis" in readme
     assert "TOBII_OFFICIAL_INTEGRATION.md" in readme
+    assert "校准显示器与全屏任务所在显示器为同一固定显示器" in readme
 
 
 def test_repository_workflow_uses_current_github_repo_as_source_of_truth() -> None:
@@ -86,12 +87,14 @@ def test_ci_builds_and_tag_workflow_publishes_verified_portable_package() -> Non
 
     assert "windows-package:" in ci
     assert "package_windows_release.ps1" in ci
+    assert "check.ps1 -PythonCommand python" in ci
     assert "permissions:\n  contents: read" in ci
     assert 'tags:\n      - "v*"' in release
     assert "permissions:\n  contents: write" in release
     assert "gh release create" in release
     assert "package_windows_release.ps1" in release
     assert "choco install innosetup" in release
+    assert "check.ps1 -PythonCommand python" in release
 
 
 def test_readme_recommends_installer_and_keeps_short_emergency_command() -> None:

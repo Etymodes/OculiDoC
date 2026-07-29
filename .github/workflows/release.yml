@@ -31,7 +31,7 @@ jobs:
           python -m pip install -e ".[dev,research,build]"
       - name: Validate source
         shell: pwsh
-        run: ./scripts/check.ps1
+        run: ./scripts/check.ps1 -PythonCommand python
       - name: Build and verify release
         shell: pwsh
         run: |
