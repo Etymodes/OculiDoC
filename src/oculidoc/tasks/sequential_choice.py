@@ -255,7 +255,7 @@ class SequentialChoiceTask(QWidget):
         self._current_task.stop()
 
     def consume_sample(self, sample: EyeTrackerSample) -> None:
-        if not self._waiting_for_advance and not self._sequence_finished:
+        if not self._sequence_finished:
             self._current_task.consume_sample(sample)
 
     def recording_context_for_sample(self, sample: EyeTrackerSample) -> dict[str, object]:

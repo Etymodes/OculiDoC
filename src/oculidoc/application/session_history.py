@@ -247,6 +247,16 @@ def format_task_result_lines(
         result = result_value if isinstance(result_value, dict) else {}
         task_kind = str(task_record.get("task_kind") or "unknown")
         lines.append(f"任务结果 {index}（{task_kind}）")
+        show_gaze_cursor = task_record.get("show_gaze_cursor")
+
+        if show_gaze_cursor is True:
+            gaze_cursor_text = "开"
+        elif show_gaze_cursor is False:
+            gaze_cursor_text = "关"
+        else:
+            gaze_cursor_text = "旧记录未记载"
+
+        lines.append(f"患者屏幕视线光标：{gaze_cursor_text}")
 
         completion_status = result.get("completion_status")
 

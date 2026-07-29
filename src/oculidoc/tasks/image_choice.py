@@ -62,6 +62,7 @@ class ImageChoiceConfig:
     randomize_sides: bool = True
     randomization_seed: int | None = None
     question_ids: tuple[str, ...] = ()  # M3D12D compatibility; fixed pairings are ignored.
+    show_gaze_cursor: bool = False
 
     def __post_init__(self) -> None:
         categories = tuple(
@@ -95,6 +96,9 @@ class ImageChoiceConfig:
 
         if not isinstance(self.randomize_sides, bool):
             raise TypeError("randomize_sides must be a boolean.")
+
+        if not isinstance(self.show_gaze_cursor, bool):
+            raise TypeError("show_gaze_cursor must be a boolean.")
 
         if self.randomization_seed is not None and (
             not isinstance(self.randomization_seed, int)
@@ -224,6 +228,7 @@ class ImageChoiceTask(BinaryQuestionTask):
             question_font_size_pt=config.question_font_size_pt,
             option_font_size_pt=26,
             randomize_sides=config.randomize_sides,
+            show_gaze_cursor=config.show_gaze_cursor,
             randomization_seed=question.position_seed,
         )
         super().__init__(
@@ -403,6 +408,10 @@ class ImageChoiceSetupDialog(QDialog):
         self.randomize_sides_check.setChecked(initial.randomize_sides)
         form.addRow("位置随机化：", self.randomize_sides_check)
 
+        self.show_gaze_cursor_check = QCheckBox("患者屏幕显示实时视线光标")
+        self.show_gaze_cursor_check.setChecked(initial.show_gaze_cursor)
+        form.addRow("视线反馈：", self.show_gaze_cursor_check)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -482,6 +491,7 @@ class ImageChoiceSetupDialog(QDialog):
             duration_seconds=self.duration_spin.value(),
             question_font_size_pt=self.question_font_size_spin.value(),
             randomize_sides=self.randomize_sides_check.isChecked(),
+            show_gaze_cursor=self.show_gaze_cursor_check.isChecked(),
             randomization_seed=self._randomization_seed,
         )
 

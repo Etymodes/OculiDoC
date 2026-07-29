@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from oculidoc.devices.contracts import EyeTrackerSample
+from oculidoc.tasks.gaze_cursor import GazeCursorOverlay
 
 MULTIPLE_CHOICE_LAYOUTS = frozenset({"grid", "ring"})
 MULTIPLE_CHOICE_GRID_SHAPES = {
@@ -65,6 +66,7 @@ class MultipleChoiceConfig:
     randomize_positions: bool = True
     randomization_seed: int | None = None
     template_id: str | None = None
+    show_gaze_cursor: bool = False
 
     def __post_init__(self) -> None:
         if not self.question.strip():
@@ -100,6 +102,9 @@ class MultipleChoiceConfig:
 
         if not isinstance(self.randomize_positions, bool):
             raise TypeError("randomize_positions must be a boolean.")
+
+        if not isinstance(self.show_gaze_cursor, bool):
+            raise TypeError("show_gaze_cursor must be a boolean.")
 
         if self.randomization_seed is not None and (
             not isinstance(self.randomization_seed, int)
@@ -404,6 +409,10 @@ class MultipleChoiceTask(QWidget):
         if not allow_mouse_fallback:
             self.setCursor(Qt.CursorShape.BlankCursor)
 
+        self.gaze_cursor_overlay = GazeCursorOverlay(
+            self,
+            enabled=config.show_gaze_cursor,
+        )
         self._refresh_selection()
 
     @staticmethod
@@ -551,6 +560,7 @@ class MultipleChoiceTask(QWidget):
         self._toggle_count = 0
         self._recording_events.clear()
         self._final_event_recorded = False
+        self.gaze_cursor_overlay.clear()
         self._refresh_selection()
         self._refresh_dwell()
 
@@ -599,6 +609,7 @@ class MultipleChoiceTask(QWidget):
             self._reset_dwell()
 
     def consume_sample(self, sample: EyeTrackerSample) -> None:
+        self.gaze_cursor_overlay.consume_sample(sample)
         timestamp_ns = sample.timestamp.monotonic_timestamp_ns
 
         if self._last_timestamp_ns is None or timestamp_ns <= self._last_timestamp_ns:
@@ -986,6 +997,10 @@ class MultipleChoiceSetupDialog(QDialog):
         self.randomize_check.setChecked(initial.randomize_positions)
         form.addRow("位置随机化：", self.randomize_check)
 
+        self.show_gaze_cursor_check = QCheckBox("患者屏幕显示实时视线光标")
+        self.show_gaze_cursor_check.setChecked(initial.show_gaze_cursor)
+        form.addRow("视线反馈：", self.show_gaze_cursor_check)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -1079,6 +1094,7 @@ class MultipleChoiceSetupDialog(QDialog):
             question_font_size_pt=self.question_font_spin.value(),
             option_font_size_pt=self.option_font_spin.value(),
             randomize_positions=self.randomize_check.isChecked(),
+            show_gaze_cursor=self.show_gaze_cursor_check.isChecked(),
             randomization_seed=None,
             template_id=self._selected_template_id,
         )

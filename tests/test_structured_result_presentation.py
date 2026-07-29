@@ -159,6 +159,61 @@ def test_report_loads_binary_and_tracking_results(
     assert "75.0%" in rendered
 
 
+def test_report_records_whether_patient_gaze_cursor_was_enabled(
+    tmp_path: Path,
+) -> None:
+    run_directory = tmp_path / "tasks" / "run-cursor"
+    write_result(
+        run_directory,
+        task_kind="binary_question",
+        result={
+            "completion_status": "answered",
+            "completion_reason": "answered",
+        },
+        event_types=("task_completed",),
+    )
+    (run_directory / "task_config.json").write_text(
+        json.dumps(
+            {
+                "task_class": "BinaryQuestionTask",
+                "config": {
+                    "show_gaze_cursor": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    records = _load_task_results(tmp_path)
+    rendered = _task_result_sections(records)
+    lines = format_task_result_lines(tuple(records))
+
+    assert records[0]["show_gaze_cursor"] is True
+    assert "患者屏幕视线光标</th><td>开" in rendered
+    assert "患者屏幕视线光标：开" in lines
+
+
+def test_report_marks_legacy_cursor_setting_as_unrecorded(
+    tmp_path: Path,
+) -> None:
+    run_directory = tmp_path / "tasks" / "run-legacy"
+    write_result(
+        run_directory,
+        task_kind="binary_question",
+        result={
+            "completion_status": "answered",
+            "completion_reason": "answered",
+        },
+        event_types=("task_completed",),
+    )
+
+    records = _load_task_results(tmp_path)
+    rendered = _task_result_sections(records)
+
+    assert records[0]["show_gaze_cursor"] is None
+    assert "患者屏幕视线光标</th><td>旧记录未记载" in rendered
+
+
 def test_report_and_history_format_multiple_choice_without_scoring(
     tmp_path: Path,
 ) -> None:

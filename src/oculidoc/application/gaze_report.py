@@ -267,6 +267,24 @@ def _load_task_results(
 
         summary = payload.get("summary")
         result = payload.get("result")
+        show_gaze_cursor: bool | None = None
+        config_path = result_path.parent / "task_config.json"
+
+        try:
+            config_payload = json.loads(config_path.read_text(encoding="utf-8"))
+        except (
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ):
+            config_payload = None
+
+        if isinstance(config_payload, dict):
+            config = config_payload.get("config")
+
+            if isinstance(config, dict) and isinstance(config.get("show_gaze_cursor"), bool):
+                show_gaze_cursor = config["show_gaze_cursor"]
+
         task_results.append(
             {
                 "run_id": str(payload.get("run_id") or result_path.parent.name),
@@ -282,6 +300,7 @@ def _load_task_results(
                 "summary": (dict(summary) if isinstance(summary, dict) else {}),
                 "result": (dict(result) if isinstance(result, dict) else {}),
                 "event_counts": (_load_event_counts(result_path.parent)),
+                "show_gaze_cursor": show_gaze_cursor,
             }
         )
 
@@ -335,6 +354,15 @@ def _task_result_rows(
     result = result_value if isinstance(result_value, dict) else {}
     task_kind = task_record.get("task_kind")
     end_reason = task_record.get("end_reason")
+    show_gaze_cursor = task_record.get("show_gaze_cursor")
+
+    if show_gaze_cursor is True:
+        gaze_cursor_text = "开"
+    elif show_gaze_cursor is False:
+        gaze_cursor_text = "关"
+    else:
+        gaze_cursor_text = "旧记录未记载"
+
     rows.extend(
         (
             (
@@ -348,6 +376,10 @@ def _task_result_rows(
             (
                 "完成状态",
                 _display_value(result.get("completion_status")),
+            ),
+            (
+                "患者屏幕视线光标",
+                gaze_cursor_text,
             ),
         )
     )

@@ -118,7 +118,8 @@ const binaryFields = [
   {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 12, max: 120, step: 1},
   {name: "option_font_size_pt", label: "选项字号（pt）", type: "number", min: 12, max: 120, step: 1},
   {name: "neutral_zone_width", label: "中央中性区（0–0.6）", type: "number", min: 0, max: 0.6, step: 0.01},
-  {name: "randomize_sides", label: "随机交换选项位置", type: "checkbox"}
+  {name: "randomize_sides", label: "随机交换选项位置", type: "checkbox"},
+  {name: "show_gaze_cursor", label: "患者屏幕显示实时视线光标", type: "checkbox"}
 ];
 
 const fields = {
@@ -164,7 +165,8 @@ const fields = {
     {name: "duration_seconds", label: "最长任务时长（秒）", type: "number", min: 5, max: 3600, step: 1},
     {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 20, max: 120, step: 1},
     {name: "option_font_size_pt", label: "选项字号（pt）", type: "number", min: 20, max: 120, step: 1},
-    {name: "randomize_positions", label: "每次呈现随机交换选项位置", type: "checkbox"}
+    {name: "randomize_positions", label: "每次呈现随机交换选项位置", type: "checkbox"},
+    {name: "show_gaze_cursor", label: "患者屏幕显示实时视线光标", type: "checkbox"}
   ],
   image_choice: [
     {name: "category_filters", label: "图片类别（可多选；不选 = 全部）", type: "multi-select", options: []},
@@ -173,7 +175,8 @@ const fields = {
     {name: "dwell_time_ms", label: "停留阈值（ms）", type: "number", min: 250, max: 10000, step: 100},
     {name: "duration_seconds", label: "每题最长时长（秒）", type: "number", min: 5, max: 600, step: 1},
     {name: "question_font_size_pt", label: "问题字号（pt）", type: "number", min: 20, max: 120, step: 1},
-    {name: "randomize_sides", label: "每题随机交换左右图片", type: "checkbox"}
+    {name: "randomize_sides", label: "每题随机交换左右图片", type: "checkbox"},
+    {name: "show_gaze_cursor", label: "患者屏幕显示实时视线光标", type: "checkbox"}
   ],
   instruction_fixation: [
     {name: "target_description", label: "指令中的目标描述", type: "text"},
@@ -236,7 +239,8 @@ const fields = {
     {name: "enable_tone_step", label: "启用声调选择步骤", type: "checkbox"},
     {name: "output_font_size_pt", label: "上半屏输出字号（pt）", type: "number", min: 20, max: 120, step: 1},
     {name: "instruction_font_size_pt", label: "指示文字字号（pt）", type: "number", min: 20, max: 120, step: 1},
-    {name: "option_font_size_pt", label: "下半屏选项字号（pt）", type: "number", min: 20, max: 120, step: 1}
+    {name: "option_font_size_pt", label: "下半屏选项字号（pt）", type: "number", min: 20, max: 120, step: 1},
+    {name: "show_gaze_cursor", label: "患者屏幕显示实时视线光标", type: "checkbox"}
   ]
 };
 

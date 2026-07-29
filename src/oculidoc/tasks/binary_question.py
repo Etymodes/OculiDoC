@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 from oculidoc.devices.contracts import (
     EyeTrackerSample,
 )
+from oculidoc.tasks.gaze_cursor import GazeCursorOverlay
 from oculidoc.tasks.question_bank import (
     FIXED_BINARY_QUESTION_FORMS,
     LEGACY_QUESTION_ALIASES,
@@ -73,6 +74,7 @@ class BinaryQuestionConfig:
     option_font_size_pt: int
     neutral_zone_width: float
     randomize_sides: bool
+    show_gaze_cursor: bool
     randomization_seed: int | None
     question_template_ids: tuple[str, ...]
     question_count: int
@@ -94,6 +96,7 @@ class BinaryQuestionConfig:
         option_font_size_pt: int = 44,
         neutral_zone_width: float = 0.08,
         randomize_sides: bool = True,
+        show_gaze_cursor: bool = False,
         randomization_seed: int | None = None,
         question_template_ids: tuple[str, ...] | list[str] = (),
         question_count: int = 0,
@@ -174,6 +177,9 @@ class BinaryQuestionConfig:
         if not 0.0 <= neutral_zone_width <= 0.6:
             raise ValueError("neutral_zone_width must be between 0 and 0.6.")
 
+        if not isinstance(show_gaze_cursor, bool):
+            raise TypeError("show_gaze_cursor must be a boolean.")
+
         if randomization_seed is not None and randomization_seed < 0:
             raise ValueError("randomization_seed cannot be negative.")
 
@@ -229,6 +235,7 @@ class BinaryQuestionConfig:
             "randomize_sides",
             bool(randomize_sides),
         )
+        object.__setattr__(self, "show_gaze_cursor", show_gaze_cursor)
         object.__setattr__(
             self,
             "randomization_seed",
@@ -453,6 +460,11 @@ class BinaryQuestionTask(QWidget):
             answers.addLayout(right_layout, 1)
             root.addWidget(self.question_label)
             root.addLayout(answers, 1)
+
+        self.gaze_cursor_overlay = GazeCursorOverlay(
+            self,
+            enabled=config.show_gaze_cursor,
+        )
 
     @property
     def result(
@@ -705,6 +717,7 @@ class BinaryQuestionTask(QWidget):
         self._confirmation_dwell_ms = None
         self._selection_method = None
         self._final_event_recorded = False
+        self.gaze_cursor_overlay.clear()
 
         self.left_button.setEnabled(True)
         self.right_button.setEnabled(True)
@@ -910,6 +923,7 @@ class BinaryQuestionTask(QWidget):
         self,
         sample: EyeTrackerSample,
     ) -> None:
+        self.gaze_cursor_overlay.consume_sample(sample)
         timestamp_ns = sample.timestamp.monotonic_timestamp_ns
 
         if self._last_timestamp_ns is None or timestamp_ns <= self._last_timestamp_ns:
@@ -1348,6 +1362,10 @@ class BinaryQuestionSetupDialog(QDialog):
         self.randomize_sides_check.setChecked(initial.randomize_sides)
         form.addRow(f"{position_label}随机化：", self.randomize_sides_check)
 
+        self.show_gaze_cursor_check = QCheckBox("患者屏幕显示实时视线光标")
+        self.show_gaze_cursor_check.setChecked(initial.show_gaze_cursor)
+        form.addRow("视线反馈：", self.show_gaze_cursor_check)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -1673,6 +1691,7 @@ class BinaryQuestionSetupDialog(QDialog):
             option_font_size_pt=self.option_font_size_spin.value(),
             neutral_zone_width=self.neutral_zone_spin.value(),
             randomize_sides=self.randomize_sides_check.isChecked(),
+            show_gaze_cursor=self.show_gaze_cursor_check.isChecked(),
             randomization_seed=self._randomization_seed,
             question_template_ids=self.selected_question_template_ids(),
             question_count=self.question_count_spin.value(),
@@ -1753,6 +1772,7 @@ def binary_question_sequence(
                     option_font_size_pt=config.option_font_size_pt,
                     neutral_zone_width=config.neutral_zone_width,
                     randomize_sides=config.randomize_sides,
+                    show_gaze_cursor=config.show_gaze_cursor,
                     randomization_seed=rng.getrandbits(63),
                 ),
             )
