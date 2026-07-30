@@ -82,6 +82,31 @@ def test_release_packager_builds_standard_installer() -> None:
     assert '"$setupPath.sha256"' in source
 
 
+def test_windows_signing_inventory_is_read_only_and_covers_all_candidates() -> None:
+    source = (ROOT / "scripts" / "inventory_windows_signing.ps1").read_text(encoding="utf-8")
+
+    assert "Get-ChildItem $bundleRootPath -Recurse -File" in source
+    assert '@(".exe", ".dll", ".pyd", ".ps1")' in source
+    assert "OculiDoC_bundle_signing_inventory.json" in source
+    assert 'GetExtension($outputFullPath).ToLowerInvariant() -ne ".json"' in source
+    assert "[System.StringComparison]::OrdinalIgnoreCase" in source
+    assert "Get-AuthenticodeSignature" in source
+    assert "Get-FileHash" in source
+    assert "relative_path" in source
+    assert "extension = $candidate.Extension.ToLowerInvariant()" in source
+    assert "counts_by_extension" in source
+    assert "WINDOWS_SIGNING_${extensionLabel}_NEEDS_RSA=" in source
+    assert "signer_subject" in source
+    assert "signer_thumbprint" in source
+    assert "public_key_algorithm" in source
+    assert "valid_rsa_signatures" in source
+    assert "needs_rsa_trusted_signature" in source
+    assert "WINDOWS_SIGNING_INVENTORY_PATH=" in source
+    assert source.count('"WINDOWS_SIGNING_INVENTORY=') == 1
+    assert "Set-AuthenticodeSignature" not in source
+    assert "signtool" not in source.lower()
+
+
 def test_inno_translation_retains_upstream_notice() -> None:
     translation = (
         ROOT / "packaging" / "windows" / "languages" / "ChineseSimplified.isl"

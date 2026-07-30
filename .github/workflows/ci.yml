@@ -63,6 +63,9 @@ jobs:
         run: |
           ./scripts/build_windows.ps1 -PythonCommand python
           ./scripts/package_windows_release.ps1 -PythonCommand python
+          ./scripts/inventory_windows_signing.ps1 `
+            -BundleRoot ./dist/windows/OculiDoC `
+            -OutputPath ./dist/release/OculiDoC_bundle_signing_inventory.json
       - uses: actions/upload-artifact@v4
         with:
           name: OculiDoC-windows-release-candidate

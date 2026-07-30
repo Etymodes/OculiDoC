@@ -24,6 +24,10 @@ jobs:
           if ($env:GITHUB_REF_NAME -ne "v$version") {
             throw "Tag $env:GITHUB_REF_NAME does not match project version v$version"
           }
+      - name: Block unsigned release
+        shell: pwsh
+        run: |
+          throw "TRUSTED_SIGNING_PROVIDER_PENDING: v0.1.1 release is blocked."
       - name: Install project
         shell: pwsh
         run: |

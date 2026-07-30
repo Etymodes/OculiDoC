@@ -81,12 +81,18 @@ def test_windows_maintenance_scripts_use_repository_venv() -> None:
     assert (ROOT / "scripts" / "package_windows_release.ps1").is_file()
 
 
-def test_ci_builds_and_tag_workflow_publishes_verified_portable_package() -> None:
+def test_ci_inventories_candidate_and_tag_release_is_locked_without_signer() -> None:
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     assert "windows-package:" in ci
     assert "package_windows_release.ps1" in ci
+    assert "inventory_windows_signing.ps1" in ci
+    assert ci.index("build_windows.ps1") < ci.index("package_windows_release.ps1")
+    assert ci.index("package_windows_release.ps1") < ci.index("inventory_windows_signing.ps1")
+    assert ci.count("inventory_windows_signing.ps1") == 1
+    assert "-BundleRoot ./dist/windows/OculiDoC" in ci
+    assert "OculiDoC_bundle_signing_inventory.json" in ci
     assert "check.ps1 -PythonCommand python" in ci
     assert "permissions:\n  contents: read" in ci
     assert 'tags:\n      - "v*"' in release
@@ -95,6 +101,12 @@ def test_ci_builds_and_tag_workflow_publishes_verified_portable_package() -> Non
     assert "package_windows_release.ps1" in release
     assert "choco install innosetup" in release
     assert "check.ps1 -PythonCommand python" in release
+    assert "TRUSTED_SIGNING_PROVIDER_PENDING" in release
+    assert "OCULIDOC_WINDOWS_SIGNING_READY" not in release
+    gate = release.index('throw "TRUSTED_SIGNING_PROVIDER_PENDING: v0.1.1 release is blocked."')
+    publish = release.index("gh release create")
+    assert gate < release.index("Install project")
+    assert gate < publish
 
 
 def test_readme_recommends_installer_and_keeps_short_emergency_command() -> None:
