@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   windows-release:
@@ -24,10 +26,10 @@ jobs:
           if ($env:GITHUB_REF_NAME -ne "v$version") {
             throw "Tag $env:GITHUB_REF_NAME does not match project version v$version"
           }
-      - name: Block unsigned release
-        shell: pwsh
-        run: |
-          throw "TRUSTED_SIGNING_PROVIDER_PENDING: v0.1.1 release is blocked."
+          if (([version]$version).Major -ge 1) {
+            throw "TRUSTED_SIGNING_PROVIDER_REQUIRED_FOR_V1: hospital-grade signing is not configured."
+          }
+          Write-Host "RELEASE_CHANNEL=pre-1.0-lightweight"
       - name: Install project
         shell: pwsh
         run: |
@@ -42,6 +44,39 @@ jobs:
           choco install innosetup --no-progress -y
           ./scripts/build_windows.ps1 -PythonCommand python
           ./scripts/package_windows_release.ps1 -PythonCommand python
+          ./scripts/inventory_windows_signing.ps1 `
+            -BundleRoot ./dist/windows/OculiDoC `
+            -OutputPath ./dist/release/OculiDoC_bundle_signing_inventory.json
+      - name: Attest pre-1.0 release assets
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/release/*
+      - name: Verify pre-1.0 build provenance
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $portable = Get-ChildItem "dist/release" `
+            -Filter "OculiDoC-v*-windows-x64-portable.zip" `
+            -File
+          if ($portable.Count -ne 1) {
+            throw "Expected exactly one portable release package."
+          }
+          gh attestation verify "dist/release/OculiDoC-Setup.exe" `
+            -R $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to verify setup build provenance."
+          }
+          gh attestation verify $portable.FullName `
+            -R $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to verify portable build provenance."
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OculiDoC-${{ github.ref_name }}
+          path: dist/release/*
+          if-no-files-found: error
       - name: Publish GitHub Release
         shell: pwsh
         env:
@@ -51,12 +86,24 @@ jobs:
           $assets = Get-ChildItem "dist/release" -File | ForEach-Object { $_.FullName }
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $assets --clobber
-          } else {
-            gh release create $tag $assets --title "OculiDoC $tag" --generate-notes
+            throw "Release $tag already exists; publish a new patch version instead."
           }
-      - uses: actions/upload-artifact@v4
-        with:
-          name: OculiDoC-${{ github.ref_name }}
-          path: dist/release/*
-          if-no-files-found: error
+          gh release create $tag $assets `
+            --title "OculiDoC $tag" `
+            --notes-file RELEASE_NOTES.md `
+            --verify-tag `
+            --latest
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create release."
+          }
+          $published = gh release view $tag `
+            --json tagName,isDraft,isPrerelease,assets | ConvertFrom-Json
+          if (
+            $LASTEXITCODE -ne 0 -or
+            $published.tagName -ne $tag -or
+            $published.isDraft -or
+            $published.isPrerelease -or
+            $published.assets.Count -ne $assets.Count
+          ) {
+            throw "Published release verification failed."
+          }

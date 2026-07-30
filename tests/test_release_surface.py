@@ -21,8 +21,8 @@ def test_public_readme_has_product_ownership_and_support_path() -> None:
 
     assert "面向意识障碍患者的眼动仪操作界面与实验数据台" in readme
     assert "首都医科大学天坛医院意识障碍病区所有" in readme
-    assert "he_jianghong@sina.cn" in readme
-    assert "peterpig123456@gmail.com" in readme
+    assert "需要使用本软件或报告问题" in readme
+    assert readme.count("mailto:") >= 2
     assert "feature/gaze-tasks-mvp" not in readme
     assert "M3D13" not in readme
     assert "ὀποῖν θέσις" in readme
@@ -92,7 +92,7 @@ def test_powershell_scripts_are_utf8_bom_for_windows_powershell_51() -> None:
         data[len(codecs.BOM_UTF8) :].decode("utf-8")
 
 
-def test_ci_inventories_candidate_and_tag_release_is_locked_without_signer() -> None:
+def test_ci_inventories_candidate_and_v0_release_has_lightweight_provenance() -> None:
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
@@ -114,16 +114,50 @@ def test_ci_inventories_candidate_and_tag_release_is_locked_without_signer() -> 
     assert "permissions:\n  contents: read" in ci
     assert 'tags:\n      - "v*"' in release
     assert "permissions:\n  contents: write" in release
+    assert "id-token: write" in release
+    assert "attestations: write" in release
     assert "gh release create" in release
     assert "package_windows_release.ps1" in release
     assert "choco install innosetup" in release
     assert "check.ps1 -PythonCommand python" in release
-    assert "TRUSTED_SIGNING_PROVIDER_PENDING" in release
-    assert "OCULIDOC_WINDOWS_SIGNING_READY" not in release
-    gate = release.index('throw "TRUSTED_SIGNING_PROVIDER_PENDING: v0.1.1 release is blocked."')
+    assert "TRUSTED_SIGNING_PROVIDER_REQUIRED_FOR_V1" in release
+    assert "TRUSTED_SIGNING_PROVIDER_PENDING" not in release
+    assert "([version]$version).Major -ge 1" in release
+    assert "RELEASE_CHANNEL=pre-1.0-lightweight" in release
+    assert "actions/attest@v4" in release
+    assert "subject-path: dist/release/*" in release
+    assert "gh attestation verify" in release
+    assert "OculiDoC_bundle_signing_inventory.json" in release
+    assert "--notes-file RELEASE_NOTES.md" in release
+    assert "--verify-tag" in release
+    assert "--latest" in release
+    assert "--prerelease" not in release
+    assert "--clobber" not in release
+    assert "gh release upload" not in release
+    assert "already exists; publish a new patch version instead" in release
+    gate = release.index("TRUSTED_SIGNING_PROVIDER_REQUIRED_FOR_V1")
+    build = release.index("Build and verify release")
+    inventory = release.index("inventory_windows_signing.ps1")
+    attest = release.index("actions/attest@v4")
+    upload_artifact = release.index("actions/upload-artifact@v4")
     publish = release.index("gh release create")
     assert gate < release.index("Install project")
-    assert gate < publish
+    assert build < inventory < attest < upload_artifact < publish
+
+
+def test_release_notes_disclose_pre_1_0_trust_boundary() -> None:
+    notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
+
+    assert "v0.x" in notes
+    assert "SHA-256" in notes
+    assert "Sigstore" in notes
+    assert "Authenticode" in notes
+    assert "v1.0" in notes
+    assert "不要关闭 Windows 安全策略" in notes
+    assert "不代表医院或科室的官方发布" in notes
+    assert "gh attestation verify" in notes
+    assert "真实 Tobii" in notes
+    assert "床旁" in notes
 
 
 def test_readme_recommends_installer_and_keeps_short_emergency_command() -> None:
