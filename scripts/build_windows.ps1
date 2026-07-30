@@ -1,4 +1,4 @@
-param(
+﻿param(
     [switch]$InstallDependencies,
     [switch]$ValidateOnly,
     [string]$PythonCommand = "python"

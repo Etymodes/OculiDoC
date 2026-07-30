@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$BundleRoot = "",
     [string]$OutputPath = "",
     [switch]$RequireTrustedRsa

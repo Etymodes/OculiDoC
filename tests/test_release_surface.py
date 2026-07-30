@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import tomllib
 from pathlib import Path
 
@@ -81,11 +82,27 @@ def test_windows_maintenance_scripts_use_repository_venv() -> None:
     assert (ROOT / "scripts" / "package_windows_release.ps1").is_file()
 
 
+def test_powershell_scripts_are_utf8_bom_for_windows_powershell_51() -> None:
+    scripts = sorted((ROOT / "scripts").glob("*.ps1"))
+
+    assert scripts
+    for script in scripts:
+        data = script.read_bytes()
+        assert data.startswith(codecs.BOM_UTF8), script
+        data[len(codecs.BOM_UTF8) :].decode("utf-8")
+
+
 def test_ci_inventories_candidate_and_tag_release_is_locked_without_signer() -> None:
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     assert "windows-package:" in ci
+    assert "Validate Windows PowerShell 5.1 scripts" in ci
+    assert "shell: powershell" in ci
+    assert 'PSEdition -ne "Desktop"' in ci
+    assert "PSVersion.Major -ne 5" in ci
+    assert "$bytes[0] -ne 0xEF" in ci
+    assert "System.Management.Automation.Language.Parser" in ci
     assert "package_windows_release.ps1" in ci
     assert "inventory_windows_signing.ps1" in ci
     assert ci.index("build_windows.ps1") < ci.index("package_windows_release.ps1")
