@@ -83,7 +83,10 @@ class StarTarget:
 class RoundOutcome:
     target: StarTarget
     status: str
+    sample_count: int
+    valid_sample_count: int
     valid_sample_ratio: float
+    sample_coverage_sufficient: bool
     response_ms: float | None
     score_after: int
     region_after: ReachableRegion
@@ -157,12 +160,23 @@ class StarlightAdaptiveModel:
         target: StarTarget,
         *,
         acquired: bool,
-        valid_sample_ratio: float,
+        sample_count: int,
+        valid_sample_count: int,
+        sample_coverage_sufficient: bool,
         response_ms: float | None,
     ) -> RoundOutcome:
         if target.round_index != self.completed_rounds:
             raise ValueError("Target does not match the current round.")
-        quality_valid = valid_sample_ratio >= 0.50
+        if isinstance(sample_count, bool) or not isinstance(sample_count, int):
+            raise TypeError("sample_count must be an integer.")
+        if isinstance(valid_sample_count, bool) or not isinstance(valid_sample_count, int):
+            raise TypeError("valid_sample_count must be an integer.")
+        if sample_count < 0 or not 0 <= valid_sample_count <= sample_count:
+            raise ValueError("Sample counts are inconsistent.")
+        if not isinstance(sample_coverage_sufficient, bool):
+            raise TypeError("sample_coverage_sufficient must be a boolean.")
+        valid_sample_ratio = valid_sample_count / sample_count if sample_count else 0.0
+        quality_valid = sample_coverage_sufficient and valid_sample_ratio >= 0.50
         status = "hit" if acquired and quality_valid else "miss" if quality_valid else "invalid"
         if status == "hit":
             self.score += 10 * self.level
@@ -184,7 +198,10 @@ class StarlightAdaptiveModel:
         outcome = RoundOutcome(
             target=target,
             status=status,
-            valid_sample_ratio=max(0.0, min(1.0, float(valid_sample_ratio))),
+            sample_count=sample_count,
+            valid_sample_count=valid_sample_count,
+            valid_sample_ratio=valid_sample_ratio,
+            sample_coverage_sufficient=sample_coverage_sufficient,
             response_ms=response_ms,
             score_after=self.score,
             region_after=self.region,
@@ -213,6 +230,9 @@ class StarlightAdaptiveModel:
 class StarlightRouteTask(QWidget):
     """Patient screen with a breathing, slowly rotating gaze target."""
 
+    _MINIMUM_SAMPLE_RATE_HZ = 5.0
+    _MAX_COVERAGE_EDGE_GAP_NS = 1_000_000_000
+
     protocol_completed = Signal()
     speech_requested = Signal(str)
 
@@ -230,7 +250,9 @@ class StarlightRouteTask(QWidget):
         self._dwell_started_ns: int | None = None
         self._sample_count = 0
         self._valid_sample_count = 0
+        self._first_sample_ns: int | None = None
         self._last_gaze: tuple[float, float] | None = None
+        self._last_valid_sample_ns: int | None = None
         self._collected_positions: list[tuple[float, float]] = []
         self._events: list[dict[str, object]] = []
         self._timer = QTimer(self)
@@ -264,10 +286,14 @@ class StarlightRouteTask(QWidget):
         if not self._running:
             return
         now = sample.timestamp.monotonic_timestamp_ns
+        round_index = self.model.completed_rounds
         self.advance_time(now)
-        if not self._running:
+        if not self._running or self.model.completed_rounds != round_index:
             return
         self._sample_count += 1
+        if self._first_sample_ns is None:
+            self._first_sample_ns = now
+        self._last_sample_ns = now
         valid = bool(
             sample.gaze_valid
             and sample.gaze_x_normalized is not None
@@ -283,14 +309,34 @@ class StarlightRouteTask(QWidget):
         x = max(0.0, min(1.0, float(sample.gaze_x_normalized)))
         y = max(0.0, min(1.0, float(sample.gaze_y_normalized)))
         self._last_gaze = (x, y)
+        self._last_valid_sample_ns = now
         if not self._inside_target(x, y):
             self._dwell_started_ns = None
         elif self._dwell_started_ns is None:
             self._dwell_started_ns = now
         elif now - self._dwell_started_ns >= self.config.dwell_time_ms * 1_000_000:
             self._finish_round(now, acquired=True)
-        self._last_sample_ns = now
         self.update()
+
+    def _sample_coverage_sufficient(self, now: int) -> bool:
+        if (
+            self._round_started_ns is None
+            or self._first_sample_ns is None
+            or self._last_sample_ns is None
+            or self._last_valid_sample_ns is None
+        ):
+            return False
+        elapsed_ns = max(0, now - self._round_started_ns)
+        minimum_sample_count = max(
+            2,
+            math.ceil(elapsed_ns / 1_000_000_000 * self._MINIMUM_SAMPLE_RATE_HZ),
+        )
+        return (
+            self._sample_count >= minimum_sample_count
+            and self._first_sample_ns - self._round_started_ns <= self._MAX_COVERAGE_EDGE_GAP_NS
+            and now - self._last_sample_ns <= self._MAX_COVERAGE_EDGE_GAP_NS
+            and now - self._last_valid_sample_ns <= self._MAX_COVERAGE_EDGE_GAP_NS
+        )
 
     def advance_time(self, timestamp_ns: int | None = None) -> None:
         if not self._running or self._round_started_ns is None:
@@ -302,10 +348,14 @@ class StarlightRouteTask(QWidget):
 
     def _finish_round(self, now: int, *, acquired: bool) -> None:
         assert self._round_started_ns is not None
-        ratio = self._valid_sample_count / self._sample_count if self._sample_count else 0.0
         response = (now - self._round_started_ns) / 1_000_000.0 if acquired else None
         outcome = self.model.record(
-            self._target, acquired=acquired, valid_sample_ratio=ratio, response_ms=response
+            self._target,
+            acquired=acquired,
+            sample_count=self._sample_count,
+            valid_sample_count=self._valid_sample_count,
+            sample_coverage_sufficient=self._sample_coverage_sufficient(now),
+            response_ms=response,
         )
         if outcome.status == "hit":
             self._collected_positions.append((self._target.x, self._target.y))
@@ -315,6 +365,10 @@ class StarlightRouteTask(QWidget):
             status=outcome.status,
             level=self._target.level,
             score=self.model.score,
+            sample_count=outcome.sample_count,
+            valid_sample_count=outcome.valid_sample_count,
+            valid_sample_ratio=outcome.valid_sample_ratio,
+            sample_coverage_sufficient=outcome.sample_coverage_sufficient,
         )
         if self.model.completed_rounds >= self.config.round_count:
             self._finished = True
@@ -326,6 +380,9 @@ class StarlightRouteTask(QWidget):
         self._round_started_ns = now
         self._sample_count = 0
         self._valid_sample_count = 0
+        self._first_sample_ns = None
+        self._last_sample_ns = None
+        self._last_valid_sample_ns = None
         self._dwell_started_ns = None
         if outcome.status == "hit" and self.config.sound_enabled:
             self.speech_requested.emit("收集到了")
@@ -392,7 +449,10 @@ class StarlightRouteTask(QWidget):
                     "probe_edge": item.target.probe_edge.value if item.target.probe_edge else None,
                     "target_x": item.target.x,
                     "target_y": item.target.y,
+                    "sample_count": item.sample_count,
+                    "valid_sample_count": item.valid_sample_count,
                     "valid_sample_ratio": item.valid_sample_ratio,
+                    "sample_coverage_sufficient": item.sample_coverage_sufficient,
                     "response_ms": item.response_ms,
                     "score_after": item.score_after,
                     "region_after": asdict(item.region_after),

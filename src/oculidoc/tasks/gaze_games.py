@@ -1,4 +1,4 @@
-"""Top-level configuration shared by the two M3D13 gaze-game modes."""
+"""Top-level configuration shared by the three M3D13 gaze-game modes."""
 
 from __future__ import annotations
 
