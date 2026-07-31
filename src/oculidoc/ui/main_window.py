@@ -1353,6 +1353,8 @@ class AdminMainWindow(QMainWindow):
             if game_mode == "garden"
             else " · 视觉寻宝"
             if game_mode == "treasure_hunt"
+            else " · 星光航线"
+            if game_mode == "starlight_route"
             else ""
         )
         return f"{module.title}{mode_text}已按设置版本 {config_revision} 直接启动。"

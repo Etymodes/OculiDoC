@@ -198,7 +198,7 @@ const fields = {
     {name: "show_gaze_cursor", label: "患者屏幕显示实时视线光标", type: "checkbox"}
   ],
   gaze_games: [
-    {name: "default_mode", label: "本次游戏模式", type: "select", options: [["garden", "点亮花园"], ["treasure_hunt", "视觉寻宝"]]},
+    {name: "default_mode", label: "本次游戏模式", type: "select", options: [["garden", "点亮花园"], ["treasure_hunt", "视觉寻宝"], ["starlight_route", "星光航线"]]},
     {name: "garden.object_count", label: "花园 · 花朵数量", type: "number", min: 2, max: 6, step: 1},
     {name: "garden.object_diameter_px", label: "花园 · 花朵直径（px）", type: "number", min: 160, max: 480, step: 1},
     {name: "garden.dwell_time_ms", label: "花园 · 持续注视阈值（ms）", type: "number", min: 250, max: 3000, step: 50},
@@ -221,7 +221,14 @@ const fields = {
     {name: "treasure_hunt.style_filters", label: "寻宝 · 图片风格（可多选）", type: "multi-select", options: []},
     {name: "treasure_hunt.randomize_trial_order", label: "寻宝 · 随机试次顺序", type: "checkbox"},
     {name: "treasure_hunt.sound_enabled", label: "寻宝 · 启用温和语音反馈", type: "checkbox"},
-    {name: "treasure_hunt.show_gaze_cursor", label: "寻宝 · 显示实时视线光标", type: "checkbox"}
+    {name: "treasure_hunt.show_gaze_cursor", label: "寻宝 · 显示实时视线光标", type: "checkbox"},
+    {name: "starlight_route.round_count", label: "星光 · 总轮数", type: "number", min: 6, max: 120, step: 1},
+    {name: "starlight_route.initial_level", label: "星光 · 起始等级", type: "number", min: 1, max: 10, step: 1},
+    {name: "starlight_route.dwell_time_ms", label: "星光 · 持续注视阈值（ms）", type: "number", min: 250, max: 3000, step: 50},
+    {name: "starlight_route.trial_duration_seconds", label: "星光 · 每轮最长（秒）", type: "number", min: 3, max: 30, step: 1},
+    {name: "starlight_route.edge_probe_interval", label: "星光 · 边缘试探间隔（轮）", type: "number", min: 2, max: 10, step: 1},
+    {name: "starlight_route.sound_enabled", label: "星光 · 启用温和语音反馈", type: "checkbox"},
+    {name: "starlight_route.show_gaze_cursor", label: "星光 · 显示实时视线光标", type: "checkbox"}
   ],
   visual_preference: [
     {name: "presentation_seconds", label: "单次图片呈现（秒）", type: "number", min: 3, max: 15, step: 1},
@@ -641,6 +648,13 @@ function launchSummary(record) {
       "区块：基线 → 联动 1 → 回放 → 联动 2\n声音：" +
       (garden.sound_enabled ? "开启" : "关闭") + "\n随机种子：" +
       (garden.randomization_seed === null ? "运行时生成" : garden.randomization_seed);
+  }
+  if (record.module_id === "gaze_games" && config.default_mode === "starlight_route") {
+    const route = config.starlight_route;
+    return "一级入口：眼动游戏\n游戏模式：星光航线\n总轮数：" + route.round_count +
+      "\n起始等级：" + route.initial_level + "\n每轮最长：" +
+      route.trial_duration_seconds + " 秒\n边缘试探：每 " + route.edge_probe_interval +
+      " 轮\n低质量数据：不降级";
   }
   if (record.module_id === "gaze_games") {
     const hunt = config.treasure_hunt;

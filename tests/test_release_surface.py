@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_release_uses_one_consistent_version() -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert metadata["project"]["version"] == "0.1.1"
-    assert oculidoc.__version__ == "0.1.1"
+    assert metadata["project"]["version"] == "0.1.2"
+    assert oculidoc.__version__ == "0.1.2"
 
 
 def test_public_readme_has_evaluation_license_and_support_path() -> None:

@@ -36,7 +36,7 @@ DEFAULT_MODULES: tuple[ModuleDefinition, ...] = (
     ModuleDefinition(
         "gaze_games",
         "眼动游戏",
-        "在点亮花园和视觉寻宝之间选择，并记录注视联动或视觉搜索表现。",
+        "选择点亮花园、视觉寻宝或星光航线，记录注视联动、视觉搜索与个体可达区域。",
         "available",
     ),
     ModuleDefinition(

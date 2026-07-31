@@ -40,7 +40,8 @@ def test_default_plan_excludes_optional_eye_observation_from_progress() -> None:
     assert step(plan, "visual_preference").config_revision == 2
     assert step(plan, "gaze_games:garden").config_revision == 4
     assert step(plan, "gaze_games:treasure_hunt").config_revision == 4
-    assert plan.progress == (0, 10)
+    assert step(plan, "gaze_games:starlight_route").config_revision == 4
+    assert plan.progress == (0, 11)
     assert plan.next_pending_step == step(plan, "visual_preference")
 
 
@@ -53,7 +54,7 @@ def test_plan_uses_real_session_terminals_and_keeps_failure_distinct() -> None:
     failed = preference.finish(StepStatus.FAILED)
     plan = plan.replace_step(failed)
 
-    assert plan.progress == (1, 10)
+    assert plan.progress == (1, 11)
     assert step(plan, "visual_preference").status is StepStatus.FAILED
     assert step(plan, "visual_preference").session_id == "session-1"
     assert plan.next_pending_step == step(plan, "tracking_ball")

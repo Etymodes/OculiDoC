@@ -183,6 +183,14 @@ def test_game_mode_page_can_return_before_accepting(
     back.click()
     assert dialog.pages.currentIndex() == 0
 
+    starlight = dialog.findChild(QPushButton, "gazeGameStarlightRouteButton")
+    assert starlight is not None
+    starlight.click()
+    assert dialog.pages.currentIndex() == 3
+    dialog._accept_mode(GazeGameMode.STARLIGHT_ROUTE)
+    assert dialog.selected_mode is GazeGameMode.STARLIGHT_ROUTE
+    assert dialog.build_config().default_mode is GazeGameMode.STARLIGHT_ROUTE
+
     dialog._accept_mode(GazeGameMode.GARDEN)
     assert dialog.selected_mode is GazeGameMode.GARDEN
     assert dialog.build_config().default_mode is GazeGameMode.GARDEN

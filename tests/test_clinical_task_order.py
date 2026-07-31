@@ -13,6 +13,7 @@ def test_default_clinical_order_has_optional_zero_and_nine_interaction_stages() 
         "tracking_ball",
         "gaze_games:garden",
         "gaze_games:treasure_hunt",
+        "gaze_games:starlight_route",
         "instruction_fixation",
         "image_choice",
         "binary_horizontal",
@@ -26,6 +27,7 @@ def test_default_clinical_order_has_optional_zero_and_nine_interaction_stages() 
         "2",
         "3a",
         "3b",
+        "3c",
         "4",
         "5",
         "6",
@@ -35,12 +37,12 @@ def test_default_clinical_order_has_optional_zero_and_nine_interaction_stages() 
     ]
     assert CLINICAL_TASK_ORDER[0].selected_by_default is False
     assert all(definition.selected_by_default for definition in CLINICAL_TASK_ORDER[1:])
-    assert sum(definition.module_id == "gaze_games" for definition in CLINICAL_TASK_ORDER) == 2
+    assert sum(definition.module_id == "gaze_games" for definition in CLINICAL_TASK_ORDER) == 3
     assert {
         definition.game_mode
         for definition in CLINICAL_TASK_ORDER
         if definition.module_id == "gaze_games"
-    } == {"garden", "treasure_hunt"}
+    } == {"garden", "treasure_hunt", "starlight_route"}
 
 
 def test_vertical_first_only_swaps_the_two_binary_steps() -> None:
@@ -51,14 +53,14 @@ def test_vertical_first_only_swaps_the_two_binary_steps() -> None:
         definition.step_id for definition in clinical_task_order(BinaryAxisOrder.VERTICAL_FIRST)
     ]
 
-    assert vertical_ids[7:9] == ["binary_vertical", "binary_horizontal"]
-    assert vertical_ids[:7] == default_ids[:7]
-    assert vertical_ids[9:] == default_ids[9:]
+    assert vertical_ids[8:10] == ["binary_vertical", "binary_horizontal"]
+    assert vertical_ids[:8] == default_ids[:8]
+    assert vertical_ids[10:] == default_ids[10:]
     assert default_rest_after_step_ids() == (
-        "gaze_games:treasure_hunt",
+        "gaze_games:starlight_route",
         "binary_vertical",
     )
     assert default_rest_after_step_ids(BinaryAxisOrder.VERTICAL_FIRST) == (
-        "gaze_games:treasure_hunt",
+        "gaze_games:starlight_route",
         "binary_horizontal",
     )

@@ -257,10 +257,13 @@ def test_m3d13_nested_configs_round_trip_and_keep_revision_conflicts(
     assert game.config["default_mode"] == "garden"
     garden = game.config["garden"]
     treasure_hunt = game.config["treasure_hunt"]
+    starlight_route = game.config["starlight_route"]
     assert isinstance(garden, dict)
     assert isinstance(treasure_hunt, dict)
+    assert isinstance(starlight_route, dict)
     assert garden["dwell_time_ms"] == 800
     assert treasure_hunt["catch_trial_count"] == 2
+    assert starlight_route["initial_level"] == 1
     assert preference.config["pair_ids"] == []
     assert preference.config["pairs"] == []
 

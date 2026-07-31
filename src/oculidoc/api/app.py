@@ -335,7 +335,7 @@ def create_api(
         game_mode = request.game_mode.strip() if request.game_mode else None
 
         if request.command_type is LanCommandType.START_TASK and module_id == "gaze_games":
-            if game_mode not in {"garden", "treasure_hunt"}:
+            if game_mode not in {"garden", "treasure_hunt", "starlight_route"}:
                 raise HTTPException(
                     status_code=422,
                     detail="请选择游戏模式。",
