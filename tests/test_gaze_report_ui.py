@@ -115,19 +115,10 @@ def test_history_generates_and_opens_report(
         fake_generate,
     )
 
-    class StubWebView(history_module.QWidget):
-        def setUrl(self, url: object) -> None:
-            opened.append(url)
-
     monkeypatch.setattr(
-        history_module,
-        "QWebEngineView",
-        StubWebView,
-    )
-    monkeypatch.setattr(
-        history_module.QDialog,
-        "exec",
-        lambda _self: 0,
+        history_module.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(url) or True,
     )
     monkeypatch.setattr(
         QMessageBox,

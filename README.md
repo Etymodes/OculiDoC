@@ -10,12 +10,13 @@
   Windows 10/11 · Python 3.11 · 当前版本 v0.1.1
 </p>
 
-> **权属与使用限制**
+> **v0.1.1 公开评估许可**
 >
-> OculiDoC 为**首都医科大学天坛医院意识障碍病区所有**。未经书面授权，不得擅自复制、
-> 传播、改作、再发布或用于商业及临床服务。需要使用本软件或报告问题，请联系
-> [he_jianghong@sina.cn](mailto:he_jianghong@sina.cn?cc=peterpig123456@gmail.com&subject=OculiDoC)
-> 并抄送 [peterpig123456@gmail.com](mailto:peterpig123456@gmail.com)。
+> 发布者已确认有权在官方 v0.1.1 源码与发行包中公开分发 76 张刺激图和品牌资源。
+> 公众可下载、安装和运行官方 v0.1.1，**仅限非临床工程评估**。本版本不是医疗器械，
+> 也不代表医院或科室的官方发布、认证或背书。未明确授予的权利仍予保留，包括拆出或
+> 独立复用素材、修改、重新打包、再发布、商业服务及临床使用。完整边界见
+> [LICENSE-v0.1.1.txt](LICENSE-v0.1.1.txt) 与 [NOTICE.md](NOTICE.md)。
 
 ## 软件界面
 
@@ -115,8 +116,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\update.ps1
 
 ## 上报 Bug
 
-请发送邮件至 [he_jianghong@sina.cn](mailto:he_jianghong@sina.cn?cc=peterpig123456@gmail.com&subject=OculiDoC%20Bug)
-并 **CC** [peterpig123456@gmail.com](mailto:peterpig123456@gmail.com)，附上：
+请通过仓库的 [GitHub Issues](https://github.com/Etymodes/OculiDoC/issues) 提交公开、
+可复现的问题，并附上：
 
 - OculiDoC 版本号和 Windows 版本；
 - 使用的眼动设备与数据源；
@@ -126,10 +127,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\update.ps1
 
 ## 使用边界
 
-OculiDoC 当前是内部科研与工程平台，不是医疗器械，不能单独用于诊断、预后或治疗决策。
-首次真实患者使用前，必须使用具有适用授权的合规硬件，并针对实际电脑、显示器、驱动、
-病房环境和操作流程完成独立现场确认。患者身份、实验记录、眼动轨迹、数据库、日志和导出
-文件不得提交到 GitHub。
+OculiDoC v0.1.1 是面向非临床工程评估的 pre-1.0 平台，不是医疗器械，不得用于任何
+真实患者或临床用途，包括诊断、预后、治疗决策或临床服务。任何未来版本的真实患者研究
+都必须另行取得伦理、知情同意、硬件及软件授权，并针对实际电脑、显示器、驱动、病房
+环境和操作流程完成独立现场确认。
+患者身份、实验记录、眼动轨迹、数据库、日志和导出文件不得提交到 GitHub。
 
 v0.1.1 的实时视线坐标要求眼动仪校准显示器与全屏任务所在显示器为同一固定显示器；
 任务进行中不得移动窗口、切换显示器或更改显示缩放。多显示器部署必须先完成现场坐标

@@ -9,7 +9,6 @@ from uuid import UUID
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -268,15 +267,13 @@ class PatientSessionHistoryDialog(QDialog):
             QMessageBox.critical(self, "报告总结生成失败", str(error))
             return
 
-        dialog = QDialog(self)
-        dialog.setWindowTitle(f"{self.patient.display_label} · 报告总结")
-        dialog.resize(1180, 780)
-        browser = QWebEngineView(dialog)
-        browser.setUrl(QUrl.fromLocalFile(str(summary_path)))
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(browser)
-        dialog.exec()
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(summary_path)))
+        if not opened:
+            QMessageBox.warning(
+                self,
+                "无法打开报告总结",
+                f"请在浏览器中手动打开：\n{summary_path}",
+            )
         self.refresh_sessions()
 
     def _report_summary_html(

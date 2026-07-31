@@ -11,3 +11,4 @@
 *.dll binary
 *.parquet binary
 *.xlsx binary
+packaging/windows/licenses/** -whitespace

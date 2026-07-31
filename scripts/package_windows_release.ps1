@@ -23,6 +23,37 @@ if (-not (Test-Path $installerDefinition -PathType Leaf)) {
     throw "未找到 Windows 安装器定义。"
 }
 
+$requiredBundleDocuments = @(
+    "LICENSE-v0.1.1.txt",
+    "NOTICE.md",
+    "THIRD_PARTY_NOTICES.md",
+    "THIRD_PARTY_LICENSES.json",
+    "QT_SOURCE_OFFER.md"
+)
+foreach ($name in $requiredBundleDocuments) {
+    $path = Join-Path $bundleRoot $name
+    if (-not (Test-Path $path -PathType Leaf)) {
+        throw "冻结包缺少发行许可文件：$name"
+    }
+}
+
+$bundleLicenseRoot = Join-Path $bundleRoot "licenses"
+$bundleLicenseFiles = @(
+    Get-ChildItem $bundleLicenseRoot -Recurse -File -Filter "*.txt"
+)
+if ($bundleLicenseFiles.Count -lt 41) {
+    throw "冻结包内完整许可文本数量不足：$($bundleLicenseFiles.Count)"
+}
+
+$thirdPartyLicenseReport = Join-Path $bundleRoot "THIRD_PARTY_LICENSES.json"
+$thirdPartyLicenseRecords = @(
+    Get-Content $thirdPartyLicenseReport -Raw |
+        ConvertFrom-Json
+)
+if ($thirdPartyLicenseRecords.Count -lt 1) {
+    throw "冻结包内第三方许可证清单为空。"
+}
+
 Set-Location $repositoryRoot
 $version = (& $PythonCommand -c `
     "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
@@ -35,6 +66,13 @@ if (Test-Path $releaseRoot) {
     Remove-Item $releaseRoot -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
+
+foreach ($name in $requiredBundleDocuments) {
+    Copy-Item `
+        (Join-Path $bundleRoot $name) `
+        (Join-Path $releaseRoot $name) `
+        -Force
+}
 
 $zipName = "OculiDoC-v$version-windows-x64-portable.zip"
 $zipPath = Join-Path $releaseRoot $zipName
@@ -51,6 +89,21 @@ try {
             $_.FullName -match "/assets/stimuli/.+\.png$"
         }
     ).Count
+    $requiredDocumentCounts = [ordered]@{}
+    foreach ($name in $requiredBundleDocuments) {
+        $requiredDocumentCounts[$name] = @(
+            $archive.Entries | Where-Object {
+                $_.FullName -match (
+                    "(^|/)" + [regex]::Escape($name) + "$"
+                )
+            }
+        ).Count
+    }
+    $licenseTextCount = @(
+        $archive.Entries | Where-Object {
+            $_.FullName -match "/licenses/.+\.txt$"
+        }
+    ).Count
 } finally {
     $archive.Dispose()
 }
@@ -60,6 +113,17 @@ if ($exeCount -ne 1) {
 }
 if ($stimulusCount -ne 76) {
     throw "便携 ZIP 内刺激图数量异常：$stimulusCount"
+}
+foreach ($name in $requiredDocumentCounts.Keys) {
+    if ($requiredDocumentCounts[$name] -ne 1) {
+        throw (
+            "便携 ZIP 内发行许可文件数量异常：" +
+            "$name = $($requiredDocumentCounts[$name])"
+        )
+    }
+}
+if ($licenseTextCount -lt 41) {
+    throw "便携 ZIP 内完整许可文本数量不足：$licenseTextCount"
 }
 
 $zipHash = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -84,6 +148,11 @@ $manifest = [ordered]@{
     package_size_bytes = (Get-Item $zipPath).Length
     executable_count = $exeCount
     reviewed_stimulus_png_count = $stimulusCount
+    release_document_count = $requiredBundleDocuments.Count
+    third_party_license_record_count = (
+        $thirdPartyLicenseRecords.Count
+    )
+    complete_license_text_count = $licenseTextCount
 }
 $manifest | ConvertTo-Json -Depth 4 |
     Set-Content (Join-Path $releaseRoot "OculiDoC_release_manifest.json") -Encoding utf8

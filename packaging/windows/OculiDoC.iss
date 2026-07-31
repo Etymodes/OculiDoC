@@ -28,12 +28,14 @@ OutputDir={#OutputDir}
 OutputBaseFilename=OculiDoC-Setup
 SetupIconFile={#SourceDir}\_internal\oculidoc\assets\app_icon.ico
 UninstallDisplayIcon={app}\OculiDoC.exe
+LicenseFile={#SourceDir}\LICENSE-v0.1.1.txt
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
 VersionInfoVersion={#AppVersion}
+AppComments=仅限非临床工程评估；不是医疗器械或医院官方发行。
 
 [Languages]
 Name: "chinesesimp"; MessagesFile: "languages\ChineseSimplified.isl"

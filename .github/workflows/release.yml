@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.11"
+          python-version: "3.11.9"
           cache: pip
       - name: Verify tag and project version
         shell: pwsh
@@ -38,12 +38,21 @@ jobs:
       - name: Validate source
         shell: pwsh
         run: ./scripts/check.ps1 -PythonCommand python
+      - name: Prepare clean release environment
+        shell: pwsh
+        run: |
+          python -m venv .release-venv
+          ./.release-venv/Scripts/python.exe -m pip install --upgrade pip
+          ./.release-venv/Scripts/python.exe -m pip install -e ".[research,build]"
       - name: Build and verify release
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
-          ./scripts/build_windows.ps1 -PythonCommand python
-          ./scripts/package_windows_release.ps1 -PythonCommand python
+          $releasePython = (
+            Resolve-Path "./.release-venv/Scripts/python.exe"
+          ).Path
+          ./scripts/build_windows.ps1 -PythonCommand $releasePython
+          ./scripts/package_windows_release.ps1 -PythonCommand $releasePython
           ./scripts/inventory_windows_signing.ps1 `
             -BundleRoot ./dist/windows/OculiDoC `
             -OutputPath ./dist/release/OculiDoC_bundle_signing_inventory.json

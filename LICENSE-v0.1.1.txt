@@ -1,0 +1,37 @@
+OculiDoC v0.1.1 Limited Public Evaluation License
+
+Copyright (c) 2026 OculiDoC contributors and the respective rights holders.
+All rights reserved except for the limited permission below.
+
+The publisher confirms that it has the rights needed to distribute the 76
+stimulus images and brand resources included in the official OculiDoC v0.1.1
+source tag and GitHub Release.
+
+Permission is granted to the public to download the official OculiDoC v0.1.1
+source and release assets, and to make only the copies required to install and
+run an unmodified official copy, solely for non-clinical engineering
+evaluation.
+
+This permission does not allow:
+
+1. use with any real patient or for any clinical, diagnostic, prognostic,
+   treatment, patient-care, or medical-device purpose;
+2. modification, repackaging, redistribution, sale, sublicensing, or use to
+   provide a commercial service;
+3. extraction, separate reuse, adaptation, or redistribution of any stimulus
+   image, logo, wordmark, or other brand resource;
+4. use of any hospital, department, project name, mark, or resource to imply
+   hospital publication, certification, endorsement, or clinical validity; or
+5. extension of this permission to any version other than official v0.1.1.
+
+Third-party components remain subject to their own licenses and notices, as
+identified in THIRD_PARTY_NOTICES.md and the license materials distributed
+with the official Windows packages. Those third-party terms take precedence
+for the corresponding components.
+
+THE SOFTWARE AND MATERIALS ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT,
+ACCURACY, SAFETY, OR CLINICAL EFFECTIVENESS. TO THE MAXIMUM EXTENT PERMITTED
+BY LAW, THE RIGHTS HOLDERS SHALL NOT BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY ARISING FROM OR RELATED TO THE SOFTWARE OR MATERIALS.

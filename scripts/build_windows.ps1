@@ -34,6 +34,9 @@
     $executablePath = Join-Path `
         $distRoot `
         "OculiDoC\OculiDoC.exe"
+    $bundleRoot = Split-Path `
+        $executablePath `
+        -Parent
 
     foreach ($path in @(
         $specPath,
@@ -152,6 +155,229 @@
 
         if (-not (Test-Path $executablePath -PathType Leaf)) {
             throw "未生成预期 EXE：$executablePath"
+        }
+
+        $forbiddenQtNamePatterns = @(
+            "*WebEngine*",
+            "Qt6CanvasPainter*",
+            "Qt6Coap*",
+            "Qt6Graphs*",
+            "Qt6Grpc*",
+            "Qt6HttpServer*",
+            "Qt6LottieAnimation*",
+            "Qt6Mqtt*",
+            "Qt6NetworkAuth*",
+            "Qt6QmlCompiler*",
+            "Qt6Quick3D*",
+            "Qt6QuickTimeline*",
+            "Qt6VirtualKeyboard*",
+            "Qt6WaylandCompositor*",
+            "qtvirtualkeyboardplugin.dll"
+        )
+        $forbiddenQtPathPatterns = @(
+            "*\qml\QtGraphs*",
+            "*\qml\QtQuick3D*",
+            "*\qml\QtQuick\Timeline*",
+            "*\qml\QtQuick\VirtualKeyboard*"
+        )
+
+        function Find-ForbiddenQtPayload {
+            param(
+                [string]$Root
+            )
+
+            Get-ChildItem `
+                $Root `
+                -Recurse `
+                -Force |
+                Where-Object {
+                    $candidate = $_
+                    $relativePath = (
+                        $candidate.FullName.Substring(
+                            $Root.Length
+                        ).Replace(
+                            "/",
+                            "\"
+                        )
+                    )
+                    @(
+                        $forbiddenQtNamePatterns |
+                            Where-Object {
+                                $candidate.Name -like $_
+                            }
+                    ).Count -gt 0 -or
+                    @(
+                        $forbiddenQtPathPatterns |
+                            Where-Object {
+                                $relativePath -like $_
+                            }
+                    ).Count -gt 0
+                }
+        }
+
+        $forbiddenQtPayload = @(
+            Find-ForbiddenQtPayload `
+                -Root $bundleRoot
+        )
+
+        foreach ($item in @(
+            $forbiddenQtPayload |
+                Sort-Object {
+                    $_.FullName.Length
+                } -Descending
+        )) {
+            if (Test-Path $item.FullName) {
+                Remove-Item `
+                    $item.FullName `
+                    -Recurse `
+                    -Force
+            }
+        }
+
+        $remainingForbiddenQtPayload = @(
+            Find-ForbiddenQtPayload `
+                -Root $bundleRoot
+        )
+
+        if ($remainingForbiddenQtPayload.Count -ne 0) {
+            $remainingForbiddenQtPayload.FullName |
+                Out-Host
+            throw "冻结包仍包含未使用的 WebEngine 或 GPL-only Qt 模块。"
+        }
+
+        $bundleDocuments = [ordered]@{
+            "LICENSE-v0.1.1.txt" = (
+                Join-Path `
+                    $repositoryRoot `
+                    "LICENSE-v0.1.1.txt"
+            )
+            "NOTICE.md" = (
+                Join-Path `
+                    $repositoryRoot `
+                    "NOTICE.md"
+            )
+            "THIRD_PARTY_NOTICES.md" = (
+                Join-Path `
+                    $repositoryRoot `
+                    "THIRD_PARTY_NOTICES.md"
+            )
+            "QT_SOURCE_OFFER.md" = (
+                Join-Path `
+                    $repositoryRoot `
+                    "QT_SOURCE_OFFER.md"
+            )
+        }
+
+        foreach ($name in $bundleDocuments.Keys) {
+            $source = $bundleDocuments[$name]
+            if (-not (Test-Path $source -PathType Leaf)) {
+                throw "缺少发行许可文件：$source"
+            }
+            Copy-Item `
+                $source `
+                (Join-Path $bundleRoot $name) `
+                -Force
+        }
+
+        $bundleLicenseRoot = Join-Path `
+            $bundleRoot `
+            "licenses"
+        New-Item `
+            -ItemType Directory `
+            -Path $bundleLicenseRoot `
+            -Force | Out-Null
+
+        $manualLicenseRoot = Join-Path `
+            $repositoryRoot `
+            "packaging\windows\licenses"
+        $manualLicenses = @(
+            Get-ChildItem `
+                $manualLicenseRoot `
+                -Recurse `
+                -File `
+                -Filter "*.txt"
+        )
+        if ($manualLicenses.Count -lt 40) {
+            throw "Qt/PySide 完整许可文本数量不足。"
+        }
+        Copy-Item `
+            (Join-Path $manualLicenseRoot "*") `
+            $bundleLicenseRoot `
+            -Recurse `
+            -Force
+
+        $pythonRuntimeVersion = (
+            & $PythonCommand `
+                -c "import platform; print(platform.python_version())"
+        ).Trim()
+        if (
+            $LASTEXITCODE -ne 0 -or
+            $pythonRuntimeVersion -ne "3.11.9"
+        ) {
+            throw "Windows 正式冻结包必须使用 CPython 3.11.9：$pythonRuntimeVersion"
+        }
+
+        $pythonLicenseSource = Join-Path `
+            $manualLicenseRoot `
+            "python-3.11.9\LICENSE.txt"
+        if (
+            -not (Test-Path $pythonLicenseSource -PathType Leaf)
+        ) {
+            throw "缺少 CPython 3.11.9 许可证。"
+        }
+        Copy-Item `
+            $pythonLicenseSource `
+            (Join-Path $bundleLicenseRoot "Python-3.11.9-LICENSE.txt") `
+            -Force
+
+        $thirdPartyLicenseReport = Join-Path `
+            $bundleRoot `
+            "THIRD_PARTY_LICENSES.json"
+        & $PythonCommand `
+            -m `
+            piplicenses `
+            --format=json `
+            --order=name `
+            --with-authors `
+            --with-maintainers `
+            --with-urls `
+            --with-description `
+            --with-license-file `
+            --with-notice-file `
+            --no-license-path `
+            --output-file $thirdPartyLicenseReport
+        if (
+            $LASTEXITCODE -ne 0 -or
+            -not (Test-Path $thirdPartyLicenseReport -PathType Leaf)
+        ) {
+            throw "第三方 Python 包许可证清单生成失败。"
+        }
+
+        $licenseRecords = @(
+            Get-Content `
+                $thirdPartyLicenseReport `
+                -Raw |
+                ConvertFrom-Json
+        )
+        $licensedPackageNames = @(
+            $licenseRecords |
+                ForEach-Object {
+                    $_.Name
+                }
+        )
+        foreach ($requiredPackage in @(
+            "numpy",
+            "opencv-python",
+            "pandas",
+            "PyInstaller",
+            "PySide6",
+            "PySide6_Addons",
+            "PySide6_Essentials",
+            "shiboken6"
+        )) {
+            if ($licensedPackageNames -notcontains $requiredPackage) {
+                throw "第三方许可证清单缺少：$requiredPackage"
+            }
         }
 
         $requiredAssets = @(
@@ -276,6 +502,12 @@
             embedded_icon = $true
             frozen_smoke_report = $smokePath
             frozen_smoke_ok = $true
+            forbidden_qt_payload_count = (
+                $remainingForbiddenQtPayload.Count
+            )
+            third_party_license_record_count = (
+                $licenseRecords.Count
+            )
         }
         $verificationPath = Join-Path `
             $distRoot `

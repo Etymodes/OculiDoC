@@ -16,19 +16,40 @@ def test_release_uses_one_consistent_version() -> None:
     assert oculidoc.__version__ == "0.1.1"
 
 
-def test_public_readme_has_product_ownership_and_support_path() -> None:
+def test_public_readme_has_evaluation_license_and_support_path() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "面向意识障碍患者的眼动仪操作界面与实验数据台" in readme
-    assert "首都医科大学天坛医院意识障碍病区所有" in readme
-    assert "需要使用本软件或报告问题" in readme
-    assert readme.count("mailto:") >= 2
+    assert "公众可下载、安装和运行官方 v0.1.1" in readme
+    assert "76 张刺激图和品牌资源" in readme
+    assert "仅限非临床工程评估" in readme
+    assert "不代表医院或科室的官方发布" in readme
+    assert "不得用于任何\n真实患者或临床用途" in readme
+    assert "LICENSE-v0.1.1.txt" in readme
+    assert "GitHub Issues" in readme
+    assert "mailto:" not in readme
+    assert "首都医科大学天坛医院意识障碍病区所有" not in readme
     assert "feature/gaze-tasks-mvp" not in readme
     assert "M3D13" not in readme
     assert "ὀποῖν θέσις" in readme
     assert "open thesis" in readme
     assert "TOBII_OFFICIAL_INTEGRATION.md" in readme
     assert "校准显示器与全屏任务所在显示器为同一固定显示器" in readme
+
+
+def test_notice_limits_public_permission_to_v011_nonclinical_evaluation() -> None:
+    notice = (ROOT / "NOTICE.md").read_text(encoding="utf-8")
+
+    assert "`v0.1.1` 标签及其官方 GitHub Release" in notice
+    assert "76 张刺激图和品牌资源" in notice
+    assert "安装和运行 OculiDoC v0.1.1" in notice
+    assert "仅限非临床工程评估" in notice
+    assert "不授予通用开源许可" in notice
+    assert "任何真实患者或临床用途" in notice
+    assert "拆出、独立复用、改作或再分发刺激图及品牌资源" in notice
+    assert "本版本不是医院或科室的官方发行" in notice
+    assert "mailto:" not in notice
+    assert "首都医科大学天坛医院意识障碍病区所有" not in notice
 
 
 def test_repository_workflow_uses_current_github_repo_as_source_of_truth() -> None:
@@ -111,6 +132,7 @@ def test_ci_inventories_candidate_and_v0_release_has_lightweight_provenance() ->
     assert "-BundleRoot ./dist/windows/OculiDoC" in ci
     assert "OculiDoC_bundle_signing_inventory.json" in ci
     assert "check.ps1 -PythonCommand python" in ci
+    assert ci.count('python-version: "3.11.9"') == 2
     assert "permissions:\n  contents: read" in ci
     assert 'tags:\n      - "v*"' in release
     assert "permissions:\n  contents: write" in release
@@ -124,6 +146,10 @@ def test_ci_inventories_candidate_and_v0_release_has_lightweight_provenance() ->
     assert "TRUSTED_SIGNING_PROVIDER_PENDING" not in release
     assert "([version]$version).Major -ge 1" in release
     assert "RELEASE_CHANNEL=pre-1.0-lightweight" in release
+    assert 'python-version: "3.11.9"' in release
+    assert "Prepare clean release environment" in release
+    assert 'pip install -e ".[research,build]"' in release
+    assert "./.release-venv/Scripts/python.exe" in release
     assert "actions/attest@v4" in release
     assert "subject-path: dist/release/*" in release
     assert "gh attestation verify" in release
@@ -155,6 +181,10 @@ def test_release_notes_disclose_pre_1_0_trust_boundary() -> None:
     assert "v1.0" in notes
     assert "不要关闭 Windows 安全策略" in notes
     assert "不代表医院或科室的官方发布" in notes
+    assert "76 张刺激图和品牌资源" in notes
+    assert "仅限非临床工程评估" in notes
+    assert "不得用于任何真实患者或临床" in notes
+    assert "LICENSE-v0.1.1.txt" in notes
     assert "gh attestation verify" in notes
     assert "真实 Tobii" in notes
     assert "床旁" in notes

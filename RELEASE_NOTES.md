@@ -22,12 +22,19 @@ v0.1.1 是 OculiDoC 的 Windows pre-1.0 正式轻发布。
 - `OculiDoC_release_manifest.json`：发行包版本、大小和内容计数。
 - `OculiDoC_bundle_signing_inventory.json`：冻结目录的 Authenticode 状态与逐文件 SHA-256
   清单。
+- `LICENSE-v0.1.1.txt`、`NOTICE.md` 与 `THIRD_PARTY_NOTICES.md`：本版有限许可、
+  使用边界与第三方归属说明；安装器和便携包内也包含这些文件。
 
 ## v0.x 轻发布信任边界
 
 本次资产由 `Etymodes/OculiDoC` 的 GitHub Actions 构建，并使用 GitHub/Sigstore
 构建来源证明和 SHA-256 校验。它们可以验证文件完整性与构建来源，但不等同于医院主体的
 Windows Authenticode 可信发布者签名。本渠道不代表医院或科室的官方发布、认证或背书。
+
+发布者已确认有权在官方 v0.1.1 源码与发行包中公开分发 76 张刺激图和品牌资源。
+公众可下载、安装和运行官方 v0.1.1，仅限非临床工程评估；不得用于任何真实患者或临床
+用途。这不授予拆出或独立复用素材、
+修改、重新打包、再发布、商业服务或临床使用的权利。完整有限许可见 `NOTICE.md`。
 
 安装 GitHub CLI 后，可在下载目录运行
 `gh attestation verify OculiDoC-Setup.exe -R Etymodes/OculiDoC`
@@ -39,7 +46,8 @@ v1.0 及以后。
 
 ## 使用边界
 
-- 当前版本是内部科研与工程平台，不是医疗器械，不能单独用于诊断、预后或治疗决策。
+- 当前版本仅供非临床工程评估，不是医疗器械，不得用于任何真实患者或临床用途，包括
+  诊断、预后、治疗决策或临床服务。
 - Tobii SDK、运行时、驱动、许可证及专有 DLL 不随 OculiDoC 分发；使用者必须自行确认
   具体设备与用途的适用授权。
 - 本次自动化验证不等同于真实 Tobii 设备验收，也不等同于意识障碍患者床旁定位精度或
