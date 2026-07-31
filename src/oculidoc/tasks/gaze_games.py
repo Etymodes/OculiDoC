@@ -6,6 +6,13 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from oculidoc.image_library import ImageLibraryDialog, ImageLibraryStore
+from oculidoc.tasks.gaze_contingency import GazeContingencyConfig
+from oculidoc.tasks.starlight_route import StarlightRouteConfig
+from oculidoc.tasks.visual_hunt import (
+    VisualHuntConfig,
+    eligible_visual_hunt_assets,
+)
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -21,14 +28,6 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QVBoxLayout,
     QWidget,
-)
-
-from oculidoc.image_library import ImageLibraryDialog, ImageLibraryStore
-from oculidoc.tasks.gaze_contingency import GazeContingencyConfig
-from oculidoc.tasks.starlight_route import StarlightRouteConfig
-from oculidoc.tasks.visual_hunt import (
-    VisualHuntConfig,
-    eligible_visual_hunt_assets,
 )
 
 
@@ -126,9 +125,7 @@ class GazeGameSetupDialog(QDialog):
         hunt_button.setMinimumHeight(130)
         hunt_button.clicked.connect(lambda: self.pages.setCurrentIndex(2))
 
-        starlight_button = QPushButton(
-            "星光航线\n收集呼吸闪烁的星星，自适应学习可视区域"
-        )
+        starlight_button = QPushButton("星光航线\n收集呼吸闪烁的星星，自适应学习可视区域")
         starlight_button.setObjectName("gazeGameStarlightRouteButton")
         starlight_button.setMinimumHeight(130)
         starlight_button.clicked.connect(lambda: self.pages.setCurrentIndex(3))
@@ -336,15 +333,11 @@ class GazeGameSetupDialog(QDialog):
         form = QFormLayout()
         self.starlight_round_count = self._spin(6, 120, initial.round_count)
         self.starlight_initial_level = self._spin(1, 10, initial.initial_level)
-        self.starlight_dwell = self._spin(
-            250, 3000, initial.dwell_time_ms, suffix=" ms", step=50
-        )
+        self.starlight_dwell = self._spin(250, 3000, initial.dwell_time_ms, suffix=" ms", step=50)
         self.starlight_trial_seconds = self._spin(
             3, 30, initial.trial_duration_seconds, suffix=" 秒/轮"
         )
-        self.starlight_probe_interval = self._spin(
-            2, 10, initial.edge_probe_interval, suffix=" 轮"
-        )
+        self.starlight_probe_interval = self._spin(2, 10, initial.edge_probe_interval, suffix=" 轮")
         self.starlight_sound = QCheckBox("启用温和语音反馈")
         self.starlight_sound.setChecked(initial.sound_enabled)
         self.starlight_cursor = QCheckBox("患者屏幕显示实时视线光标")
