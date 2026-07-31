@@ -192,6 +192,36 @@ def test_task_marks_one_sample_then_silence_invalid(qtbot: QtBot) -> None:
     task.stop()
 
 
+def test_timeout_sample_is_not_reused_for_the_next_round(qtbot: QtBot) -> None:
+    task = StarlightRouteTask(
+        StarlightRouteConfig(
+            round_count=6,
+            trial_duration_seconds=3,
+            randomization_seed=18,
+        )
+    )
+    qtbot.addWidget(task)
+    started_ns = monotonic_ns()
+    task.start(started_ns)
+    target = task._target
+
+    task.consume_sample(
+        gaze_sample(
+            1,
+            timestamp_ns=started_ns + 3_000_000_000,
+            x=target.x,
+            y=target.y,
+        )
+    )
+
+    assert task.model.outcomes[0].status == "invalid"
+    assert task.model.outcomes[0].sample_count == 0
+    assert task.model.completed_rounds == 1
+    assert task._sample_count == 0
+    assert task._valid_sample_count == 0
+    task.stop()
+
+
 def test_task_counts_well_sampled_off_target_rounds_as_valid_misses(qtbot: QtBot) -> None:
     task = StarlightRouteTask(
         StarlightRouteConfig(
