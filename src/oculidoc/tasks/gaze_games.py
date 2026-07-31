@@ -6,13 +6,6 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from oculidoc.image_library import ImageLibraryDialog, ImageLibraryStore
-from oculidoc.tasks.gaze_contingency import GazeContingencyConfig
-from oculidoc.tasks.starlight_route import StarlightRouteConfig
-from oculidoc.tasks.visual_hunt import (
-    VisualHuntConfig,
-    eligible_visual_hunt_assets,
-)
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -28,6 +21,14 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QVBoxLayout,
     QWidget,
+)
+
+from oculidoc.image_library import ImageLibraryDialog, ImageLibraryStore
+from oculidoc.tasks.gaze_contingency import GazeContingencyConfig
+from oculidoc.tasks.starlight_route import StarlightRouteConfig
+from oculidoc.tasks.visual_hunt import (
+    VisualHuntConfig,
+    eligible_visual_hunt_assets,
 )
 
 
