@@ -501,6 +501,7 @@ def main(
     recorded_runtime = RecordedTaskRuntime(
         task=task,
         sample_sink=task.consume_sample,
+        map_screen_gaze_to_task=True,
         task_kind=module_id,
         announce=True,
         parent=task,
@@ -671,9 +672,9 @@ def main(
             mode=PatientDisplayMode.RUNNING,
             task_id=module_id,
         )
-        worker.enable_sample_delivery()
         window.showFullScreen()
         window.start()
+        QTimer.singleShot(0, worker.enable_sample_delivery)
 
         if args.task == "tracking":
             speak("请保持注视标志物，并让视线跟随它移动。")

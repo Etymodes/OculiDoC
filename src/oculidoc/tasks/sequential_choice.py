@@ -70,6 +70,11 @@ class SequentialChoiceTask(QWidget):
         return self._current_task
 
     @property
+    def gaze_coordinate_widget(self) -> BinaryQuestionTask:
+        """Return the current leaf widget used for gaze hit testing."""
+        return self._current_task
+
+    @property
     def current_question_number(self) -> int:
         return self._question_index + 1
 
@@ -255,7 +260,7 @@ class SequentialChoiceTask(QWidget):
         self._current_task.stop()
 
     def consume_sample(self, sample: EyeTrackerSample) -> None:
-        if not self._waiting_for_advance and not self._sequence_finished:
+        if not self._sequence_finished:
             self._current_task.consume_sample(sample)
 
     def recording_context_for_sample(self, sample: EyeTrackerSample) -> dict[str, object]:

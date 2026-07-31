@@ -38,6 +38,66 @@ def _completed_session(runtime, patient_id):
     return runtime.experiment_session_service.complete_session(session.session_id)
 
 
+@pytest.mark.parametrize(
+    ("existing_code", "existing_name"),
+    [
+        ("DOC-COLLISION-001", "另一人"),
+        ("DOC-OTHER-001", "同名"),
+    ],
+)
+def test_partial_identity_collision_imports_with_diff_code(
+    tmp_path: Path,
+    existing_code: str,
+    existing_name: str,
+) -> None:
+    source = initialize_database(tmp_path / "source.sqlite3")
+    destination = initialize_database(tmp_path / "destination.sqlite3")
+    try:
+        imported = source.patient_service.register_patient(
+            RegisterPatientRequest(
+                patient_code="DOC-COLLISION-001",
+                family_name="同名",
+            )
+        )
+        destination.patient_service.register_patient(
+            RegisterPatientRequest(
+                patient_code=existing_code,
+                family_name=existing_name,
+            )
+        )
+        path = write_patient_transfer(tmp_path / "collision.csv", [imported])
+        with read_patient_transfer(path) as bundle:
+            summary = import_patient_records(destination.patient_service, bundle)
+
+        patients = destination.patient_service.list_patients()
+        assert summary.imported_count == 1
+        assert any(
+            patient.patient_code == "DOC-COLLISION-001_01diff" and patient.family_name == "同名"
+            for patient in patients
+        )
+    finally:
+        source.dispose()
+        destination.dispose()
+
+
+def test_beta00_is_neither_exported_nor_imported(tmp_path: Path) -> None:
+    source = initialize_database(tmp_path / "source.sqlite3")
+    destination = initialize_database(tmp_path / "destination.sqlite3")
+    try:
+        beta = source.patient_service.register_patient(
+            RegisterPatientRequest(patient_code="Beta00", family_name="虚拟")
+        )
+        path = write_patient_transfer(tmp_path / "beta.csv", [beta])
+        with read_patient_transfer(path) as bundle:
+            assert bundle.patients == ()
+            summary = import_patient_records(destination.patient_service, bundle)
+        assert summary.imported_count == 0
+        assert destination.patient_service.list_patients() == []
+    finally:
+        source.dispose()
+        destination.dispose()
+
+
 def test_complete_patient_transfer_round_trip_skips_existing_patient(tmp_path: Path) -> None:
     source_runtime = initialize_database(
         tmp_path / "source.sqlite3",

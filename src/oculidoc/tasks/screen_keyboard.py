@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from oculidoc.devices.contracts import EyeTrackerSample
+from oculidoc.tasks.gaze_cursor import GazeCursorOverlay
 
 
 class KeyboardStage(StrEnum):
@@ -55,6 +56,7 @@ class ScreenKeyboardConfig:
     output_font_size_pt: int = 48
     instruction_font_size_pt: int = 30
     option_font_size_pt: int = 34
+    show_gaze_cursor: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "input_mode", ScreenKeyboardMode(self.input_mode))
@@ -72,6 +74,9 @@ class ScreenKeyboardConfig:
         ):
             if not 20 <= getattr(self, name) <= 120:
                 raise ValueError(f"{name} must be between 20 and 120.")
+
+        if not isinstance(self.show_gaze_cursor, bool):
+            raise TypeError("show_gaze_cursor must be a boolean.")
 
 
 _INITIALS = (
@@ -463,6 +468,10 @@ class ScreenKeyboardTask(QWidget):
             self.setCursor(Qt.CursorShape.BlankCursor)
 
         self._render_stage()
+        self.gaze_cursor_overlay = GazeCursorOverlay(
+            self,
+            enabled=config.show_gaze_cursor,
+        )
 
     @staticmethod
     def _font(size: int, *, bold: bool = False) -> QFont:
@@ -701,6 +710,7 @@ class ScreenKeyboardTask(QWidget):
         self._started_at_ns = None
         self._commit_count = 0
         self._final_event_recorded = False
+        self.gaze_cursor_overlay.clear()
         self._render_stage()
 
     def _activate(self, option_id: str, method: str) -> None:
@@ -854,6 +864,7 @@ class ScreenKeyboardTask(QWidget):
         self._reset_dwell()
 
     def consume_sample(self, sample: EyeTrackerSample) -> None:
+        self.gaze_cursor_overlay.consume_sample(sample)
         timestamp_ns = sample.timestamp.monotonic_timestamp_ns
 
         if self._last_timestamp_ns is None or timestamp_ns <= self._last_timestamp_ns:
@@ -1090,6 +1101,8 @@ class ScreenKeyboardSetupDialog(QDialog):
         self.option_font_spin = self._font_spin(current.option_font_size_pt)
         self.tone_checkbox = QCheckBox("完成韵尾后选择声调")
         self.tone_checkbox.setChecked(current.enable_tone_step)
+        self.show_gaze_cursor_check = QCheckBox("患者屏幕显示实时视线光标")
+        self.show_gaze_cursor_check.setChecked(current.show_gaze_cursor)
         self.mode_combo.currentIndexChanged.connect(self._update_mode_controls)
 
         form = QFormLayout()
@@ -1100,6 +1113,7 @@ class ScreenKeyboardSetupDialog(QDialog):
         form.addRow("指示文字字号：", self.instruction_font_spin)
         form.addRow("下半屏选项字号：", self.option_font_spin)
         form.addRow("声调步骤：", self.tone_checkbox)
+        form.addRow("视线反馈：", self.show_gaze_cursor_check)
 
         note = QLabel(
             "直观直选模式按“类别 → 常用词句”直接表达；进阶模式按“声母 → 确认 → "
@@ -1141,4 +1155,5 @@ class ScreenKeyboardSetupDialog(QDialog):
             output_font_size_pt=self.output_font_spin.value(),
             instruction_font_size_pt=self.instruction_font_spin.value(),
             option_font_size_pt=self.option_font_spin.value(),
+            show_gaze_cursor=self.show_gaze_cursor_check.isChecked(),
         )

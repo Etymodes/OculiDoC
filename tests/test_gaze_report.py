@@ -167,6 +167,7 @@ def test_tracking_report_generates_heatmap_and_error(
     assert metrics["tracking"]["rmse_normalized"] == pytest.approx(0.3 / 2**0.5)
 
     html_text = artifacts.html_path.read_text(encoding="utf-8")
+    assert "OculiDoC 眼动结果报告" in html_text
     assert "tracking_error_timeline.png" in html_text
     assert "Report患者（DOC-REPORT-tracking_ball）" in html_text
     assert str(cast(Any, launch).patient_id) not in html_text

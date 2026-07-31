@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from html import escape
 from pathlib import Path
 from uuid import UUID
 
@@ -193,18 +194,14 @@ class PatientSessionHistoryDialog(QDialog):
         self.open_button.setObjectName("openSessionDirectoryButton")
         self.open_button.clicked.connect(self._open_directory)
 
-        self.result_button = QPushButton("查看结果")
-        self.result_button.setObjectName("viewSessionResultButton")
-        self.result_button.clicked.connect(self._show_result)
-
-        self.report_button = QPushButton("生成报告")
+        self.report_button = QPushButton("生成单次报告…")
         self.report_button.setObjectName("generateGazeReportButton")
         self.report_button.clicked.connect(self._generate_report)
 
-        self.trend_button = QPushButton("一键综合报告")
-        self.trend_button.setObjectName("generatePatientTrendReportButton")
-        self.trend_button.setToolTip("汇总该患者全部任务、综合热力图与纵向变化")
-        self.trend_button.clicked.connect(self._generate_trend_report)
+        self.summary_button = QPushButton("报告总结")
+        self.summary_button.setObjectName("openReportSummaryButton")
+        self.summary_button.setToolTip("在同一窗口切换单次实验与患者全部实验总结")
+        self.summary_button.clicked.connect(self._open_report_summary)
 
         self.export_button = QPushButton("导出 ZIP")
         self.export_button.setObjectName("exportSessionZipButton")
@@ -226,9 +223,8 @@ class PatientSessionHistoryDialog(QDialog):
 
         actions = QHBoxLayout()
         actions.addWidget(self.open_button)
-        actions.addWidget(self.result_button)
         actions.addWidget(self.report_button)
-        actions.addWidget(self.trend_button)
+        actions.addWidget(self.summary_button)
         actions.addWidget(self.export_button)
         actions.addWidget(self.status_button)
         actions.addWidget(self.delete_button)
@@ -243,6 +239,93 @@ class PatientSessionHistoryDialog(QDialog):
         root.addLayout(actions)
 
         self.refresh_sessions()
+
+    def _open_report_summary(self, checked: bool = False) -> None:
+        """Build one local HTML shell for single-session and longitudinal reports."""
+        del checked
+        entry = self._require_entry()
+        if entry is None:
+            return
+
+        try:
+            trend = generate_patient_trend_report(self.service, entry.session_id)
+            single_url = ""
+            if entry.status is ExperimentSessionStatus.COMPLETED:
+                single = generate_gaze_session_report(self.service, entry.session_id)
+                single_url = single.html_path.resolve().as_uri()
+            summary_path = entry.session_directory / "reports" / "report_summary.html"
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text(
+                self._report_summary_html(
+                    entry,
+                    single_url=single_url,
+                    trend_url=trend.html_path.resolve().as_uri(),
+                ),
+                encoding="utf-8",
+            )
+        except Exception as error:
+            QMessageBox.critical(self, "报告总结生成失败", str(error))
+            return
+
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(summary_path)))
+        if not opened:
+            QMessageBox.warning(
+                self,
+                "无法打开报告总结",
+                f"请在浏览器中手动打开：\n{summary_path}",
+            )
+        self.refresh_sessions()
+
+    def _report_summary_html(
+        self,
+        entry: SessionHistoryEntry,
+        *,
+        single_url: str,
+        trend_url: str,
+    ) -> str:
+        if single_url:
+            single_content = f'<iframe title="单次实验报告" src="{escape(single_url)}"></iframe>'
+        else:
+            single_content = (
+                '<div class="empty"><h2>本次实验尚不能生成正式报告</h2>'
+                f"<p>状态：{escape(_STATUS_LABELS[entry.status])}</p>"
+                "<p>仅已完成的实验会话生成单次报告；可切换到“全部实验总结”。</p></div>"
+            )
+        return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>OculiDoC 报告总结</title>
+<style>
+html,body{{height:100%;margin:0;background:#f4f7fa;font-family:"Microsoft YaHei",sans-serif}}
+nav{{display:flex;gap:8px;padding:12px 16px;background:#fff;border-bottom:1px solid #d9e3ec}}
+button{{padding:9px 18px;border:1px solid #9eb4c5;border-radius:8px;background:#fff;cursor:pointer}}
+button.active{{background:#176b87;color:#fff;border-color:#176b87}}
+main{{height:calc(100% - 62px)}} section{{display:none;height:100%}} section.active{{display:block}}
+iframe{{width:100%;height:100%;border:0;background:#fff}}
+.empty{{margin:28px;padding:28px;background:#fff;border-radius:12px}}
+</style>
+</head>
+<body>
+<nav>
+<button class="active" data-tab="single">单次实验</button>
+<button data-tab="all">全部实验总结</button>
+</nav>
+<main>
+<section id="single" class="active">{single_content}</section>
+<section id="all"><iframe title="全部实验总结" src="{escape(trend_url)}"></iframe></section>
+</main>
+<script>
+for (const button of document.querySelectorAll("button[data-tab]")) {{
+  button.addEventListener("click", () => {{
+    document.querySelectorAll("button, section").forEach(x => x.classList.remove("active"));
+    button.classList.add("active");
+    document.getElementById(button.dataset.tab).classList.add("active");
+  }});
+}}
+</script>
+</body>
+</html>"""
 
     def _current_entry(
         self,
@@ -287,7 +370,7 @@ class PatientSessionHistoryDialog(QDialog):
         self._entries = {entry.session_id: entry for entry in filtered}
 
         self.table.clearSelection()
-        self.table.setCurrentItem(None)
+        self.table.setCurrentCell(-1, -1)
         self.table.setRowCount(len(filtered))
 
         for row, entry in enumerate(filtered):
@@ -620,17 +703,9 @@ class PatientSessionHistoryDialog(QDialog):
         """Generate and open a gaze report."""
 
         del checked
-        entry = self._require_entry()
+        entry = self._select_single_report_entry()
 
         if entry is None:
-            return
-
-        if entry.status is not ExperimentSessionStatus.COMPLETED:
-            QMessageBox.information(
-                self,
-                "无法生成报告",
-                "仅已完成的实验会话可以生成报告。",
-            )
             return
 
         try:
@@ -656,6 +731,81 @@ class PatientSessionHistoryDialog(QDialog):
             )
 
         self.refresh_sessions()
+
+    def _single_report_options(
+        self,
+    ) -> tuple[tuple[SessionHistoryEntry, str], ...]:
+        entries = build_patient_session_history(
+            self.service,
+            self.patient.patient_id,
+        )
+        completed = tuple(
+            entry for entry in entries if entry.status is ExperimentSessionStatus.COMPLETED
+        )
+        occurrence_by_session: dict[UUID, int] = {}
+        counts_by_module: dict[str, int] = {}
+
+        for entry in reversed(entries):
+            occurrence = counts_by_module.get(entry.module_id, 0) + 1
+            counts_by_module[entry.module_id] = occurrence
+            occurrence_by_session[entry.session_id] = occurrence
+
+        return tuple(
+            (
+                entry,
+                " · ".join(
+                    [
+                        entry.created_at.astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                        _MODULE_TITLES.get(entry.module_id, entry.module_id),
+                        f"第 {occurrence_by_session[entry.session_id]} 次",
+                        (
+                            f"样本 {entry.sample_count}"
+                            if entry.sample_count is not None
+                            else "样本 —"
+                        ),
+                        f"有效率 {_format_ratio(entry.valid_sample_ratio)}",
+                    ]
+                ),
+            )
+            for entry in completed
+        )
+
+    def _select_single_report_entry(
+        self,
+    ) -> SessionHistoryEntry | None:
+        options = self._single_report_options()
+
+        if not options:
+            QMessageBox.information(
+                self,
+                "没有可生成的单次报告",
+                "该患者目前没有已完成的实验会话。",
+            )
+            return None
+
+        current = self._current_entry()
+        initial_index = next(
+            (
+                index
+                for index, (entry, _label) in enumerate(options)
+                if current is not None and entry.session_id == current.session_id
+            ),
+            0,
+        )
+        labels = [label for _entry, label in options]
+        selected_label, accepted = QInputDialog.getItem(
+            self,
+            "选择单次报告",
+            "请选择要生成报告的具体一次实验：",
+            labels,
+            initial_index,
+            False,
+        )
+
+        if not accepted:
+            return None
+
+        return next(entry for entry, label in options if label == selected_label)
 
     def _default_archive_name(
         self,

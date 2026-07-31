@@ -207,7 +207,7 @@ def test_opoin_thesis_is_a_separate_subjective_view(
 
     dialog._open_opoin_thesis()
 
-    assert dialog.opoin_thesis_button.text() == "打开 OpoinThesis"
+    assert dialog.opoin_thesis_button.text() == "打开 OpoinThesis 眼位监测"
     assert len(calls) == 1
     assert calls[0].gaze_source == "mock"
 

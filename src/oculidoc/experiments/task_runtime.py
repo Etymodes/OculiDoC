@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
 from uuid import uuid4
@@ -23,6 +23,9 @@ from PySide6.QtWidgets import (
 
 from oculidoc.devices.contracts import (
     EyeTrackerSample,
+)
+from oculidoc.experiments.gaze_coordinates import (
+    TaskGazeCoordinateTransform,
 )
 from oculidoc.experiments.recording import (
     AoiRole,
@@ -46,6 +49,7 @@ class RecordedTaskRuntime(QObject):
             [EyeTrackerSample],
             None,
         ],
+        map_screen_gaze_to_task: bool = False,
         session_directory: str | Path | None = None,
         session_root: str | Path | None = None,
         patient_id: str | None = None,
@@ -58,9 +62,12 @@ class RecordedTaskRuntime(QObject):
 
         if not callable(sample_sink):
             raise TypeError("sample_sink must be callable.")
+        if not isinstance(map_screen_gaze_to_task, bool):
+            raise TypeError("map_screen_gaze_to_task must be a boolean.")
 
         self.task = task
         self.sample_sink = sample_sink
+        self.map_screen_gaze_to_task = map_screen_gaze_to_task
         self.patient_id = patient_id or os.getenv("OCULIDOC_PATIENT_ID") or "standalone-demo"
         self.session_id = session_id or os.getenv("OCULIDOC_SESSION_ID") or str(uuid4())
         self.task_kind = task_kind or self._infer_task_kind(task)
@@ -334,6 +341,7 @@ class RecordedTaskRuntime(QObject):
         self,
         sample: EyeTrackerSample,
         recorder: TaskRunRecorder,
+        coordinate_transform: TaskGazeCoordinateTransform | None = None,
     ) -> dict[str, object]:
         provider = getattr(
             self.task,
@@ -383,12 +391,27 @@ class RecordedTaskRuntime(QObject):
         reference_value = raw_context.get("reference_aoi")
         reference_aoi = self._coerce_aoi(reference_value) if reference_value is not None else None
 
+        if self.map_screen_gaze_to_task:
+            if coordinate_transform is None:
+                aois = ()
+                reference_aoi = None
+            else:
+                aois = tuple(
+                    mapped
+                    for aoi in aois
+                    if (mapped := coordinate_transform.aoi_to_screen(aoi)) is not None
+                )
+                if reference_aoi is not None:
+                    reference_aoi = coordinate_transform.aoi_to_screen(reference_aoi)
+
         register_layout = bool(
             raw_context.get(
                 "register_layout",
                 bool(question_id and aois),
             )
         )
+        if self.map_screen_gaze_to_task and not aois:
+            register_layout = False
         metadata_value = raw_context.get(
             "question_metadata",
             {},
@@ -418,6 +441,20 @@ class RecordedTaskRuntime(QObject):
             "aois": aois,
             "reference_aoi": (reference_aoi),
         }
+
+    def _coordinate_target(self) -> QWidget:
+        target = getattr(
+            self.task,
+            "gaze_coordinate_widget",
+            self.task,
+        )
+        return target if isinstance(target, QWidget) else self.task
+
+    def _coordinate_transform(self) -> TaskGazeCoordinateTransform | None:
+        if not self.map_screen_gaze_to_task:
+            return None
+
+        return TaskGazeCoordinateTransform.from_widget(self._coordinate_target())
 
     def _drain_task_events(
         self,
@@ -530,14 +567,28 @@ class RecordedTaskRuntime(QObject):
             return
 
         recorder: TaskRunRecorder | None = None
+        coordinate_transform = self._coordinate_transform()
+        task_sample = sample
+
+        if self.map_screen_gaze_to_task:
+            task_sample = (
+                coordinate_transform.sample_to_task(sample)
+                if coordinate_transform is not None
+                else replace(
+                    sample,
+                    gaze_x_normalized=None,
+                    gaze_y_normalized=None,
+                )
+            )
 
         if not self._recording_failed:
             try:
                 recorder = self._ensure_recorder()
                 self._drain_task_events(recorder)
                 context = self._recording_context(
-                    sample,
+                    task_sample,
                     recorder,
+                    coordinate_transform,
                 )
                 recorder.record_sample(
                     sample,
@@ -547,7 +598,7 @@ class RecordedTaskRuntime(QObject):
                 self._recording_failed = True
                 self.recording_error.emit(str(error))
 
-        self.sample_sink(sample)
+        self.sample_sink(task_sample)
 
         if not self._recording_failed:
             try:

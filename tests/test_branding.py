@@ -90,4 +90,5 @@ def test_create_qt_application_reapplies_branding(
 
     assert active is qapp
     assert active.applicationName() == APPLICATION_NAME
+    assert active.applicationDisplayName() == APPLICATION_NAME
     assert not active.windowIcon().isNull()

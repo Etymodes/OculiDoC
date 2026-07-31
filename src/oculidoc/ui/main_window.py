@@ -46,9 +46,7 @@ from oculidoc.application.gaze_task_session import (
     create_gaze_task_launch,
     finalize_gaze_task_launch,
 )
-from oculidoc.branding import (
-    brand_mark_pixmap,
-)
+from oculidoc.branding import brand_mark_pixmap
 from oculidoc.config import (
     AdminUiMode,
     AdminUiPreferences,
@@ -527,21 +525,24 @@ class AdminMainWindow(QMainWindow):
             )
             return
 
+        frozen = is_frozen_application()
         root_hint = os.environ.get("OCULIDOC_REPOSITORY_ROOT", "").strip() or __file__
-        repository_root = find_repository_root(root_hint)
+        repository_root = None if frozen else find_repository_root(root_hint)
 
-        if repository_root is None:
-            QMessageBox.information(
-                self,
-                "当前安装方式不支持一键更新",
-                "未找到 OculiDoC 源码仓库。请使用安装包更新，或在源码仓库中运行程序。",
-            )
+        if not frozen and repository_root is None:
+            QMessageBox.information(self, "无法更新", "未找到 OculiDoC 源码仓库。")
             return
 
         confirmation = QMessageBox.question(
             self,
             "检查并更新 OculiDoC",
-            "将从官方仓库检查当前分支，并且只在工作区干净且可快进时更新。继续吗？",
+            (
+                "将检查 GitHub 最新正式版本；如有新版，会自动下载、校验"
+                "并启动安装器。"
+                "安装器启动后 OculiDoC 将退出。继续吗？"
+                if frozen
+                else ("将从官方仓库检查当前分支，并且只在工作区干净且可快进时更新。继续吗？")
+            ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
@@ -553,8 +554,8 @@ class AdminMainWindow(QMainWindow):
         process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         process.setProgram(sys.executable)
         process.setArguments(
-            ["--update", "--repo", str(repository_root)]
-            if is_frozen_application()
+            ["--install-latest-release"]
+            if frozen
             else ["-m", "oculidoc.updater", "--repo", str(repository_root)]
         )
         process.finished.connect(self._finish_update_check)
@@ -601,7 +602,21 @@ class AdminMainWindow(QMainWindow):
             return
 
         if status == "up_to_date":
-            QMessageBox.information(self, "OculiDoC 已是最新版本", "当前分支无需更新。")
+            QMessageBox.information(
+                self,
+                "OculiDoC 已是最新版本",
+                "当前版本无需更新。",
+            )
+            return
+
+        if status == "installer_started":
+            QMessageBox.information(
+                self,
+                "已启动 OculiDoC 更新",
+                f"最新版 {payload.get('latest_version', '')} 已通过校验并启动安装。"
+                "OculiDoC 现在将退出。",
+            )
+            QApplication.quit()
             return
 
         restart = QMessageBox.question(

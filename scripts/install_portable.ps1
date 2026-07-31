@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $apiUrl = "https://api.github.com/repos/Etymodes/OculiDoC/releases/latest"
 $installParent = Join-Path $env:LOCALAPPDATA "Programs"

@@ -1,4 +1,11 @@
-"""OculiDoC-native subjective eye-position view."""
+"""OculiDoC-native subjective eye-position view.
+
+``OpoinThesis`` is a project coinage from ``ὀποῖν θέσις`` (``opoîn thésis``,
+"position of the two eyes") and the English-sounding "open thesis".  The name
+marks a future extension seam for licensed intelligent eye-position analysis,
+patient-adaptive models, and EEG/BCI synchronization.  This module's current
+boundary remains human observation without scoring or persistence.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +17,7 @@ import sys
 from contextlib import suppress
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
@@ -28,6 +35,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from oculidoc.application.eye_positioning import (
+    EyePositioningParameters,
+    EyePositioningParametersCalculator,
+)
 from oculidoc.config import Settings
 from oculidoc.devices.contracts import EyeTrackerSample
 from oculidoc.devices.preflight import GazePreflightResult
@@ -36,7 +47,7 @@ from oculidoc.tasks.gaze_stream import (
     create_eye_position_tracker,
 )
 
-NormalizedOcularPosition = tuple[float, float, float]
+NormalizedEyeDisplayPosition = tuple[float, float]
 TRACK_STATUS_EXECUTABLE = "TobiiDynavox.EyeAssist.Smorgasbord.exe"
 TRACK_STATUS_ARGUMENT = "--showtrackstatus"
 
@@ -150,16 +161,21 @@ def eye_position_diagnostic_text(
     """Explain the selected OpoinThesis path using persisted self-check evidence."""
     if result is None or result.source != settings.gaze_source:
         compatibility = (
-            f"已找到人工观察组件：{compatibility_executable} {TRACK_STATUS_ARGUMENT}。"
+            "已找到 Tobii Experience 兼容眼位组件。"
             if compatibility_executable is not None
-            else "未找到 EyeAssist Track Status 兼容组件。"
+            else "未找到 Tobii Experience 兼容眼位组件。"
         )
         return (
             f"尚无与当前眼动源匹配的自检证据，本窗口不会据此推断设备能力。{compatibility}"
             "可先手动打开兼容窗口，正式任务前仍须重新运行设备自检。"
         )
 
-    source = f"DLL：{result.library_path}" if result.library_path else f"连接来源：{result.source}"
+    library_name = (
+        str(result.library_path).replace("\\", "/").rsplit("/", 1)[-1]
+        if result.library_path
+        else None
+    )
+    source = f"DLL：{library_name}" if library_name else f"连接来源：{result.source}"
     evidence = (
         f"证据时间：{result.updated_at_utc}；Python：{struct.calcsize('P') * 8} 位；"
         f"{source}；采样：{result.sample_rate_hz:.2f} Hz；"
@@ -172,9 +188,9 @@ def eye_position_diagnostic_text(
     notes = "；".join(result.capability_notes)
     reason = notes or "自检样本只观察到注视点，没有观察到左右眼三维眼位。"
     compatibility = (
-        f"兼容组件：{compatibility_executable} {TRACK_STATUS_ARGUMENT}。"
+        "已找到 Tobii Experience 兼容眼位组件。"
         if compatibility_executable is not None
-        else "未找到 EyeAssist Track Status 兼容组件。"
+        else "未找到 Tobii Experience 兼容眼位组件。"
     )
     return (
         f"结论：当前链路没有提供左右眼三维眼位；{reason}"
@@ -189,20 +205,31 @@ class OpoinThesisCanvas(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumSize(640, 420)
-        self._left_eye: NormalizedOcularPosition | None = None
-        self._right_eye: NormalizedOcularPosition | None = None
+        self._calculator = EyePositioningParametersCalculator()
+        self._parameters: EyePositioningParameters | None = None
         self._empty_message = "等待左右眼位置数据…"
 
     @property
     def eye_positions(
         self,
-    ) -> tuple[NormalizedOcularPosition | None, NormalizedOcularPosition | None]:
-        return self._left_eye, self._right_eye
+    ) -> tuple[
+        NormalizedEyeDisplayPosition | None,
+        NormalizedEyeDisplayPosition | None,
+    ]:
+        parameters = self._parameters
+        if parameters is None:
+            return None, None
 
-    def consume_sample(self, sample: EyeTrackerSample) -> None:
-        self._left_eye = sample.left_eye_position_normalized
-        self._right_eye = sample.right_eye_position_normalized
+        return parameters.left_eye_position, parameters.right_eye_position
+
+    @property
+    def positioning_parameters(self) -> EyePositioningParameters | None:
+        return self._parameters
+
+    def consume_sample(self, sample: EyeTrackerSample) -> EyePositioningParameters:
+        self._parameters = self._calculator.receive_gaze_data(sample)
         self.update()
+        return self._parameters
 
     def set_empty_message(self, message: str) -> None:
         self._empty_message = message.strip() or "等待左右眼位置数据…"
@@ -218,7 +245,7 @@ class OpoinThesisCanvas(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), QColor("#f4f7fb"))
 
-        track_box = self.rect().adjusted(70, 42, -70, -105)
+        track_box = self.rect().adjusted(70, 42, -70, -150)
         painter.setPen(QPen(QColor("#bfd3e4"), 3))
         painter.setBrush(QColor("#ffffff"))
         painter.drawRoundedRect(track_box, 18, 18)
@@ -236,48 +263,124 @@ class OpoinThesisCanvas(QWidget):
             track_box.center().y(),
         )
 
+        parameters = self._parameters
         positions = (
-            ("左眼", self._left_eye, QColor("#1565c0")),
-            ("右眼", self._right_eye, QColor("#176b36")),
+            (
+                "左眼",
+                parameters.left_eye_position if parameters is not None else None,
+                parameters.left_eye_extrapolated if parameters is not None else False,
+                QColor("#1565c0"),
+            ),
+            (
+                "右眼",
+                parameters.right_eye_position if parameters is not None else None,
+                parameters.right_eye_extrapolated if parameters is not None else False,
+                QColor("#176b36"),
+            ),
         )
-        for label, position, color in positions:
+        eye_radius = max(14.0, min(track_box.width(), track_box.height()) * 0.05)
+        head_angle = (
+            parameters.head_angle_degrees
+            if parameters is not None and parameters.head_angle_degrees is not None
+            else 0.0
+        )
+
+        for label, position, extrapolated, color in positions:
             if position is None:
                 continue
 
             x = track_box.left() + round(self._clamp(position[0]) * track_box.width())
             y = track_box.top() + round(self._clamp(position[1]) * track_box.height())
-            painter.setPen(QPen(QColor("#ffffff"), 4))
+            painter.save()
+            painter.translate(x, y)
+            painter.rotate(head_angle)
+            outline = QPen(color, 4)
+            if extrapolated:
+                outline.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(outline)
+            painter.setBrush(QColor("#ffffff"))
+            painter.drawEllipse(
+                QRectF(
+                    -eye_radius,
+                    -eye_radius * 0.65,
+                    eye_radius * 2.0,
+                    eye_radius * 1.3,
+                )
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(color)
-            painter.drawEllipse(x - 22, y - 22, 44, 44)
+            pupil_radius = eye_radius * 0.34
+            painter.drawEllipse(
+                QRectF(
+                    -pupil_radius,
+                    -pupil_radius,
+                    pupil_radius * 2.0,
+                    pupil_radius * 2.0,
+                )
+            )
+            painter.restore()
             painter.setPen(QPen(color, 2))
             painter.drawText(
                 x - 44,
-                y + 48,
+                y + round(eye_radius) + 12,
                 88,
                 28,
                 Qt.AlignmentFlag.AlignCenter,
-                label,
+                f"{label}{' · 补偿' if extrapolated else ''}",
             )
 
         painter.setPen(QPen(QColor("#17324d"), 2))
-        if self._left_eye is None and self._right_eye is None:
+        if parameters is None or (
+            parameters.left_eye_position is None and parameters.right_eye_position is None
+        ):
             painter.drawText(
                 track_box,
                 Qt.AlignmentFlag.AlignCenter,
                 self._empty_message,
             )
 
-        depth_parts = []
-        if self._left_eye is not None:
-            depth_parts.append(f"左眼 Z={self._left_eye[2]:.2f}")
-        if self._right_eye is not None:
-            depth_parts.append(f"右眼 Z={self._right_eye[2]:.2f}")
-        depth_text = " · ".join(depth_parts) if depth_parts else "Z 距离层级：—"
-        painter.drawText(
-            self.rect().adjusted(28, self.height() - 88, -28, -20),
-            Qt.AlignmentFlag.AlignCenter,
-            f"{depth_text}　（0 较近，1 较远）",
+        status_rect = self.rect().adjusted(32, self.height() - 126, -32, -20)
+        left_status = self._eye_status(
+            parameters.left_eye_position if parameters is not None else None,
+            parameters.left_eye_extrapolated if parameters is not None else False,
         )
+        right_status = self._eye_status(
+            parameters.right_eye_position if parameters is not None else None,
+            parameters.right_eye_extrapolated if parameters is not None else False,
+        )
+        angle_text = (
+            f"头部倾角：{parameters.head_angle_degrees:+.1f}°"
+            if parameters is not None and parameters.head_angle_degrees is not None
+            else "头部倾角：—"
+        )
+        distance_text = self._distance_text(parameters)
+        painter.setPen(QPen(QColor("#17324d"), 2))
+        painter.drawText(
+            status_rect,
+            Qt.AlignmentFlag.AlignCenter,
+            f"左眼：{left_status}　　右眼：{right_status}\n{angle_text}　　{distance_text}",
+        )
+
+    @staticmethod
+    def _eye_status(
+        position: tuple[float, float] | None,
+        extrapolated: bool,
+    ) -> str:
+        if position is None:
+            return "未追踪"
+        if extrapolated:
+            return "短暂补偿"
+        return "已追踪"
+
+    @staticmethod
+    def _distance_text(
+        parameters: EyePositioningParameters | None,
+    ) -> str:
+        if parameters is None or parameters.distance_mm is None:
+            return "距离：当前数据源未提供毫米值"
+
+        range_text = "参考范围内" if parameters.is_distance_in_range else "参考范围外"
+        return f"距离：{parameters.distance_mm:.0f} mm · {range_text}（450–850 mm）"
 
 
 class OpoinThesisDialog(QDialog):
@@ -322,9 +425,12 @@ class OpoinThesisDialog(QDialog):
         root.setSpacing(12)
 
         explanation = QLabel(
-            "供操作者主观观察患者双眼是否位于追踪范围。窗口打开后会自动尝试"
+            "OpoinThesis 取意于 opoîn thésis（双眼的位置），并与 open thesis"
+            "（开放研究）双关。当前仅供操作者主观观察患者双眼是否位于追踪范围。"
+            "窗口打开后会自动尝试"
             "Tobii 原生 Stream、已配置的兼容 DLL、通用桥接和 Tobii Experience"
-            "自带追踪状态；无需手动选择连接方式。此处不设合格阈值，不计算有效率，"
+            "自带追踪状态；无需手动选择连接方式。眼位显示包含短暂丢帧补偿、头部倾角"
+            "和可用时的 450–850 mm 参考距离提示，但不生成合格结论、不计算有效率、"
             "不保存结果，也不参与设备自检或正式任务报告。"
         )
         explanation.setWordWrap(True)
@@ -379,10 +485,13 @@ class OpoinThesisDialog(QDialog):
         self._set_status(text)
 
     def _consume_sample(self, sample: EyeTrackerSample) -> None:
-        self.canvas.consume_sample(sample)
+        parameters = self.canvas.consume_sample(sample)
 
         if sample.eye_position_available:
-            self._set_status("已连接 · 正在显示主观眼位")
+            if parameters.left_eye_extrapolated or parameters.right_eye_extrapolated:
+                self._set_status("已连接 · 眼位信号短暂丢失，正在显示补偿位置")
+            else:
+                self._set_status("已连接 · 正在显示主观眼位")
         else:
             detail = getattr(
                 self._worker.device,
@@ -399,9 +508,7 @@ class OpoinThesisDialog(QDialog):
     def _show_undetected(self, detail: str) -> None:
         self._set_status("未检测到眼位状态", error=True)
         self.canvas.set_empty_message("未检测到眼位状态")
-        self.diagnostic_label.setText(
-            f"{self._diagnostic_base_text}\n自动检测详情：{detail}"
-        )
+        self.diagnostic_label.setText(f"{self._diagnostic_base_text}\n自动检测详情：{detail}")
         if self._failure_shown:
             return
         self._failure_shown = True
@@ -434,7 +541,7 @@ class OpoinThesisDialog(QDialog):
         if executable is not None:
             self.diagnostic_label.setText(
                 f"{self._diagnostic_base_text}\n"
-                f"兼容组件：{executable} {TRACK_STATUS_ARGUMENT}。"
+                "已打开 Tobii Experience 兼容眼位组件。"
                 "该窗口只显示追踪范围，不提供瞳孔直径或研究级单眼数据。"
             )
         return True

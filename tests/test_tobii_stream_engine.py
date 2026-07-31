@@ -11,6 +11,7 @@ from oculidoc.config import Settings
 from oculidoc.devices.contracts import DeviceState
 from oculidoc.devices.tobii_stream_engine import (
     TobiiEyePositionNormalized,
+    TobiiGazeOrigin,
     TobiiGazePoint,
     TobiiStreamEngineDevice,
     TobiiVector2,
@@ -95,6 +96,31 @@ def test_native_eye_position_is_attached_to_following_gaze_sample() -> None:
 
     assert sample.left_eye_position_normalized == pytest.approx((0.25, 0.45, 0.35))
     assert sample.right_eye_position_normalized == pytest.approx((0.75, 0.55, 0.65))
+    assert device.eye_position_stream_status == "receiving"
+
+
+def test_native_gaze_origin_is_attached_as_physical_eye_position() -> None:
+    device = TobiiStreamEngineDevice()
+    gaze_origin = TobiiGazeOrigin(
+        timestamp_us=100,
+        left_validity=1,
+        left=TobiiVector3(-30.0, 2.0, 600.0),
+        right_validity=1,
+        right=TobiiVector3(30.0, 2.0, 620.0),
+    )
+    gaze_point = TobiiGazePoint(
+        timestamp_us=101,
+        validity=1,
+        position=TobiiVector2(0.5, 0.5),
+    )
+
+    device._receive_gaze_origin(ctypes.pointer(gaze_origin), 0)
+    device._receive_gaze_point(ctypes.pointer(gaze_point), 0)
+    sample = device._samples.popleft()
+
+    assert sample.left_eye_position_mm == pytest.approx((-30.0, 2.0, 600.0))
+    assert sample.right_eye_position_mm == pytest.approx((30.0, 2.0, 620.0))
+    assert "已接收毫米眼位样本" in device.capability_diagnostics()[0]
 
 
 def test_optional_eye_position_stream_cannot_break_native_gaze() -> None:
@@ -159,6 +185,45 @@ def test_optional_eye_position_rejection_preserves_exact_driver_reason() -> None
     assert device.eye_position_stream_status == "rejected_3"
     assert "不支持" in device.eye_position_stream_detail
     assert "driver status 3" in device.eye_position_stream_detail
+
+
+def test_optional_physical_eye_position_rejection_keeps_normalized_display() -> None:
+    class StubDll:
+        @staticmethod
+        def tobii_gaze_point_subscribe(*args: object) -> int:
+            del args
+            return 0
+
+        @staticmethod
+        def tobii_eye_position_normalized_subscribe(*args: object) -> int:
+            del args
+            return 0
+
+        @staticmethod
+        def tobii_gaze_origin_subscribe(*args: object) -> int:
+            del args
+            return 2
+
+    device = TobiiStreamEngineDevice()
+    device._state = DeviceState.CONNECTED
+    device._device = ctypes.c_void_p(1)
+    device._library = cast(
+        Any,
+        SimpleNamespace(
+            dll=StubDll(),
+            eye_position_normalized_supported=True,
+            gaze_origin_supported=True,
+            error_message=lambda status: f"driver status {status}",
+        ),
+    )
+
+    device.start_stream()
+
+    assert device.state is DeviceState.STREAMING
+    assert device._eye_position_subscribed is True
+    assert device._gaze_origin_subscribed is False
+    assert "许可不足" in device.capability_diagnostics()[0]
+    assert "标准眼位显示继续运行" in device.capability_diagnostics()[0]
 
 
 def test_factory_creates_native_tobii_device() -> None:
