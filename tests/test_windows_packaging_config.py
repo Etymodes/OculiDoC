@@ -122,6 +122,8 @@ def test_release_packager_builds_standard_installer() -> None:
     assert "QT_SOURCE_OFFER.md" in source
     assert "complete_license_text_count" in source
     assert "third_party_license_record_count" in source
+    assert '$expectedDocumentPath = "$archiveRootName/$name"' in source
+    assert "-ceq $expectedDocumentPath" in source
     assert source.index("$requiredBundleDocuments") < source.index("Compress-Archive")
 
 

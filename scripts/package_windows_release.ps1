@@ -81,6 +81,7 @@ Compress-Archive -Path $bundleRoot -DestinationPath $zipPath -CompressionLevel O
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
 try {
+    $archiveRootName = Split-Path $bundleRoot -Leaf
     $exeCount = @(
         $archive.Entries | Where-Object { $_.FullName -match "(^|/)OculiDoC\.exe$" }
     ).Count
@@ -91,11 +92,10 @@ try {
     ).Count
     $requiredDocumentCounts = [ordered]@{}
     foreach ($name in $requiredBundleDocuments) {
+        $expectedDocumentPath = "$archiveRootName/$name"
         $requiredDocumentCounts[$name] = @(
             $archive.Entries | Where-Object {
-                $_.FullName -match (
-                    "(^|/)" + [regex]::Escape($name) + "$"
-                )
+                $_.FullName.Replace("\", "/") -ceq $expectedDocumentPath
             }
         ).Count
     }
