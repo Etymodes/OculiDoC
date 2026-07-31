@@ -84,7 +84,7 @@ def test_axis_exception_only_reorders_pending_binary_steps() -> None:
     plan = CurrentTestPlan.default("patient-1")
     vertical_first = plan.with_axis_order(BinaryAxisOrder.VERTICAL_FIRST)
 
-    assert [item.step_id for item in vertical_first.steps][7:9] == [
+    assert [item.step_id for item in vertical_first.steps][8:10] == [
         "binary_vertical",
         "binary_horizontal",
     ]
