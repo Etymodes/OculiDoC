@@ -227,7 +227,7 @@ def test_plan_dialog_defaults_skip_undo_and_axis_exception(
     assert axis is not None
     axis.setCurrentIndex(axis.findData(BinaryAxisOrder.VERTICAL_FIRST.value))
     assert dialog.plan.axis_order is BinaryAxisOrder.VERTICAL_FIRST
-    assert [step.step_id for step in dialog.plan.steps][7:9] == [
+    assert [step.step_id for step in dialog.plan.steps][8:10] == [
         "binary_vertical",
         "binary_horizontal",
     ]
