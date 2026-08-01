@@ -1,4 +1,4 @@
-"""Top-level configuration shared by the two M3D13 gaze-game modes."""
+"""Top-level configuration shared by the three M3D13 gaze-game modes."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from oculidoc.image_library import ImageLibraryDialog, ImageLibraryStore
 from oculidoc.tasks.gaze_contingency import GazeContingencyConfig
+from oculidoc.tasks.starlight_route import StarlightRouteConfig
 from oculidoc.tasks.visual_hunt import (
     VisualHuntConfig,
     eligible_visual_hunt_assets,
@@ -34,6 +35,7 @@ from oculidoc.tasks.visual_hunt import (
 class GazeGameMode(StrEnum):
     GARDEN = "garden"
     TREASURE_HUNT = "treasure_hunt"
+    STARLIGHT_ROUTE = "starlight_route"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +45,7 @@ class GazeGameConfig:
     default_mode: GazeGameMode = GazeGameMode.GARDEN
     garden: GazeContingencyConfig = field(default_factory=GazeContingencyConfig)
     treasure_hunt: VisualHuntConfig = field(default_factory=VisualHuntConfig)
+    starlight_route: StarlightRouteConfig = field(default_factory=StarlightRouteConfig)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "default_mode", GazeGameMode(self.default_mode))
@@ -58,10 +61,18 @@ class GazeGameConfig:
                 "treasure_hunt",
                 VisualHuntConfig(**self.treasure_hunt),
             )
+        if isinstance(self.starlight_route, dict):
+            object.__setattr__(
+                self,
+                "starlight_route",
+                StarlightRouteConfig(**self.starlight_route),
+            )
         if not isinstance(self.garden, GazeContingencyConfig):
             raise TypeError("garden must be a GazeContingencyConfig.")
         if not isinstance(self.treasure_hunt, VisualHuntConfig):
             raise TypeError("treasure_hunt must be a VisualHuntConfig.")
+        if not isinstance(self.starlight_route, StarlightRouteConfig):
+            raise TypeError("starlight_route must be a StarlightRouteConfig.")
 
 
 class GazeGameSetupDialog(QDialog):
@@ -87,6 +98,7 @@ class GazeGameSetupDialog(QDialog):
         self.pages.addWidget(self._build_mode_page())
         self.pages.addWidget(self._build_garden_page())
         self.pages.addWidget(self._build_hunt_page())
+        self.pages.addWidget(self._build_starlight_page())
 
         root = QVBoxLayout(self)
         root.addWidget(self.pages)
@@ -100,7 +112,7 @@ class GazeGameSetupDialog(QDialog):
         title = QLabel("请选择本次眼动游戏")
         title.setStyleSheet("font-size:24px; font-weight:700;")
         explanation = QLabel(
-            "两个模式共享一个正式入口和一套会话记录。进入设置后可返回这里重新选择。"
+            "三个模式共享一个正式入口和一套会话记录。进入设置后可返回这里重新选择。"
         )
         explanation.setWordWrap(True)
 
@@ -114,6 +126,11 @@ class GazeGameSetupDialog(QDialog):
         hunt_button.setMinimumHeight(130)
         hunt_button.clicked.connect(lambda: self.pages.setCurrentIndex(2))
 
+        starlight_button = QPushButton("星光航线\n收集呼吸闪烁的星星，自适应学习可视区域")
+        starlight_button.setObjectName("gazeGameStarlightRouteButton")
+        starlight_button.setMinimumHeight(130)
+        starlight_button.clicked.connect(lambda: self.pages.setCurrentIndex(3))
+
         cancel_button = QPushButton("取消")
         cancel_button.clicked.connect(self.reject)
 
@@ -123,6 +140,7 @@ class GazeGameSetupDialog(QDialog):
         layout.addSpacing(16)
         layout.addWidget(garden_button)
         layout.addWidget(hunt_button)
+        layout.addWidget(starlight_button)
         layout.addStretch(1)
         layout.addWidget(cancel_button)
         return page
@@ -310,6 +328,43 @@ class GazeGameSetupDialog(QDialog):
         layout.addLayout(self._page_buttons(GazeGameMode.TREASURE_HUNT))
         return page
 
+    def _build_starlight_page(self) -> QWidget:
+        initial = self._initial.starlight_route
+        page = QWidget()
+        form = QFormLayout()
+        self.starlight_round_count = self._spin(6, 120, initial.round_count)
+        self.starlight_initial_level = self._spin(1, 10, initial.initial_level)
+        self.starlight_dwell = self._spin(250, 3000, initial.dwell_time_ms, suffix=" ms", step=50)
+        self.starlight_trial_seconds = self._spin(
+            3, 30, initial.trial_duration_seconds, suffix=" 秒/轮"
+        )
+        self.starlight_probe_interval = self._spin(2, 10, initial.edge_probe_interval, suffix=" 轮")
+        self.starlight_sound = QCheckBox("启用温和语音反馈")
+        self.starlight_sound.setChecked(initial.sound_enabled)
+        self.starlight_cursor = QCheckBox("患者屏幕显示实时视线光标")
+        self.starlight_cursor.setChecked(initial.show_gaze_cursor)
+        form.addRow("总轮数：", self.starlight_round_count)
+        form.addRow("起始等级：", self.starlight_initial_level)
+        form.addRow("持续注视阈值：", self.starlight_dwell)
+        form.addRow("每轮最长：", self.starlight_trial_seconds)
+        form.addRow("边缘试探间隔：", self.starlight_probe_interval)
+        form.addRow("声音：", self.starlight_sound)
+        form.addRow("视线反馈：", self.starlight_cursor)
+        note = QLabel(
+            "低质量或断流轮次只标记为无效，不触发降级。有效表现下降时自动回退；"
+            "系统从中央安全区域开始，逐边试探并学习患者可达边界。"
+        )
+        note.setWordWrap(True)
+        layout = QVBoxLayout(page)
+        heading = QLabel("星光航线设置")
+        heading.setStyleSheet("font-size:22px; font-weight:700;")
+        layout.addWidget(heading)
+        layout.addWidget(note)
+        layout.addLayout(form)
+        layout.addStretch(1)
+        layout.addLayout(self._page_buttons(GazeGameMode.STARLIGHT_ROUTE))
+        return page
+
     @staticmethod
     def _checked_values(widget: QListWidget) -> tuple[str, ...]:
         values: list[str] = []
@@ -399,10 +454,21 @@ class GazeGameSetupDialog(QDialog):
             category_filters=self._checked_values(self.hunt_category_list),
             style_filters=self._checked_values(self.hunt_style_list),
         )
+        starlight = StarlightRouteConfig(
+            round_count=self.starlight_round_count.value(),
+            initial_level=self.starlight_initial_level.value(),
+            dwell_time_ms=self.starlight_dwell.value(),
+            trial_duration_seconds=self.starlight_trial_seconds.value(),
+            edge_probe_interval=self.starlight_probe_interval.value(),
+            sound_enabled=self.starlight_sound.isChecked(),
+            show_gaze_cursor=self.starlight_cursor.isChecked(),
+            randomization_seed=self._initial.starlight_route.randomization_seed,
+        )
         return GazeGameConfig(
             default_mode=self._selected_mode,
             garden=garden,
             treasure_hunt=hunt,
+            starlight_route=starlight,
         )
 
     def _accept_mode(self, mode: GazeGameMode) -> None:

@@ -126,6 +126,15 @@ CLINICAL_TASK_ORDER: tuple[ClinicalTaskDefinition, ...] = (
         "treasure_hunt",
     ),
     ClinicalTaskDefinition(
+        "gaze_games:starlight_route",
+        "3c",
+        "gaze_games",
+        "眼动游戏·星光航线",
+        True,
+        3,
+        "starlight_route",
+    ),
+    ClinicalTaskDefinition(
         "instruction_fixation",
         "4",
         "instruction_fixation",
@@ -207,7 +216,7 @@ def default_rest_after_step_ids(
         for definition in ordered
         if definition.step_id in {"binary_horizontal", "binary_vertical"}
     )
-    return ("gaze_games:treasure_hunt", binary_steps[-1])
+    return ("gaze_games:starlight_route", binary_steps[-1])
 
 
 class TestPlanStepStatus(StrEnum):

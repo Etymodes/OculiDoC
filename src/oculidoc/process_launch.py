@@ -16,7 +16,7 @@ _TASK_COMMANDS = frozenset(
         "visual-preference",
     }
 )
-_GAZE_GAME_MODES = frozenset({"garden", "treasure_hunt"})
+_GAZE_GAME_MODES = frozenset({"garden", "treasure_hunt", "starlight_route"})
 
 
 def is_frozen_application() -> bool:

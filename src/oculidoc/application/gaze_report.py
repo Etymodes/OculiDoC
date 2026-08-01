@@ -620,6 +620,40 @@ def _task_result_rows(
                     )
                 )
 
+    if task_kind == "gaze_games" and game_mode == "starlight_route":
+        region = result.get("reachable_region")
+
+        if not isinstance(region, dict):
+            region = {}
+
+        rows.extend(
+            (
+                ("游戏模式", "星光航线"),
+                ("得分", _display_value(result.get("score"))),
+                ("最终等级", _display_value(result.get("final_level"))),
+                (
+                    "有效轮次命中率",
+                    _display_ratio(result.get("hit_ratio_valid_rounds")),
+                ),
+                (
+                    "命中 / 未命中 / 无效",
+                    f"{result.get('hit_count', 0)} / {result.get('miss_count', 0)} / "
+                    f"{result.get('invalid_round_count', 0)}",
+                ),
+                (
+                    "学习到的可达区域",
+                    f"左 {_display_ratio(region.get('left'))} · "
+                    f"上 {_display_ratio(region.get('top'))} · "
+                    f"右 {_display_ratio(region.get('right'))} · "
+                    f"下 {_display_ratio(region.get('bottom'))}",
+                ),
+                (
+                    "解释边界",
+                    "无效轮次不触发降级；可达区域仅描述本次游戏，不等同于临床视野检查",
+                ),
+            )
+        )
+
     if task_kind == "visual_preference":
         rows.extend(
             (

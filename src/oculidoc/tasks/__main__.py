@@ -65,6 +65,7 @@ from oculidoc.tasks.screen_keyboard import (
     ScreenKeyboardTask,
 )
 from oculidoc.tasks.sequential_choice import SequentialChoiceTask
+from oculidoc.tasks.starlight_route import StarlightRouteTask
 from oculidoc.tasks.task_window import (
     TimedTaskWindow,
 )
@@ -285,6 +286,7 @@ def main(
         | InstructionFixationTask
         | GazeContingencyTask
         | VisualHuntTask
+        | StarlightRouteTask
         | VisualPreferenceTask
     )
 
@@ -410,7 +412,7 @@ def main(
                     + max(30, garden.contingent_block_seconds),
                 ),
             )
-        else:
+        elif selected_game_mode == GazeGameMode.TREASURE_HUNT:
             hunt = config.treasure_hunt
             task = VisualHuntTask(
                 hunt,
@@ -425,6 +427,17 @@ def main(
                 + hunt.reward_animation_ms
             )
             duration_seconds = min(3_600, max(5, (total_ms + 999) // 1_000))
+        else:
+            starlight = config.starlight_route
+            task = StarlightRouteTask(
+                starlight,
+                allow_mouse_fallback=allow_mouse_fallback,
+            )
+            title = "眼动游戏 · 星光航线"
+            duration_seconds = min(
+                3_600,
+                max(5, starlight.round_count * starlight.trial_duration_seconds + 10),
+            )
     else:
         if not isinstance(config, VisualPreferenceConfig):
             raise TypeError("Visual-preference task configuration type mismatch.")
@@ -466,7 +479,7 @@ def main(
 
     if isinstance(
         task,
-        (GazeContingencyTask, VisualHuntTask, VisualPreferenceTask),
+        (GazeContingencyTask, VisualHuntTask, StarlightRouteTask, VisualPreferenceTask),
     ):
         task.speech_requested.connect(speak)
         task.protocol_completed.connect(lambda: window.finish("protocol_completed"))

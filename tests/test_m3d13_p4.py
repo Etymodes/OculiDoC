@@ -202,7 +202,7 @@ def test_plan_dialog_defaults_skip_undo_and_axis_exception(
     )
     assert optional is not None and not optional.isChecked()
     assert preference is not None and preference.isChecked()
-    assert dialog.plan.progress == (0, 10)
+    assert dialog.plan.progress == (0, 11)
     preference_row = preference.parentWidget()
     assert preference_row is not None
     assert "#1565c0" in str(preference_row.styleSheet())
@@ -210,11 +210,11 @@ def test_plan_dialog_defaults_skip_undo_and_axis_exception(
     assert not next(
         step for step in dialog.plan.steps if step.step_id == "visual_preference"
     ).selected
-    assert dialog.plan.progress == (0, 9)
+    assert dialog.plan.progress == (0, 10)
     preference.setChecked(True)
     first_rest = dialog.findChild(
         QCheckBox,
-        "testPlanRest_gaze_games:treasure_hunt",
+        "testPlanRest_gaze_games:starlight_route",
     )
     second_rest = dialog.findChild(
         QCheckBox,
@@ -227,7 +227,7 @@ def test_plan_dialog_defaults_skip_undo_and_axis_exception(
     assert axis is not None
     axis.setCurrentIndex(axis.findData(BinaryAxisOrder.VERTICAL_FIRST.value))
     assert dialog.plan.axis_order is BinaryAxisOrder.VERTICAL_FIRST
-    assert [step.step_id for step in dialog.plan.steps][7:9] == [
+    assert [step.step_id for step in dialog.plan.steps][8:10] == [
         "binary_vertical",
         "binary_horizontal",
     ]
@@ -287,7 +287,7 @@ def test_plan_dialog_defaults_skip_undo_and_axis_exception(
 
     dialog._save()
     assert dialog.saved_plan is not None
-    assert dialog.saved_plan.progress == (0, 10)
+    assert dialog.saved_plan.progress == (0, 11)
     runtime.dispose()
 
 
@@ -411,7 +411,7 @@ def test_workbench_plan_uses_real_session_id_and_keeps_failure_distinct(
     assert preference.status is PlanStepStatus.FAILED
     assert failed.next_pending_step is not None
     assert failed.next_pending_step.step_id == "tracking_ball"
-    assert failed.progress == (1, 10)
+    assert failed.progress == (1, 11)
     assert failed.revision > plan.revision
 
     window.close()
