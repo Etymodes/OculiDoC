@@ -84,3 +84,32 @@ def local_api_process_command(
     frozen_mode = is_frozen_application() if frozen is None else bool(frozen)
     arguments = ["--api"] if frozen_mode else ["-m", "oculidoc.api"]
     return program, arguments
+
+
+def signal_task_process_command(
+    config_path: str | Path,
+    output_directory: str | Path,
+    *,
+    snapshot_path: str | Path | None = None,
+    patient_id: str | None = None,
+    headless: bool = False,
+    executable: str | Path | None = None,
+    frozen: bool | None = None,
+) -> tuple[str, list[str]]:
+    """Build the isolated child command for one neural-signal task."""
+
+    program = str(executable if executable is not None else sys.executable).strip()
+    if not program:
+        raise ValueError("Signal task process executable cannot be empty.")
+    config = str(Path(config_path).expanduser().resolve())
+    output = str(Path(output_directory).expanduser().resolve())
+    frozen_mode = is_frozen_application() if frozen is None else bool(frozen)
+    arguments = ["--signal-task"] if frozen_mode else ["-m", "oculidoc.signal_tasks"]
+    arguments.extend(["--config", config, "--output", output])
+    if snapshot_path is not None:
+        arguments.extend(["--snapshot", str(Path(snapshot_path).expanduser().resolve())])
+    if patient_id is not None and patient_id.strip():
+        arguments.extend(["--patient-id", patient_id.strip()])
+    if headless:
+        arguments.append("--headless")
+    return program, arguments

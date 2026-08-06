@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oculidoc"
-version = "0.1.2"
-description = "Eye-tracking assessment and interaction platform for disorders of consciousness."
+version = "0.1.3"
+description = "Multimodal gaze and neural-signal interaction platform for disorders of consciousness."
 readme = "README.md"
 requires-python = ">=3.11,<3.12"
 authors = [
