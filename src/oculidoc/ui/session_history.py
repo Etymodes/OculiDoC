@@ -38,15 +38,17 @@ from oculidoc.application.session_history import (
     export_session_zip,
     format_task_result_lines,
 )
+from oculidoc.application.signal_report import write_signal_report
 from oculidoc.domain import Patient
 from oculidoc.domain.experiment_session import (
     ExperimentSessionStatus,
 )
 from oculidoc.modules.registry import (
-    DEFAULT_MODULES,
+    ALL_MODULES,
 )
+from oculidoc.signals.snapshot import SessionSignalSnapshot
 
-_MODULE_TITLES = {module.module_id: module.title for module in DEFAULT_MODULES}
+_MODULE_TITLES = {module.module_id: module.title for module in ALL_MODULES}
 
 _STATUS_LABELS = {
     ExperimentSessionStatus.CREATED: "已创建",
@@ -128,7 +130,7 @@ class PatientSessionHistoryDialog(QDialog):
             None,
         )
 
-        for module in DEFAULT_MODULES:
+        for module in ALL_MODULES:
             self.module_filter.addItem(
                 module.title,
                 module.module_id,
@@ -245,6 +247,10 @@ class PatientSessionHistoryDialog(QDialog):
         del checked
         entry = self._require_entry()
         if entry is None:
+            return
+
+        if entry.module_id == "neural_interaction":
+            self._open_signal_report(entry)
             return
 
         try:
@@ -700,12 +706,16 @@ for (const button of document.querySelectorAll("button[data-tab]")) {{
         self,
         checked: bool = False,
     ) -> None:
-        """Generate and open a gaze report."""
+        """Generate and open the report owned by the selected paradigm."""
 
         del checked
         entry = self._select_single_report_entry()
 
         if entry is None:
+            return
+
+        if entry.module_id == "neural_interaction":
+            self._open_signal_report(entry)
             return
 
         try:
@@ -730,6 +740,28 @@ for (const button of document.querySelectorAll("button[data-tab]")) {{
                 str(report.html_path),
             )
 
+        self.refresh_sessions()
+
+    def _open_signal_report(self, entry: SessionHistoryEntry) -> None:
+        """Open or rebuild the immutable-snapshot neural-signal report."""
+        report_paths = tuple(entry.session_directory.glob("tasks/*/signal_report.html"))
+        try:
+            if report_paths:
+                report_path = report_paths[-1]
+            else:
+                snapshot = SessionSignalSnapshot.read(
+                    entry.session_directory / "signal_snapshot.json"
+                )
+                result_paths = tuple(entry.session_directory.glob("tasks/*/task_result.json"))
+                if not result_paths:
+                    raise ValueError("该会话没有可用的神经信号任务结果。")
+                _json_path, report_path = write_signal_report(snapshot, result_paths[-1])
+        except Exception as error:
+            QMessageBox.critical(self, "神经信号报告生成失败", str(error))
+            return
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(report_path)))
+        if not opened:
+            QMessageBox.information(self, "报告已生成", str(report_path))
         self.refresh_sessions()
 
     def _single_report_options(

@@ -43,6 +43,10 @@ def test_pyinstaller_spec_has_branding_and_onedir() -> None:
     assert '"assets/stimuli/*.json"' in source
     assert '"assets/stimuli/*.png"' in source
     assert "collect_submodules(" in source
+    assert '"oculidoc.signal_tasks"' in source
+    assert '"oculidoc.bci"' in source
+    assert '"oculidoc.signals"' in source
+    assert '"oculidoc.devices.eeg"' in source
     assert '"oculidoc.package_smoke"' in source
     assert '"PySide6.QtWebEngineCore"' in source
     assert '"PySide6.QtWebEngineWidgets"' in source

@@ -46,6 +46,18 @@ hiddenimports = sorted(
         + collect_submodules(
             "oculidoc.api"
         )
+        + collect_submodules(
+            "oculidoc.signal_tasks"
+        )
+        + collect_submodules(
+            "oculidoc.bci"
+        )
+        + collect_submodules(
+            "oculidoc.signals"
+        )
+        + collect_submodules(
+            "oculidoc.devices.eeg"
+        )
         + [
             "oculidoc.package_smoke",
         ]

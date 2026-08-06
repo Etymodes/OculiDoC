@@ -247,6 +247,50 @@ def format_task_result_lines(
         result = result_value if isinstance(result_value, dict) else {}
         task_kind = str(task_record.get("task_kind") or "unknown")
         lines.append(f"任务结果 {index}（{task_kind}）")
+        paradigm = str(result.get("paradigm") or "")
+        if paradigm in {"ssvep", "mi", "passive_eeg"}:
+            device_ids = result.get("device_ids")
+            devices = (
+                "、".join(str(item) for item in device_ids) if isinstance(device_ids, list) else "-"
+            )
+            algorithm_value = result.get("algorithm")
+            algorithm = algorithm_value if isinstance(algorithm_value, dict) else {}
+            frequencies = result.get("configured_frequencies_hz")
+            frequency_text = (
+                "、".join(
+                    f"{value:g} Hz" for value in frequencies if isinstance(value, (int, float))
+                )
+                if isinstance(frequencies, list)
+                else "-"
+            )
+            lines.extend(
+                (
+                    f"输入范式：{paradigm}",
+                    f"信号来源：{result.get('source_kind', '-')}",
+                    f"设备：{devices}",
+                    f"算法：{algorithm.get('name', 'none')} · {algorithm.get('version', '-')}",
+                    f"配置频率：{frequency_text or '-'}",
+                    "报告资格："
+                    + ("工程记录，不进入患者临床报告" if result.get("simulated") else "正式来源"),
+                )
+            )
+            evaluation_value = result.get("evaluation")
+            if isinstance(evaluation_value, dict):
+                lines.extend(
+                    (
+                        "试次："
+                        f"{evaluation_value.get('trial_count', '-')} · "
+                        f"接受 {evaluation_value.get('accepted_count', '-')} · "
+                        f"拒绝 {evaluation_value.get('rejected_count', '-')}",
+                        "准确率：" + ratio_text(evaluation_value.get("accuracy")),
+                        "平均置信度：" + ratio_text(evaluation_value.get("mean_confidence")),
+                    )
+                )
+            if paradigm == "mi":
+                lines.append("解释边界：仅保存运动想象提示与频带特征，不输出分类控制")
+            else:
+                lines.append("解释边界：本范式独立报告，不与眼动或其他范式融合控制")
+            continue
         show_gaze_cursor = task_record.get("show_gaze_cursor")
 
         if show_gaze_cursor is True:

@@ -26,6 +26,12 @@ class SessionArtifactKind(StrEnum):
     EVENTS = "events"
     SESSION_METADATA = "session_metadata"
     SYNC_REPORT = "sync_report"
+    EEG = "eeg"
+    SIGNAL_MARKERS = "signal_markers"
+    SIGNAL_CONFIGURATION = "signal_configuration"
+    SIGNAL_SNAPSHOT = "signal_snapshot"
+    SIGNAL_REPORT = "signal_report"
+    DECODER_MODEL = "decoder_model"
     OTHER = "other"
 
 
