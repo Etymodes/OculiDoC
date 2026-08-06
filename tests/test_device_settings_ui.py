@@ -28,6 +28,7 @@ def test_device_settings_keeps_native_stream_and_only_generic_sources(
 
     assert items == [
         ("Tobii 原生 Stream（推荐）", "tobii_stream_engine"),
+        ("七鑫易维 aSee（本机 SDK 桥）", "seveninvensun_bridge"),
         ("工程模拟测试", "mock"),
         ("原监听兼容", "tobii_hospital_bridge"),
         ("Tobii DLL兼容", "just_need_to_see_bundle"),
@@ -76,9 +77,39 @@ def test_device_settings_modes_enable_only_their_controls(
     assert dialog.bridge_port_spin.isEnabled()
     assert dialog.third_party_json_edit.isEnabled()
 
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("seveninvensun_bridge"))
+    assert dialog.bridge_host_edit.isEnabled()
+    assert dialog.bridge_port_spin.isEnabled()
+    assert not dialog.third_party_json_edit.isEnabled()
+    assert not dialog.opoin_thesis_button.isEnabled()
+    assert not dialog.open_tobii_button.isEnabled()
+    assert "七鑫易维" in dialog.calibration_tip.text()
+
     dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("just_need_to_see_bundle"))
     assert dialog.compatibility_dll_edit.isEnabled()
     assert not dialog.bridge_host_edit.isEnabled()
+
+
+def test_seveninvensun_source_rejects_nonlocal_bridge(
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(environment="test", data_dir=tmp_path, gaze_source="mock")
+    dialog = DeviceSettingsDialog(settings, GazeDeviceConfigStore.for_settings(settings))
+    qtbot.addWidget(dialog)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        device_settings_module.QMessageBox,
+        "warning",
+        lambda _parent, _title, message: warnings.append(message),
+    )
+
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("seveninvensun_bridge"))
+    dialog.bridge_host_edit.setText("192.168.1.20")
+
+    assert not dialog._validate_config(dialog.build_config())
+    assert warnings == ["七鑫易维 SDK 桥只允许使用 localhost、127.0.0.1 或 ::1。"]
 
 
 def test_legacy_file_source_is_presented_as_third_party_compatibility(

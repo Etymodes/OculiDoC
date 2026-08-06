@@ -32,6 +32,7 @@ from oculidoc.ui.opoin_thesis import OpoinThesisDialog
 
 _SOURCE_ITEMS = (
     ("Tobii 原生 Stream（推荐）", "tobii_stream_engine"),
+    ("七鑫易维 aSee（本机 SDK 桥）", "seveninvensun_bridge"),
     ("工程模拟测试", "mock"),
     ("原监听兼容", "tobii_hospital_bridge"),
     ("Tobii DLL兼容", "just_need_to_see_bundle"),
@@ -226,7 +227,7 @@ class DeviceSettingsDialog(QDialog):
 
         form.addRow("眼动源：", self.source_combo)
         form.addRow("原生 Stream DLL：", dll_row)
-        form.addRow("兼容地址：", bridge_row)
+        form.addRow("本机/兼容桥地址：", bridge_row)
         form.addRow("第三方数据目录：", third_party_json_row)
         form.addRow("Tobii 兼容 DLL：", compatibility_dll_row)
         form.addRow("任务前预检：", self.preflight_seconds_spin)
@@ -235,7 +236,9 @@ class DeviceSettingsDialog(QDialog):
 
         source_tip = QLabel(
             "这里选择的是连接方式；实际传感器名称和可用数据字段以自检结果为准。"
-            "Tobii 原生 Stream 保留为推荐主链路。原监听兼容用于既有 TCP 发送程序；"
+            "Tobii 原生 Stream 保留为推荐主链路。七鑫易维 aSee 入口只连接本机 SDK 桥，"
+            "不内置或猜测厂商 DLL；眼动眼镜必须先把场景坐标映射到当前屏幕。"
+            "原监听兼容用于既有 TCP 发送程序；"
             "它由 OculiDoC 在 0.0.0.0 和所设端口（原版为 9999）建立服务端。"
             "Tobii DLL兼容使用管理员明确选择的 Stream Engine DLL；第三方兼容会先尝试"
             "通用 NDJSON 桥接，再尝试所选目录中的 *_gaze.json。兼容模式均不会回退到模拟数据。"
@@ -268,24 +271,24 @@ class DeviceSettingsDialog(QDialog):
         self.opoin_thesis_button = QPushButton("打开 OpoinThesis 眼位监测")
         self.opoin_thesis_button.setObjectName("openOpoinThesisButton")
         self.opoin_thesis_button.clicked.connect(self._open_opoin_thesis)
-        opoin_thesis_tip = QLabel(
+        self.opoin_thesis_tip = QLabel(
             "主观查看左右眼位置；不计算有效率，不保存，也不纳入自检或任务报告。"
         )
-        opoin_thesis_tip.setWordWrap(True)
+        self.opoin_thesis_tip.setWordWrap(True)
         opoin_thesis_row.addWidget(self.opoin_thesis_button)
-        opoin_thesis_row.addWidget(opoin_thesis_tip, 1)
+        opoin_thesis_row.addWidget(self.opoin_thesis_tip, 1)
         root.addLayout(opoin_thesis_row)
 
         calibration_row = QHBoxLayout()
-        open_tobii_button = QPushButton("打开 Tobii Experience / 校准")
-        open_tobii_button.setObjectName("openTobiiExperienceButton")
-        open_tobii_button.clicked.connect(self._open_tobii_experience)
-        calibration_tip = QLabel(
+        self.open_tobii_button = QPushButton("打开 Tobii Experience / 校准")
+        self.open_tobii_button.setObjectName("openTobiiExperienceButton")
+        self.open_tobii_button.clicked.connect(self._open_tobii_experience)
+        self.calibration_tip = QLabel(
             "正式任务前请先完成 Display Setup，再在用户资料中执行校准或 Improve calibration。"
         )
-        calibration_tip.setWordWrap(True)
-        calibration_row.addWidget(open_tobii_button)
-        calibration_row.addWidget(calibration_tip, 1)
+        self.calibration_tip.setWordWrap(True)
+        calibration_row.addWidget(self.open_tobii_button)
+        calibration_row.addWidget(self.calibration_tip, 1)
         root.addLayout(calibration_row)
 
         buttons = QDialogButtonBox(
@@ -318,10 +321,11 @@ class DeviceSettingsDialog(QDialog):
         enabled = source == "tobii_stream_engine"
         for dll_widget in self.dll_controls:
             dll_widget.setEnabled(enabled)
-        self.bridge_host_edit.setEnabled(source == "tobii_legacy_bridge")
+        self.bridge_host_edit.setEnabled(source in {"seveninvensun_bridge", "tobii_legacy_bridge"})
         self.bridge_port_spin.setEnabled(
             source
             in {
+                "seveninvensun_bridge",
                 "tobii_hospital_bridge",
                 "tobii_legacy_bridge",
             }
@@ -332,6 +336,19 @@ class DeviceSettingsDialog(QDialog):
         compatibility_enabled = source == "just_need_to_see_bundle"
         for widget in self.compatibility_dll_controls:
             widget.setEnabled(compatibility_enabled)
+        seveninvensun_selected = source == "seveninvensun_bridge"
+        self.opoin_thesis_button.setEnabled(not seveninvensun_selected)
+        self.open_tobii_button.setEnabled(not seveninvensun_selected)
+        self.opoin_thesis_tip.setText(
+            "当前七鑫易维桥契约只接收屏幕注视点，不声明三维眼位能力。"
+            if seveninvensun_selected
+            else "主观查看左右眼位置；不计算有效率，不保存，也不纳入自检或任务报告。"
+        )
+        self.calibration_tip.setText(
+            "请先在七鑫易维随设备提供的工具中完成当前用户和当前屏幕校准，再运行自检。"
+            if seveninvensun_selected
+            else "正式任务前请先完成 Display Setup，再在用户资料中执行校准或 Improve calibration。"
+        )
 
     def _browse_third_party_json(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -450,6 +467,18 @@ class DeviceSettingsDialog(QDialog):
                 "请输入兼容程序的主机地址。",
             )
             return False
+        if config.gaze_source == "seveninvensun_bridge":
+            if config.tobii_bridge_host.strip().lower() not in {
+                "localhost",
+                "127.0.0.1",
+                "::1",
+            }:
+                QMessageBox.warning(
+                    self,
+                    "七鑫易维桥地址无效",
+                    "七鑫易维 SDK 桥只允许使用 localhost、127.0.0.1 或 ::1。",
+                )
+                return False
         if config.gaze_source == "tobii_stream_engine" and config.tobii_stream_engine_dll:
             if not config.tobii_stream_engine_dll.is_file():
                 QMessageBox.warning(

@@ -75,6 +75,11 @@ def dispatch(
 
         return run_task(arguments[1:])
 
+    if arguments[:1] == ["--signal-task"]:
+        from oculidoc.signal_tasks.__main__ import main as run_signal_task
+
+        return run_signal_task(arguments[1:])
+
     if arguments:
         raise SystemExit("Unsupported OculiDoC arguments: " + " ".join(arguments))
 

@@ -51,6 +51,11 @@ from oculidoc.devices.preflight import (
     failed_gaze_preflight,
     run_gaze_preflight,
 )
+from oculidoc.devices.seveninvensun_bridge import (
+    SEVENINVENSUN_BRIDGE_PROTOCOL,
+    SeveninvensunBridgeDevice,
+    parse_seveninvensun_bridge_payload,
+)
 from oculidoc.devices.simulated import (
     SimulatedCameraDevice,
     SimulatedEyeTrackerDevice,
@@ -103,6 +108,8 @@ __all__ = [
     "PairedAcquisitionPacket",
     "PairedAcquisitionRunner",
     "ProbeStatus",
+    "SEVENINVENSUN_BRIDGE_PROTOCOL",
+    "SeveninvensunBridgeDevice",
     "SimulatedCameraDevice",
     "SimulatedEyeTrackerDevice",
     "SystemSnapshot",
@@ -114,6 +121,7 @@ __all__ = [
     "build_diagnostic_report",
     "collect_system_snapshot",
     "probe_camera",
+    "parse_seveninvensun_bridge_payload",
     "parse_tobii_bridge_payload",
     "probe_cameras",
     "discover_tobii_stream_engine_dll",

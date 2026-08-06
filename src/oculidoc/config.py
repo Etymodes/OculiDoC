@@ -19,6 +19,7 @@ GazeSource = Literal[
     "gaze_collect_legacy",
     "just_need_to_see_bundle",
     "mock",
+    "seveninvensun_bridge",
     "tobii_hospital_bridge",
     "tobii_stream_engine",
     "tobii_legacy_bridge",
