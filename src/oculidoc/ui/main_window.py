@@ -383,6 +383,7 @@ class AdminMainWindow(QMainWindow):
             "auto": "硬件自动检测",
             "gaze_collect_legacy": "第三方兼容",
             "just_need_to_see_bundle": "Tobii DLL兼容",
+            "seveninvensun_bridge": "七鑫易维 aSee 本机 SDK 桥",
             "tobii_hospital_bridge": "原监听兼容",
             "tobii_stream_engine": "Tobii 原生 Stream",
             "tobii_legacy_bridge": "第三方兼容",
@@ -2198,6 +2199,7 @@ class AdminMainWindow(QMainWindow):
                 launch,
                 exit_code=(2 if manually_stopped else exit_code),
                 process_output=process_output,
+                profile_store=self._signal_profile_store,
             )
         except Exception as error:
             QMessageBox.warning(self, "神经信号会话结束失败", str(error))

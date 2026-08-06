@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 from time import monotonic_ns
@@ -177,6 +178,35 @@ def save_eeg_block(path: str | Path, block: EEGSampleBlock) -> Path:
     metadata = json.dumps(block.metadata(), ensure_ascii=False, sort_keys=True)
     with target.open("wb") as stream:
         np.savez_compressed(stream, values_uv=block.values_uv, metadata=np.array(metadata))
+    return target
+
+
+def save_eeg_block_csv(
+    path: str | Path,
+    block: EEGSampleBlock,
+    *,
+    tag: str | float | int | None,
+) -> Path:
+    """Write a rectangular, human-auditable companion to the lossless NPZ.
+
+    Unlike the historical JustSsvep file, every row has the same explicit
+    channel/tag/timestamp schema. Timestamps use the block's nanosecond clock.
+    """
+
+    target = Path(path).expanduser().resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    step_ns = 1_000_000_000 / block.sample_rate_hz
+    with target.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream, lineterminator="\n")
+        writer.writerow((*block.channel_names, "tag", "timestamp"))
+        for sample_index, values in enumerate(block.values_uv.T):
+            writer.writerow(
+                (
+                    *(float(value) for value in values),
+                    "" if tag is None else tag,
+                    block.start_timestamp_ns + round(sample_index * step_ns),
+                )
+            )
     return target
 
 

@@ -24,6 +24,7 @@ class MylianBridgeStatus(StrEnum):
     MISSING_RUNTIME = "missing_runtime"
     UNSUPPORTED_DEVICE = "unsupported_device"
     LICENCE_REQUIRED = "licence_required"
+    CONNECTION_UNAVAILABLE = "connection_unavailable"
 
 
 class MylianBridgeUnavailable(RuntimeError):
@@ -39,6 +40,9 @@ class MylianBridgeUnavailable(RuntimeError):
             ),
             MylianBridgeStatus.LICENCE_REQUIRED: (
                 "The Mylian bridge reports insufficient licence permission."
+            ),
+            MylianBridgeStatus.CONNECTION_UNAVAILABLE: (
+                "The local Mylian/JustSsvep bridge is not reachable or returned no data."
             ),
             MylianBridgeStatus.AVAILABLE: "Mylian bridge did not provide an EEG block.",
         }[status]

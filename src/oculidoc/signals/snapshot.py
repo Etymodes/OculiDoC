@@ -168,7 +168,7 @@ class SessionSignalSnapshot:
             encoding="utf-8",
             newline="\n",
             dir=target.parent,
-            prefix=f".{target.name}.",
+            prefix=".tmp-",
             suffix=".tmp",
             delete=False,
         ) as stream:

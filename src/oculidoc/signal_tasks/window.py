@@ -10,13 +10,17 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QGridLayout, QLabel, QMainWindow, QVBoxLayout, QWidget
 
 from oculidoc.bci.ssvep.config import SsvepStimulusConfig
+from oculidoc.bci.ssvep.evaluation import DecoderResult
 from oculidoc.bci.ssvep.stimulus import frame_luminances
 from oculidoc.signal_tasks.config import SignalTaskConfig, SignalTaskKind
 from oculidoc.signal_tasks.runner import SignalTaskCancelled, run_signal_task
+from oculidoc.signals.quality import SignalQualityAssessment
 
 
 class _TaskWorker(QObject):
     trial_started = Signal(int, int, str, object)
+    trial_decoded = Signal(int, object, object)
+    trial_quality = Signal(int, object, object)
     finished = Signal(int, str, str)
 
     def __init__(
@@ -41,6 +45,8 @@ class _TaskWorker(QObject):
                 patient_id=self.patient_id,
                 wait_for_trials=True,
                 trial_started=self.trial_started.emit,
+                trial_decoded=self.trial_decoded.emit,
+                trial_quality=self.trial_quality.emit,
                 cancel_event=self.cancel_event,
             )
         except SignalTaskCancelled as error:
@@ -71,6 +77,8 @@ class SignalTaskWindow(QMainWindow):
         self._closing_after_finish = False
         self._frame_index = 0
         self._active_frequency: float | None = None
+        self._selected_frequency: float | None = None
+        self._quality_text = ""
         self._stimulus = (
             SsvepStimulusConfig.for_frequencies(
                 config.frequencies_hz,
@@ -98,7 +106,8 @@ class SignalTaskWindow(QMainWindow):
         target_grid = QGridLayout()
         if self._stimulus is not None:
             for index, target in enumerate(self._stimulus.targets):
-                label = QLabel(target.label)
+                target_text = config.target_labels[index] if config.target_labels else target.label
+                label = QLabel(target_text)
                 label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 label.setMinimumSize(220, 160)
                 self._target_labels.append(label)
@@ -128,6 +137,8 @@ class SignalTaskWindow(QMainWindow):
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.trial_started.connect(self._show_trial)
+        self._worker.trial_decoded.connect(self._show_decoded)
+        self._worker.trial_quality.connect(self._show_quality)
         self._worker.finished.connect(self._finish)
         self._worker.finished.connect(self._thread.quit)
         self._thread.finished.connect(self._worker.deleteLater)
@@ -141,6 +152,7 @@ class SignalTaskWindow(QMainWindow):
         cue: str,
         frequency_hz: object,
     ) -> None:
+        self._selected_frequency = None
         self._active_frequency = (
             float(frequency_hz)
             if isinstance(frequency_hz, (str, int, float)) and not isinstance(frequency_hz, bool)
@@ -150,8 +162,38 @@ class SignalTaskWindow(QMainWindow):
         if self.config.task_kind is SignalTaskKind.MI_PROTOCOL:
             direction = "左手" if cue == "left" else "右手"
             self.cue_label.setText(f"想象{direction}运动")
+        elif self.config.task_kind is SignalTaskKind.SSVEP_BINARY_COMMUNICATION:
+            labels = " / ".join(self.config.target_labels)
+            self.cue_label.setText(f"请注视“{labels}”作出选择")
         elif self._active_frequency is not None:
             self.cue_label.setText(f"请注视：{self._active_frequency:g} Hz")
+
+    @Slot(int, object, object)
+    def _show_quality(self, index: int, assessment: object, telemetry: object) -> None:
+        if not isinstance(assessment, SignalQualityAssessment):
+            return
+        self._quality_text = "信号质量通过" if assessment.usable else "信号质量未通过"
+        battery = telemetry.get("battery_percent") if isinstance(telemetry, dict) else None
+        battery_text = f" · 电量 {battery}%" if isinstance(battery, int) else ""
+        self.status_label.setText(f"试次 {index} · {self._quality_text}{battery_text}")
+
+    @Slot(int, object, object)
+    def _show_decoded(self, index: int, result: object, selected_label: object) -> None:
+        if not isinstance(result, DecoderResult):
+            return
+        self._active_frequency = None
+        self._selected_frequency = result.target_frequency_hz
+        if result.rejected:
+            self.status_label.setText(f"试次 {index} · 未形成可靠选择 · {self._quality_text}")
+            self.cue_label.setText(
+                "信号质量未通过，请检查电极后重试"
+                if result.reject_reason == "signal_quality_failed"
+                else "未识别，请放松；系统将自动重试"
+            )
+        else:
+            label = str(selected_label) if selected_label is not None else "已识别"
+            self.status_label.setText(f"试次 {index} · 反馈已记录 · {self._quality_text}")
+            self.cue_label.setText(f"已识别：{label}")
 
     def _advance_frame(self) -> None:
         assert self._stimulus is not None
@@ -164,7 +206,12 @@ class SignalTaskWindow(QMainWindow):
             strict=True,
         ):
             level = round(25 + luminance * 230)
-            border = "#41d1ff" if target.frequency_hz == self._active_frequency else "#385064"
+            if target.frequency_hz == self._selected_frequency:
+                border = "#42d392"
+            elif target.frequency_hz == self._active_frequency:
+                border = "#41d1ff"
+            else:
+                border = "#385064"
             label.setStyleSheet(
                 f"font-size:28px;font-weight:800;color:rgb({level},{level},{level});"
                 f"background:#102334;border:6px solid {border};border-radius:20px"

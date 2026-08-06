@@ -28,6 +28,7 @@ class SignalSourceKind(StrEnum):
     REPLAY = "replay"
     LOCAL_BRIDGE = "local_bridge"
     MYLIAN_BRIDGE = "mylian_bridge"
+    MYLIAN_WEBSOCKET = "mylian_websocket"
 
 
 @dataclass(frozen=True, slots=True)

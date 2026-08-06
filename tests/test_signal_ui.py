@@ -51,6 +51,22 @@ def test_signal_dialog_exposes_simulation_only_for_beta00(qtbot: QtBot) -> None:
         real.source_combo.itemData(index) != "simulation"
         for index in range(real.source_combo.count())
     )
+    assert any(
+        real.source_combo.itemData(index) == "mylian_websocket"
+        for index in range(real.source_combo.count())
+    )
+    assert "#eef3f8" in real.styleSheet()
+
+
+def test_signal_dialog_exposes_closed_loop_communication_task(qtbot: QtBot) -> None:
+    dialog = SignalWorkbenchDialog(
+        PatientSignalProfile(patient_id="patient-a"),
+        patient_code="REAL-001",
+        selected_paradigms=(SignalParadigm.SSVEP,),
+    )
+    qtbot.addWidget(dialog)
+    task_values = {dialog.task_combo.itemData(index) for index in range(dialog.task_combo.count())}
+    assert "ssvep_binary_communication" in task_values
 
 
 def test_admin_homepage_registers_neural_module_without_breaking_gaze(

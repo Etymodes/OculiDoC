@@ -18,7 +18,7 @@ def _atomic_text(path: Path, text: str) -> Path:
         encoding="utf-8",
         newline="\n",
         dir=path.parent,
-        prefix=f".{path.name}.",
+        prefix=".tmp-",
         suffix=".tmp",
         delete=False,
     ) as stream:
@@ -47,11 +47,13 @@ def write_signal_report(
     if not isinstance(task_payload, dict) or not isinstance(task_payload.get("result"), dict):
         raise ValueError("Signal task result must contain a structured result object.")
     result = dict(task_payload["result"])
-    simulated = bool(result.get("simulated"))
+    report_eligible = bool(result.get("report_eligible", False))
     report = {
         "schema_version": "1.0",
-        "report_type": "engineering_signal_report" if simulated else "signal_session_report",
-        "report_eligible": not simulated,
+        "report_type": (
+            "signal_session_report" if report_eligible else "engineering_signal_report"
+        ),
+        "report_eligible": report_eligible,
         "patient_id": snapshot.patient_id,
         "snapshot_sha256": snapshot.config_sha256,
         "snapshot": snapshot.to_dict(),
@@ -63,11 +65,13 @@ def write_signal_report(
     json_path = result_path.with_name("signal_report.json")
     _atomic_text(json_path, json.dumps(report, ensure_ascii=False, indent=2) + "\n")
 
-    title = "OculiDoC 工程模拟信号报告" if simulated else "OculiDoC 神经信号会话报告"
+    title = "OculiDoC 神经信号会话报告" if report_eligible else "OculiDoC 工程/待核验信号报告"
+    ineligibility_value = result.get("report_ineligibility_reasons")
+    ineligibility = ineligibility_value if isinstance(ineligibility_value, list) else []
     notice = (
-        "工程模拟/模拟来源回放：不得进入真实患者报告、科研统计或临床决策。"
-        if simulated
-        else "本报告记录设备、通道、算法参数、频率、得分、置信度与拒绝状态。"
+        "本次仅保留工程证据，不具备正式报告资格：" + "、".join(map(str, ineligibility))
+        if not report_eligible
+        else "本报告记录设备、通道、质量门禁、算法参数、得分、置信度与拒绝状态。"
     )
     algorithm_value = result.get("algorithm")
     algorithm: dict[str, object] = (
@@ -85,6 +89,19 @@ def write_signal_report(
     model = dict(model_value) if isinstance(model_value, dict) else {}
     generated_model_value = result.get("calibration_model")
     generated_model = dict(generated_model_value) if isinstance(generated_model_value, dict) else {}
+    provenance_value = result.get("input_provenance")
+    provenance = dict(provenance_value) if isinstance(provenance_value, dict) else {}
+    quality_value = result.get("quality_gate")
+    quality = dict(quality_value) if isinstance(quality_value, dict) else {}
+    telemetry_value = result.get("source_telemetry")
+    telemetry_items = telemetry_value if isinstance(telemetry_value, list) else []
+    last_telemetry = (
+        dict(telemetry_items[-1])
+        if telemetry_items and isinstance(telemetry_items[-1], dict)
+        else {}
+    )
+    adaptation_value = generated_model.get("adaptation")
+    adaptation = dict(adaptation_value) if isinstance(adaptation_value, dict) else {}
     rows = (
         ("任务", snapshot.task_kind),
         ("范式", "、".join(item.value for item in snapshot.paradigms)),
@@ -92,6 +109,25 @@ def write_signal_report(
         ("设备", "、".join(str(item) for item in devices)),
         ("通道", "、".join(snapshot.channel_names)),
         ("采样率", f"{snapshot.sample_rate_hz:g} Hz"),
+        (
+            "原始计数换算",
+            (
+                f"{provenance.get('value_scale_uv_per_count')} µV/计数 · "
+                f"已确认={provenance.get('scale_verified')}"
+                if provenance.get("raw_count_source")
+                else "设备标准数据契约"
+            ),
+        ),
+        ("质量门禁", f"全部通过={quality.get('all_usable', False)}"),
+        (
+            "设备遥测",
+            (
+                f"电量={last_telemetry.get('battery_percent')}% · "
+                f"桥版本={last_telemetry.get('bridge_version')}"
+                if last_telemetry
+                else "未提供"
+            ),
+        ),
         ("算法", f"{algorithm.get('name', 'none')} · {algorithm.get('version', '-')}"),
         (
             "模型",
@@ -109,6 +145,16 @@ def write_signal_report(
                 else "-"
             ),
         ),
+        (
+            "滚动适配",
+            (
+                f"{adaptation.get('policy_version', '-')} · "
+                f"通过={adaptation.get('accepted', False)} · "
+                f"原因={adaptation.get('reason', '-')}"
+                if adaptation
+                else "不适用"
+            ),
+        ),
         ("试次数", str(evaluation.get("trial_count", "-"))),
         ("准确率", str(evaluation.get("accuracy", "-"))),
         (
@@ -123,7 +169,12 @@ def write_signal_report(
     )
     trial_json = html.escape(
         json.dumps(
-            result.get("trial_results", result.get("trials", [])), ensure_ascii=False, indent=2
+            result.get(
+                "task_outcomes",
+                result.get("trial_results", result.get("trials", [])),
+            ),
+            ensure_ascii=False,
+            indent=2,
         )
     )
     parameter_json = html.escape(
@@ -140,7 +191,8 @@ th{{width:170px;background:#eef5fb}}pre{{white-space:pre-wrap;background:#f5f8fa
 </style></head><body><h1>{html.escape(title)}</h1><p class="notice">{html.escape(notice)}</p>
 <table>{row_html}</table><h2>算法参数</h2><pre>{parameter_json}</pre>
 <h2>逐试次结果</h2><pre>{trial_json}</pre>
-<p>v0.1.3 边界：眼动、SSVEP、被动 EEG 与运动想象分别运行、分别报告，不融合为控制输出。</p>
+<p>v0.1.3 边界：眼动、SSVEP、被动 EEG 与运动想象分别运行、分别报告；
+SSVEP 选择形成 OculiDoC 内部任务反馈，但不向外骨骼、轮椅或其他外部设备下发动作。</p>
 </body></html>"""
     html_path = result_path.with_name("signal_report.html")
     _atomic_text(html_path, document)

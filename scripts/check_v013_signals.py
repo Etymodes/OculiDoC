@@ -27,6 +27,12 @@ def _result(config: SignalTaskConfig, root: Path, name: str) -> dict[str, Any]:
         raise RuntimeError(f"{name} did not produce a structured result.")
     if payload["result"].get("report_eligible") is not False:
         raise RuntimeError(f"{name} simulation was not isolated from patient reports.")
+    csv_files = tuple(path.parent.glob("eeg_trial_*.csv"))
+    if not csv_files or not all(
+        csv_path.read_text(encoding="utf-8").splitlines()[0].endswith(",tag,timestamp")
+        for csv_path in csv_files
+    ):
+        raise RuntimeError(f"{name} did not write rectangular raw-data CSV companions.")
     return payload
 
 
@@ -59,7 +65,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 SignalSourceKind.SIMULATION,
                 frequencies_hz=(10.0, 12.0),
                 decoder_name="fbcca",
+                trial_count=4,
+            ),
+            "ssvep_communication": SignalTaskConfig(
+                SignalTaskKind.SSVEP_BINARY_COMMUNICATION,
+                SignalSourceKind.SIMULATION,
+                frequencies_hz=(6.0, 10.0),
+                target_labels=("是", "否"),
+                decoder_name="fbcca",
                 trial_count=2,
+                feedback_seconds=0.0,
             ),
             "mi_protocol": SignalTaskConfig(
                 SignalTaskKind.MI_PROTOCOL,
@@ -76,6 +91,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         calibration = results["ssvep_calibration"]["result"].get("calibration_model")
         if not isinstance(calibration, dict) or calibration.get("algorithm_version") != "trca-1.0":
             raise RuntimeError("Frequency scan did not create the TRCA calibration artifact.")
+        adaptation = calibration.get("adaptation")
+        if not isinstance(adaptation, dict) or adaptation.get("accepted") is not True:
+            raise RuntimeError("Frequency scan did not pass guarded holdout adaptation.")
+        communication = results["ssvep_communication"]["result"]
+        closed_loop = communication.get("task_closed_loop")
+        outcomes = communication.get("task_outcomes")
+        if (
+            not isinstance(closed_loop, dict)
+            or closed_loop.get("visible_feedback") is not True
+            or closed_loop.get("raw_data_recorded") is not True
+            or not isinstance(outcomes, list)
+            or len(outcomes) != 2
+        ):
+            raise RuntimeError("SSVEP communication did not close its task feedback loop.")
         mi = results["mi_protocol"]["result"]
         if mi.get("classification") is not None:
             raise RuntimeError("v0.1.3 MI protocol crossed the no-control-fusion boundary.")

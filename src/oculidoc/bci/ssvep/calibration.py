@@ -36,6 +36,7 @@ def save_trca_model(
     *,
     patient_id: str,
     simulated: bool,
+    adaptation: Mapping[str, object] | None = None,
 ) -> Path:
     target = Path(path).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -49,6 +50,7 @@ def save_trca_model(
         "frequencies_hz": list(model.frequencies_hz),
         "simulated": bool(simulated),
         "created_at_utc": utc_now_text(),
+        "adaptation": dict(adaptation or {}),
     }
     with target.open("wb") as stream:
         np.savez_compressed(

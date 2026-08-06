@@ -583,6 +583,7 @@ async function refresh() {
       auto: "硬件自动检测", mock: "工程模拟测试",
       gaze_collect_legacy: "第三方兼容",
       just_need_to_see_bundle: "Tobii DLL兼容",
+      seveninvensun_bridge: "七鑫易维 aSee 本机 SDK 桥",
       tobii_hospital_bridge: "原监听兼容",
       tobii_stream_engine: "Tobii 原生 Stream",
       tobii_legacy_bridge: "第三方兼容"

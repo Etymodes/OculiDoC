@@ -54,6 +54,22 @@ def test_main_window_displays_auto_detect_source(qtbot: QtBot, tmp_path) -> None
     assert window.gaze_status_label.text() == "眼动源：硬件自动检测 · 尚未预检"
 
 
+def test_main_window_displays_reserved_seveninvensun_source(
+    qtbot: QtBot,
+    tmp_path,
+) -> None:
+    window = AdminMainWindow(
+        Settings(
+            environment="test",
+            data_dir=tmp_path,
+            gaze_source="seveninvensun_bridge",
+        )
+    )
+    qtbot.addWidget(window)
+
+    assert window.gaze_status_label.text() == ("眼动源：七鑫易维 aSee 本机 SDK 桥 · 尚未预检")
+
+
 def test_auto_detect_status_names_the_selected_sensor(qtbot: QtBot, tmp_path) -> None:
     GazePreflightStore(tmp_path / "runtime" / "gaze_preflight.json").save(
         GazePreflightResult(

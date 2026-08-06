@@ -80,7 +80,9 @@ def create_signal_task_launch(
         frequencies_hz=config.frequencies_hz,
         algorithm=(config.decoder_name if config.capability.decoder_required else None),
         device_id=config.device_id,
-        calibration_model=config.model_path,
+        # Models enter long-term history only after a completed, guarded
+        # calibration promotion; a launch or failed task must not pollute it.
+        calibration_model=None,
     )
     saved_profile = profile_store.save(updated_profile, expected_revision=profile.revision)
     session = service.create_session(
@@ -142,7 +144,9 @@ def _sha256(path: Path) -> str:
 
 
 def _artifact_kind(path: Path) -> SessionArtifactKind:
-    if path.name.startswith("eeg_trial_") and path.suffix.lower() == ".npz":
+    if path.name.startswith("eeg_trial_") and path.suffix.lower() in {".npz", ".csv"}:
+        return SessionArtifactKind.EEG
+    if path.name.startswith("mylian_raw_") and path.suffix.lower() == ".csv":
         return SessionArtifactKind.EEG
     if path.name == "ssvep_trca_model.npz":
         return SessionArtifactKind.DECODER_MODEL
@@ -171,6 +175,8 @@ def _artifact_source(path: Path) -> str:
 
 
 def _mime_type(path: Path) -> str | None:
+    if path.suffix.lower() == ".csv":
+        return "text/csv"
     if path.suffix.lower() == ".jsonl":
         return "application/x-ndjson"
     if path.suffix.lower() == ".npz":
@@ -221,6 +227,7 @@ def finalize_signal_task_launch(
     *,
     exit_code: int,
     process_output: str = "",
+    profile_store: PatientSignalProfileStore | None = None,
 ) -> ExperimentSessionStatus:
     """Register products and finish a signal session without gaze coupling."""
 
@@ -253,4 +260,33 @@ def finalize_signal_task_launch(
             launch.session_id,
             "Signal task result does not record a completed end state.",
         ).status
+    if profile_store is not None:
+        for result_path, item in zip(result_paths, results, strict=True):
+            if item.get("task_kind") != "ssvep_frequency_scan":
+                continue
+            result_value = item.get("result")
+            if not isinstance(result_value, dict):
+                continue
+            model_value = result_value.get("calibration_model")
+            if not isinstance(model_value, dict) or not model_value.get("recommended_for_use"):
+                continue
+            file_name = model_value.get("file_name")
+            if not isinstance(file_name, str) or not file_name:
+                continue
+            model_path = (result_path.parent / file_name).resolve()
+            if not model_path.is_file():
+                continue
+            expected_sha256 = model_value.get("sha256")
+            if not isinstance(expected_sha256, str) or _sha256(model_path) != expected_sha256:
+                continue
+            profile = profile_store.load(str(launch.patient_id))
+            adaptation_value = model_value.get("adaptation")
+            adaptation = adaptation_value if isinstance(adaptation_value, dict) else {}
+            algorithm = f"trca@{adaptation.get('policy_version', 'guarded')}"
+            updated = profile.with_session_defaults(
+                paradigms=profile.default_paradigms,
+                algorithm=algorithm,
+                calibration_model=str(model_path),
+            )
+            profile_store.save(updated, expected_revision=profile.revision)
     return service.complete_session(launch.session_id).status

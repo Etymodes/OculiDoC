@@ -6,11 +6,25 @@ import json
 import os
 from dataclasses import dataclass
 from enum import StrEnum
+from ipaddress import ip_address
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from urllib.parse import urlsplit
 
 from oculidoc.bci.ssvep.registry import DecoderRegistry
 from oculidoc.signals.models import SignalParadigm, SignalSourceKind
+
+
+def _is_loopback_websocket(uri: str) -> bool:
+    host = urlsplit(uri).hostname
+    if host is None:
+        return False
+    if host.casefold() == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 class SignalTaskKind(StrEnum):
@@ -20,6 +34,7 @@ class SignalTaskKind(StrEnum):
     SSVEP_FREQUENCY_SCAN = "ssvep_frequency_scan"
     SSVEP_SINGLE_TARGET = "ssvep_single_target"
     SSVEP_BINARY_CHOICE = "ssvep_binary_choice"
+    SSVEP_BINARY_COMMUNICATION = "ssvep_binary_communication"
     SSVEP_FOUR_TARGET = "ssvep_four_target"
     SSVEP_VALIDATION = "ssvep_validation"
     MI_PROTOCOL = "mi_protocol"
@@ -38,6 +53,7 @@ class SignalTaskCapability:
 
 
 _ALL_V013_SOURCES = (
+    SignalSourceKind.MYLIAN_WEBSOCKET,
     SignalSourceKind.MYLIAN_BRIDGE,
     SignalSourceKind.LOCAL_BRIDGE,
     SignalSourceKind.REPLAY,
@@ -68,7 +84,15 @@ SIGNAL_TASK_CAPABILITIES: tuple[SignalTaskCapability, ...] = (
     ),
     SignalTaskCapability(
         SignalTaskKind.SSVEP_BINARY_CHOICE,
-        "SSVEP 二目标",
+        "SSVEP 二目标校准/验证",
+        SignalParadigm.SSVEP,
+        _ALL_V013_SOURCES,
+        frequency_count=2,
+        decoder_required=True,
+    ),
+    SignalTaskCapability(
+        SignalTaskKind.SSVEP_BINARY_COMMUNICATION,
+        "SSVEP 二选一沟通（闭环）",
         SignalParadigm.SSVEP,
         _ALL_V013_SOURCES,
         frequency_count=2,
@@ -117,6 +141,11 @@ class SignalTaskConfig:
     model_path: str | None = None
     refresh_rate_hz: float = 60.0
     screen_index: int = 0
+    target_labels: tuple[str, ...] = ()
+    feedback_seconds: float = 1.0
+    max_retries: int = 1
+    value_scale_uv_per_count: float = 1.0
+    scale_verified: bool = False
     schema_version: str = "1.0"
 
     def __post_init__(self) -> None:
@@ -128,11 +157,20 @@ class SignalTaskConfig:
         decoder_name = self.decoder_name.strip().casefold()
         source_path = self.source_path.strip() if self.source_path else None
         model_path = self.model_path.strip() if self.model_path else None
+        target_labels = tuple(label.strip() for label in self.target_labels)
 
         if source_kind not in capability.allowed_sources:
             raise ValueError(f"{task_kind.value} does not support source {source_kind.value}.")
         if self.sample_rate_hz <= 0 or self.duration_seconds <= 0:
             raise ValueError("Signal sample rate and duration must be positive.")
+        if self.feedback_seconds < 0 or self.feedback_seconds > 10:
+            raise ValueError("Signal feedback duration must be from 0 to 10 seconds.")
+        if isinstance(self.max_retries, bool) or not 0 <= self.max_retries <= 3:
+            raise ValueError("Signal max_retries must be from 0 to 3.")
+        if self.value_scale_uv_per_count <= 0:
+            raise ValueError("Microvolt-per-count scale must be positive.")
+        if not isinstance(self.scale_verified, bool):
+            raise TypeError("scale_verified must be a boolean.")
         if (
             not channels
             or any(not name for name in channels)
@@ -163,15 +201,29 @@ class SignalTaskConfig:
                 raise ValueError(f"Unsupported SSVEP decoder: {decoder_name}")
             if decoder_name in {"trca", "etrca"} and model_path is None:
                 raise ValueError(f"{decoder_name} requires a patient calibration model path.")
+            if not target_labels and task_kind is SignalTaskKind.SSVEP_BINARY_COMMUNICATION:
+                target_labels = ("是", "否")
+            if target_labels and (
+                len(target_labels) != len(frequencies)
+                or any(not label for label in target_labels)
+                or len(set(target_labels)) != len(target_labels)
+            ):
+                raise ValueError("SSVEP target labels must be unique and match the frequencies.")
         elif frequencies:
             raise ValueError(f"{task_kind.value} does not accept SSVEP frequencies.")
         if source_kind in {
             SignalSourceKind.REPLAY,
             SignalSourceKind.LOCAL_BRIDGE,
             SignalSourceKind.MYLIAN_BRIDGE,
+            SignalSourceKind.MYLIAN_WEBSOCKET,
         }:
             if source_path is None:
                 raise ValueError(f"{source_kind.value} requires a local source path.")
+        if source_kind is SignalSourceKind.MYLIAN_WEBSOCKET and source_path is not None:
+            if not source_path.startswith(("ws://", "wss://")):
+                raise ValueError("Mylian WebSocket source must start with ws:// or wss://.")
+            if not _is_loopback_websocket(source_path):
+                raise ValueError("Mylian WebSocket source must use a local loopback address.")
 
         object.__setattr__(self, "task_kind", task_kind)
         object.__setattr__(self, "source_kind", source_kind)
@@ -180,6 +232,7 @@ class SignalTaskConfig:
         object.__setattr__(self, "decoder_name", decoder_name)
         object.__setattr__(self, "source_path", source_path)
         object.__setattr__(self, "model_path", model_path)
+        object.__setattr__(self, "target_labels", target_labels)
 
     @property
     def capability(self) -> SignalTaskCapability:
@@ -200,6 +253,7 @@ class SignalTaskConfig:
             SignalSourceKind.REPLAY: "replay-source",
             SignalSourceKind.LOCAL_BRIDGE: "local-json-bridge",
             SignalSourceKind.MYLIAN_BRIDGE: "mylian-local-bridge",
+            SignalSourceKind.MYLIAN_WEBSOCKET: "mylian-justssvep-websocket",
         }[self.source_kind]
 
     def to_dict(self) -> dict[str, object]:
@@ -218,12 +272,20 @@ class SignalTaskConfig:
             "model_path": self.model_path,
             "refresh_rate_hz": self.refresh_rate_hz,
             "screen_index": self.screen_index,
+            "target_labels": list(self.target_labels),
+            "feedback_seconds": self.feedback_seconds,
+            "max_retries": self.max_retries,
+            "value_scale_uv_per_count": self.value_scale_uv_per_count,
+            "scale_verified": self.scale_verified,
         }
 
     @classmethod
     def from_dict(cls, value: object) -> SignalTaskConfig:
         if not isinstance(value, dict) or value.get("schema_version") != "1.0":
             raise ValueError("Unsupported signal task configuration schema.")
+        scale_verified = value.get("scale_verified", False)
+        if not isinstance(scale_verified, bool):
+            raise TypeError("scale_verified must be a boolean.")
         return cls(
             task_kind=SignalTaskKind(str(value["task_kind"])),
             source_kind=SignalSourceKind(str(value["source_kind"])),
@@ -238,6 +300,11 @@ class SignalTaskConfig:
             model_path=(str(value["model_path"]) if value.get("model_path") else None),
             refresh_rate_hz=float(value.get("refresh_rate_hz", 60.0)),
             screen_index=int(value.get("screen_index", 0)),
+            target_labels=tuple(str(item) for item in value.get("target_labels", [])),
+            feedback_seconds=float(value.get("feedback_seconds", 1.0)),
+            max_retries=int(value.get("max_retries", 1)),
+            value_scale_uv_per_count=float(value.get("value_scale_uv_per_count", 1.0)),
+            scale_verified=scale_verified,
         )
 
     def write(self, path: str | Path) -> Path:
@@ -248,7 +315,7 @@ class SignalTaskConfig:
             encoding="utf-8",
             newline="\n",
             dir=target.parent,
-            prefix=f".{target.name}.",
+            prefix=".tmp-",
             suffix=".tmp",
             delete=False,
         ) as stream:

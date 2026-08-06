@@ -17,25 +17,37 @@ from uuid import uuid4
 import numpy as np
 from numpy.typing import NDArray
 
+from oculidoc.bci.ssvep.adaptation import guarded_trca_adaptation
 from oculidoc.bci.ssvep.calibration import load_trca_model, save_trca_model
 from oculidoc.bci.ssvep.config import SsvepStimulusConfig
-from oculidoc.bci.ssvep.evaluation import DecoderResult, classification_metrics
+from oculidoc.bci.ssvep.evaluation import (
+    DecoderResult,
+    classification_metrics,
+    rejected_result,
+)
 from oculidoc.bci.ssvep.registry import DecoderRegistry
-from oculidoc.bci.ssvep.trca import TrcaModel
-from oculidoc.devices.eeg.adapters.mylian import MylianJsonLineSource
+from oculidoc.devices.eeg.adapters.mylian import (
+    MylianCsvEEGSource,
+    MylianJsonLineSource,
+    MylianWebSocketEEGSource,
+)
 from oculidoc.lan_control import utc_now_text
 from oculidoc.signal_tasks.config import SignalTaskConfig, SignalTaskKind
 from oculidoc.signals.coordinator import SignalCoordinator, SynchronizationMethod
 from oculidoc.signals.models import EEGSampleBlock, SignalMarker, SignalSourceKind
+from oculidoc.signals.quality import SignalQualityAssessment, assess_eeg_quality
 from oculidoc.signals.sources import (
     EEGSource,
     LocalJsonLineEEGSource,
     ReplayEEGSource,
     SimulatedEEGSource,
     save_eeg_block,
+    save_eeg_block_csv,
 )
 
 TrialStarted = Callable[[int, int, str, float | None], None]
+TrialDecoded = Callable[[int, DecoderResult, str | None], None]
+TrialQuality = Callable[[int, SignalQualityAssessment, dict[str, object]], None]
 
 
 class SsvepDecoder(Protocol):
@@ -57,6 +69,7 @@ class _Trial:
     total: int
     cue: str
     frequency_hz: float | None = None
+    simulation_frequency_hz: float | None = None
 
 
 def _atomic_json(path: Path, payload: object) -> Path:
@@ -66,7 +79,7 @@ def _atomic_json(path: Path, payload: object) -> Path:
         encoding="utf-8",
         newline="\n",
         dir=path.parent,
-        prefix=f".{path.name}.",
+        prefix=".tmp-",
         suffix=".tmp",
         delete=False,
     ) as stream:
@@ -96,6 +109,16 @@ def _trial_plan(config: SignalTaskConfig) -> tuple[_Trial, ...]:
         return tuple(
             _Trial(index=index, total=len(cues), cue=cue) for index, cue in enumerate(cues, start=1)
         )
+    if config.task_kind is SignalTaskKind.SSVEP_BINARY_COMMUNICATION:
+        return tuple(
+            _Trial(
+                index=index,
+                total=config.trial_count,
+                cue="自由选择",
+                simulation_frequency_hz=config.frequencies_hz[(index - 1) % 2],
+            )
+            for index in range(1, config.trial_count + 1)
+        )
     if config.capability.paradigm.value == "ssvep":
         frequencies = tuple(
             frequency for _round in range(config.trial_count) for frequency in config.frequencies_hz
@@ -106,6 +129,7 @@ def _trial_plan(config: SignalTaskConfig) -> tuple[_Trial, ...]:
                 total=len(frequencies),
                 cue=f"{frequency:g} Hz",
                 frequency_hz=frequency,
+                simulation_frequency_hz=frequency,
             )
             for index, frequency in enumerate(frequencies, start=1)
         )
@@ -122,14 +146,21 @@ def _wait(duration_seconds: float, cancel_event: Event | None) -> None:
         remaining -= interval
 
 
-def _source_for_trial(config: SignalTaskConfig, trial: _Trial) -> EEGSource:
+def _source_for_trial(
+    config: SignalTaskConfig,
+    trial: _Trial,
+    *,
+    raw_capture_path: Path,
+    cancel_event: Event | None,
+    attempt: int,
+) -> EEGSource:
     if config.source_kind is SignalSourceKind.SIMULATION:
         return SimulatedEEGSource(
             sample_rate_hz=config.sample_rate_hz,
             channel_names=config.channel_names,
-            target_frequency_hz=trial.frequency_hz,
+            target_frequency_hz=trial.simulation_frequency_hz,
             mi_cue=(trial.cue if config.task_kind is SignalTaskKind.MI_PROTOCOL else None),
-            seed=config.seed + trial.index,
+            seed=config.seed + trial.index + attempt * 1_000,
         )
     if config.source_kind is SignalSourceKind.REPLAY:
         assert config.source_path is not None
@@ -139,22 +170,26 @@ def _source_for_trial(config: SignalTaskConfig, trial: _Trial) -> EEGSource:
         return LocalJsonLineEEGSource(config.source_path)
     if config.source_kind is SignalSourceKind.MYLIAN_BRIDGE:
         assert config.source_path is not None
+        if Path(config.source_path).suffix.casefold() == ".csv":
+            return MylianCsvEEGSource(
+                config.source_path,
+                sample_rate_hz=config.sample_rate_hz,
+                channel_names=config.channel_names,
+                value_scale_uv_per_count=config.value_scale_uv_per_count,
+            )
         return MylianJsonLineSource(config.source_path)
+    if config.source_kind is SignalSourceKind.MYLIAN_WEBSOCKET:
+        assert config.source_path is not None
+        return MylianWebSocketEEGSource(
+            config.source_path,
+            sample_rate_hz=config.sample_rate_hz,
+            channel_names=config.channel_names,
+            value_scale_uv_per_count=config.value_scale_uv_per_count,
+            raw_capture_path=raw_capture_path,
+            mark_ssvep=config.capability.paradigm.value == "ssvep",
+            cancel_event=cancel_event,
+        )
     raise ValueError(f"Unsupported signal source: {config.source_kind.value}")
-
-
-def _channel_quality(block: EEGSampleBlock) -> dict[str, dict[str, float]]:
-    metrics: dict[str, dict[str, float]] = {}
-    for index, channel_name in enumerate(block.channel_names):
-        values = block.values_uv[index]
-        finite = values[np.isfinite(values)]
-        metrics[channel_name] = {
-            "valid_sample_ratio": float(len(finite) / len(values)),
-            "standard_deviation_uv": float(np.std(finite)) if len(finite) else 0.0,
-            "peak_to_peak_uv": float(np.ptp(finite)) if len(finite) else 0.0,
-            "device_quality": float(block.quality.get(channel_name, 0.0)),
-        }
-    return metrics
 
 
 def _bandpower(
@@ -260,6 +295,13 @@ def _algorithm_payload(
     return payload
 
 
+def _target_label(config: SignalTaskConfig, result: DecoderResult) -> str | None:
+    if result.rejected or result.target_index is None:
+        return None
+    labels = config.target_labels or tuple(f"{value:g} Hz" for value in config.frequencies_hz)
+    return labels[result.target_index]
+
+
 def run_signal_task(
     config: SignalTaskConfig,
     output_directory: str | Path,
@@ -267,6 +309,8 @@ def run_signal_task(
     patient_id: str | None = None,
     wait_for_trials: bool = False,
     trial_started: TrialStarted | None = None,
+    trial_decoded: TrialDecoded | None = None,
+    trial_quality: TrialQuality | None = None,
     cancel_event: Event | None = None,
 ) -> Path:
     """Run one independent task and return its structured result path.
@@ -276,17 +320,30 @@ def run_signal_task(
     """
 
     output_root = Path(output_directory).expanduser().resolve()
-    run_id = f"signal-{utc_now_text().replace(':', '').replace('-', '')}-{uuid4().hex[:8]}"
+    # Keep this segment deliberately short: Windows sites may still enforce the
+    # legacy MAX_PATH limit for temporary files created beneath patient/session
+    # directories. The timestamp remains in task metadata, not in the path.
+    run_id = f"s-{uuid4().hex[:10]}"
     run_directory = output_root / "tasks" / run_id
     run_directory.mkdir(parents=True, exist_ok=False)
     event_path = run_directory / "task_events.jsonl"
     marker_path = run_directory / "signal_markers.jsonl"
+    marker_path.touch(exist_ok=False)
     trials = _trial_plan(config)
     blocks: list[EEGSampleBlock] = []
+    block_paths: list[Path] = []
+    csv_paths: list[Path] = []
+    raw_capture_paths: list[Path] = []
     decoder_results: list[DecoderResult] = []
     expected_frequencies: list[float] = []
+    labeled_trials: dict[float, list[EEGSampleBlock]] = {
+        frequency: [] for frequency in config.frequencies_hz
+    }
     mi_results: list[dict[str, object]] = []
-    quality_results: list[dict[str, dict[str, float]]] = []
+    final_quality: list[SignalQualityAssessment] = []
+    attempt_results: list[dict[str, object]] = []
+    task_outcomes: list[dict[str, object]] = []
+    source_telemetry: list[dict[str, object]] = []
     decoder: SsvepDecoder | None = None
 
     _append_json_line(
@@ -299,73 +356,190 @@ def run_signal_task(
         },
     )
     for trial in trials:
-        if cancel_event is not None and cancel_event.is_set():
-            raise SignalTaskCancelled("Signal task cancelled by the operator.")
-        if trial_started is not None:
-            trial_started(trial.index, trial.total, trial.cue, trial.frequency_hz)
-        trial_start_ns = monotonic_ns()
-        _append_json_line(
-            event_path,
-            {
-                "event_type": "trial_started",
-                "timestamp_ns": trial_start_ns,
-                "trial_index": trial.index,
-                "cue": trial.cue,
-                "frequency_hz": trial.frequency_hz,
-            },
+        maximum_attempts = (
+            1 + config.max_retries
+            if config.task_kind is SignalTaskKind.SSVEP_BINARY_COMMUNICATION
+            else 1
         )
-        if wait_for_trials:
-            _wait(config.duration_seconds, cancel_event)
-        block = _source_for_trial(config, trial).acquire(config.duration_seconds)
-        if block.channel_names != config.channel_names:
-            raise ValueError("Acquired EEG channels do not match the frozen task configuration.")
-        if not np.isclose(block.sample_rate_hz, config.sample_rate_hz, rtol=0.0, atol=1e-6):
-            raise ValueError(
-                "Acquired EEG sample rate does not match the frozen task configuration."
-            )
-        blocks.append(block)
-        block_path = run_directory / f"eeg_trial_{trial.index:03d}.npz"
-        save_eeg_block(block_path, block)
-        for marker in block.markers:
-            _append_json_line(
-                marker_path,
-                {
-                    **marker.to_dict(),
-                    "trial_index": trial.index,
-                    "source": block.device_id,
-                },
-            )
-        _append_json_line(
-            event_path,
-            {
-                "event_type": "block_acquired",
-                "timestamp_ns": monotonic_ns(),
-                "trial_index": trial.index,
-                "sample_count": block.sample_count,
-                "device_id": block.device_id,
-                "simulated": block.simulated,
-            },
-        )
-
-        if config.capability.paradigm.value == "ssvep":
-            decoder = _ssvep_decoder(config, block, patient_id=patient_id)
-            result = decoder.decode(block.values_uv)
-            decoder_results.append(result)
-            assert trial.frequency_hz is not None
-            expected_frequencies.append(trial.frequency_hz)
+        for attempt in range(1, maximum_attempts + 1):
+            if cancel_event is not None and cancel_event.is_set():
+                raise SignalTaskCancelled("Signal task cancelled by the operator.")
+            if trial_started is not None:
+                trial_started(trial.index, trial.total, trial.cue, trial.frequency_hz)
+            trial_start_ns = monotonic_ns()
             _append_json_line(
                 event_path,
                 {
-                    "event_type": "decoded",
-                    "timestamp_ns": monotonic_ns(),
+                    "event_type": "trial_started",
+                    "timestamp_ns": trial_start_ns,
                     "trial_index": trial.index,
-                    **result.to_dict(),
+                    "attempt": attempt,
+                    "cue": trial.cue,
+                    "frequency_hz": trial.frequency_hz,
                 },
             )
-        elif config.task_kind is SignalTaskKind.MI_PROTOCOL:
-            mi_results.append(_mi_trial_result(block, trial.cue))
-        else:
-            quality_results.append(_channel_quality(block))
+            suffix = (
+                f"_{trial.index:03d}_attempt_{attempt:02d}"
+                if maximum_attempts > 1
+                else f"_{trial.index:03d}"
+            )
+            raw_capture_path = run_directory / f"mylian_raw{suffix}.csv"
+            source = _source_for_trial(
+                config,
+                trial,
+                raw_capture_path=raw_capture_path,
+                cancel_event=cancel_event,
+                attempt=attempt,
+            )
+            if wait_for_trials and config.source_kind is not SignalSourceKind.MYLIAN_WEBSOCKET:
+                _wait(config.duration_seconds, cancel_event)
+            try:
+                block = source.acquire(config.duration_seconds)
+            except InterruptedError as error:
+                raise SignalTaskCancelled(str(error)) from error
+            if block.channel_names != config.channel_names:
+                raise ValueError(
+                    "Acquired EEG channels do not match the frozen task configuration."
+                )
+            if not np.isclose(block.sample_rate_hz, config.sample_rate_hz, rtol=0.0, atol=1e-6):
+                raise ValueError(
+                    "Acquired EEG sample rate does not match the frozen task configuration."
+                )
+            blocks.append(block)
+            if raw_capture_path.is_file():
+                raw_capture_paths.append(raw_capture_path)
+            block_path = run_directory / f"eeg_trial{suffix}.npz"
+            csv_path = run_directory / f"eeg_trial{suffix}.csv"
+            block_paths.append(save_eeg_block(block_path, block))
+            csv_paths.append(
+                save_eeg_block_csv(
+                    csv_path,
+                    block,
+                    tag=(trial.frequency_hz if trial.frequency_hz is not None else trial.cue),
+                )
+            )
+            for marker in block.markers:
+                _append_json_line(
+                    marker_path,
+                    {
+                        **marker.to_dict(),
+                        "trial_index": trial.index,
+                        "attempt": attempt,
+                        "source": block.device_id,
+                    },
+                )
+            quality = assess_eeg_quality(block)
+            telemetry = (
+                dict(source.last_telemetry) if isinstance(source, MylianWebSocketEEGSource) else {}
+            )
+            source_telemetry.append(
+                {
+                    "trial_index": trial.index,
+                    "attempt": attempt,
+                    **telemetry,
+                }
+            )
+            if trial_quality is not None:
+                trial_quality(trial.index, quality, telemetry)
+            _append_json_line(
+                event_path,
+                {
+                    "event_type": "block_acquired",
+                    "timestamp_ns": monotonic_ns(),
+                    "trial_index": trial.index,
+                    "attempt": attempt,
+                    "sample_count": block.sample_count,
+                    "device_id": block.device_id,
+                    "simulated": block.simulated,
+                    "quality_usable": quality.usable,
+                    "quality_reasons": list(quality.reasons),
+                },
+            )
+
+            if config.capability.paradigm.value == "ssvep":
+                decoder = _ssvep_decoder(config, block, patient_id=patient_id)
+                result = (
+                    decoder.decode(block.values_uv)
+                    if quality.usable
+                    else rejected_result(config.frequencies_hz, "signal_quality_failed")
+                )
+                selected_label = _target_label(config, result)
+                attempt_results.append(
+                    {
+                        "trial_index": trial.index,
+                        "attempt": attempt,
+                        "expected_frequency_hz": trial.frequency_hz,
+                        "quality_gate": quality.to_dict(),
+                        "decoder": result.to_dict(),
+                        "selected_label": selected_label,
+                    }
+                )
+                _append_json_line(
+                    event_path,
+                    {
+                        "event_type": "decoded",
+                        "timestamp_ns": monotonic_ns(),
+                        "trial_index": trial.index,
+                        "attempt": attempt,
+                        "selected_label": selected_label,
+                        **result.to_dict(),
+                    },
+                )
+                if trial_decoded is not None:
+                    trial_decoded(trial.index, result, selected_label)
+                if wait_for_trials and config.feedback_seconds:
+                    _wait(config.feedback_seconds, cancel_event)
+                should_retry = (
+                    config.task_kind is SignalTaskKind.SSVEP_BINARY_COMMUNICATION
+                    and result.rejected
+                    and attempt < maximum_attempts
+                )
+                if should_retry:
+                    _append_json_line(
+                        event_path,
+                        {
+                            "event_type": "trial_retry_scheduled",
+                            "timestamp_ns": monotonic_ns(),
+                            "trial_index": trial.index,
+                            "next_attempt": attempt + 1,
+                            "reason": result.reject_reason,
+                        },
+                    )
+                    continue
+                decoder_results.append(result)
+                final_quality.append(quality)
+                if trial.frequency_hz is not None:
+                    expected_frequencies.append(trial.frequency_hz)
+                    if quality.usable:
+                        labeled_trials[trial.frequency_hz].append(block)
+                if config.task_kind is SignalTaskKind.SSVEP_BINARY_COMMUNICATION:
+                    outcome: dict[str, object] = {
+                        "trial_index": trial.index,
+                        "status": "selected" if selected_label is not None else "rejected",
+                        "selected_label": selected_label,
+                        "target_index": result.target_index,
+                        "target_frequency_hz": result.target_frequency_hz,
+                        "confidence": result.confidence,
+                        "margin": result.margin,
+                        "attempts": attempt,
+                        "retry_exhausted": result.rejected,
+                    }
+                    task_outcomes.append(outcome)
+                    _append_json_line(
+                        event_path,
+                        {
+                            "event_type": "task_feedback",
+                            "timestamp_ns": monotonic_ns(),
+                            **outcome,
+                        },
+                    )
+                break
+            final_quality.append(quality)
+            if config.task_kind is SignalTaskKind.MI_PROTOCOL:
+                mi_result = _mi_trial_result(block, trial.cue)
+                mi_result["quality_gate"] = quality.to_dict()
+                mi_results.append(mi_result)
+            break
 
     simulated = any(block.simulated for block in blocks)
     sample_count = sum(block.sample_count for block in blocks)
@@ -381,41 +555,87 @@ def run_signal_task(
     if "lsl" in marker_names:
         available_sync_methods.append(SynchronizationMethod.LSL)
     synchronization = SignalCoordinator.for_available_methods(tuple(available_sync_methods)).method
+    historical_justssvep_csv = (
+        config.source_kind is SignalSourceKind.MYLIAN_BRIDGE
+        and config.source_path is not None
+        and Path(config.source_path).suffix.casefold() == ".csv"
+    )
+    count_scale_source = (
+        config.source_kind is SignalSourceKind.MYLIAN_WEBSOCKET or historical_justssvep_csv
+    )
     calibration_model: dict[str, object] | None = None
     if config.task_kind is SignalTaskKind.SSVEP_FREQUENCY_SCAN:
-        trials_by_frequency = {
-            frequency: np.stack(
-                [
-                    block.values_uv
-                    for block, expected in zip(
-                        blocks,
-                        expected_frequencies,
-                        strict=True,
-                    )
-                    if expected == frequency
-                ],
-                axis=0,
+        counts = tuple(len(labeled_trials[frequency]) for frequency in config.frequencies_hz)
+        prior_model = None
+        prior_model_sha256 = None
+        if config.model_path is not None:
+            prior_model, _prior_metadata = load_trca_model(
+                config.model_path,
+                expected_patient_id=patient_id,
+                allow_simulated=config.simulated,
             )
-            for frequency in config.frequencies_hz
-        }
-        model = TrcaModel.fit(
-            trials_by_frequency,
-            sample_rate_hz=config.sample_rate_hz,
-            channel_names=config.channel_names,
-        )
-        model_path = save_trca_model(
-            run_directory / "ssvep_trca_model.npz",
-            model,
-            patient_id=patient_id or "unassigned",
-            simulated=simulated,
+            prior_model_sha256 = _file_sha256(config.model_path)
+        model = None
+        if len(set(counts)) == 1 and counts[0] > 0:
+            trials_by_frequency = {
+                frequency: np.stack(
+                    [block.values_uv for block in labeled_trials[frequency]],
+                    axis=0,
+                )
+                for frequency in config.frequencies_hz
+            }
+            model, adaptation_decision = guarded_trca_adaptation(
+                trials_by_frequency,
+                sample_rate_hz=config.sample_rate_hz,
+                channel_names=config.channel_names,
+                prior_model=prior_model,
+            )
+            adaptation = adaptation_decision.to_dict()
+        else:
+            adaptation = {
+                "policy_version": "guarded-trca-1.0",
+                "accepted": False,
+                "reason": "unbalanced_quality_passed_trials",
+                "quality_passed_trials_per_frequency": list(counts),
+                "label_policy": "operator_cued_calibration_only",
+                "unlabeled_self_training": False,
+            }
+        model_path: Path | None = None
+        if model is not None:
+            model_path = save_trca_model(
+                run_directory / "ssvep_trca_model.npz",
+                model,
+                patient_id=patient_id or "unassigned",
+                simulated=simulated,
+                adaptation=adaptation,
+            )
+        recommended = (
+            model_path is not None
+            and not simulated
+            and not historical_justssvep_csv
+            and (not count_scale_source or config.scale_verified)
         )
         calibration_model = {
             "algorithm": "trca",
             "algorithm_version": "trca-1.0",
-            "file_name": model_path.name,
-            "sha256": _file_sha256(model_path),
+            "adaptation": adaptation,
+            "status": "accepted" if model_path is not None else "rejected",
+            "file_name": model_path.name if model_path is not None else None,
+            "sha256": _file_sha256(model_path) if model_path is not None else None,
+            "parent_model_sha256": prior_model_sha256,
+            "recommended_for_use": recommended,
             "simulated": simulated,
         }
+    quality_all_usable = bool(final_quality) and all(item.usable for item in final_quality)
+    ineligibility_reasons = []
+    if simulated:
+        ineligibility_reasons.append("simulated_or_simulated_replay")
+    if not quality_all_usable:
+        ineligibility_reasons.append("signal_quality_gate_failed")
+    if historical_justssvep_csv:
+        ineligibility_reasons.append("historical_csv_labels_not_verified")
+    if count_scale_source and not config.scale_verified:
+        ineligibility_reasons.append("microvolt_scale_unverified")
     result_payload: dict[str, object] = {
         "paradigm": config.paradigm.value,
         "source_kind": config.source_kind.value,
@@ -434,24 +654,51 @@ def run_signal_task(
             ],
         },
         "simulated": simulated,
-        "report_eligible": not simulated,
+        "report_eligible": not ineligibility_reasons,
+        "report_ineligibility_reasons": ineligibility_reasons,
         "simulation_notice": (
             "Engineering simulation/replay; excluded from patient clinical reports."
             if simulated
             else None
         ),
         "calibration_model": calibration_model,
+        "input_provenance": {
+            "raw_count_source": count_scale_source,
+            "value_scale_uv_per_count": (
+                config.value_scale_uv_per_count if count_scale_source else None
+            ),
+            "scale_verified": config.scale_verified if count_scale_source else None,
+            "historical_csv_replay": historical_justssvep_csv,
+            "direct_serial_claimed": False,
+        },
+        "quality_gate": {
+            "all_usable": quality_all_usable,
+            "usable_trial_count": sum(item.usable for item in final_quality),
+            "trial_count": len(final_quality),
+            "trials": [item.to_dict() for item in final_quality],
+        },
+        "source_telemetry": source_telemetry,
     }
     if decoder_results:
-        result_payload.update(
-            {
-                "trial_results": [item.to_dict() for item in decoder_results],
-                "evaluation": classification_metrics(
-                    tuple(expected_frequencies), tuple(decoder_results)
-                ),
-                "invalid_or_rejected_count": sum(item.rejected for item in decoder_results),
+        result_payload["trial_results"] = [item.to_dict() for item in decoder_results]
+        result_payload["attempt_results"] = attempt_results
+        result_payload["invalid_or_rejected_count"] = sum(item.rejected for item in decoder_results)
+        if config.task_kind is SignalTaskKind.SSVEP_BINARY_COMMUNICATION:
+            result_payload["task_outcomes"] = task_outcomes
+            result_payload["task_closed_loop"] = {
+                "stimulus": True,
+                "raw_data_recorded": True,
+                "quality_gated": True,
+                "decoded": True,
+                "visible_feedback": True,
+                "rejection_retry": True,
+                "external_robotic_actuation": False,
             }
-        )
+            result_payload["evaluation"] = None
+        else:
+            result_payload["evaluation"] = classification_metrics(
+                tuple(expected_frequencies), tuple(decoder_results)
+            )
     elif mi_results:
         result_payload.update(
             {
@@ -461,7 +708,7 @@ def run_signal_task(
             }
         )
     else:
-        result_payload["channel_quality"] = quality_results[0]
+        result_payload["channel_quality"] = final_quality[0].channel_metrics
 
     payload = {
         "schema_version": "1.0",
@@ -475,19 +722,6 @@ def run_signal_task(
         },
         "result": result_payload,
     }
-    result_path = _atomic_json(run_directory / "task_result.json", payload)
-    _atomic_json(
-        run_directory / "run_manifest.json",
-        {
-            "schema_version": "1.0",
-            "run_id": run_id,
-            "status": "finished",
-            "task_result": result_path.name,
-            "eeg_blocks": [f"eeg_trial_{index:03d}.npz" for index in range(1, len(blocks) + 1)],
-            "markers": marker_path.name,
-            "events": event_path.name,
-        },
-    )
     _append_json_line(
         event_path,
         {
@@ -495,6 +729,29 @@ def run_signal_task(
             "timestamp_ns": monotonic_ns(),
             "trial_count": len(trials),
             "simulated": simulated,
+        },
+    )
+    result_path = _atomic_json(run_directory / "task_result.json", payload)
+    artifact_paths = tuple(
+        path
+        for path in sorted(run_directory.iterdir())
+        if path.is_file() and path.name != "run_manifest.json" and not path.name.startswith(".tmp-")
+    )
+    _atomic_json(
+        run_directory / "run_manifest.json",
+        {
+            "schema_version": "1.0",
+            "run_id": run_id,
+            "status": "finished",
+            "task_result": result_path.name,
+            "eeg_blocks": [path.name for path in block_paths],
+            "eeg_csv": [path.name for path in csv_paths],
+            "raw_source_captures": [path.name for path in raw_capture_paths],
+            "markers": marker_path.name,
+            "events": event_path.name,
+            "artifacts": [
+                {"path": path.name, "sha256": _file_sha256(path)} for path in artifact_paths
+            ],
         },
     )
     return result_path

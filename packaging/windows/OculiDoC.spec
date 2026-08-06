@@ -58,6 +58,9 @@ hiddenimports = sorted(
         + collect_submodules(
             "oculidoc.devices.eeg"
         )
+        + collect_submodules(
+            "websockets"
+        )
         + [
             "oculidoc.package_smoke",
         ]

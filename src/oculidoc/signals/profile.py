@@ -251,7 +251,7 @@ class PatientSignalProfileStore:
             encoding="utf-8",
             newline="\n",
             dir=self.path.parent,
-            prefix=f".{self.path.name}.",
+            prefix=".tmp-",
             suffix=".tmp",
             delete=False,
         ) as stream:

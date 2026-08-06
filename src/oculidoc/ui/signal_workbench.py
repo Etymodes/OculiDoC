@@ -109,10 +109,22 @@ class SignalWorkbenchDialog(QDialog):
         self.config: SignalTaskConfig | None = None
         self.setWindowTitle("神经信号与 BCI 工作台")
         self.setMinimumWidth(650)
+        self.setObjectName("signalWorkbenchDialog")
+        self.setStyleSheet(
+            """
+            QDialog#signalWorkbenchDialog { background: #eef3f8; color: #17324d; }
+            QLineEdit, QComboBox, QDoubleSpinBox, QSpinBox {
+                background: #f8fbfe; border: 1px solid #bfd3e4;
+                border-radius: 7px; padding: 6px; color: #17324d;
+            }
+            QPushButton { border-radius: 7px; padding: 7px 14px; }
+            """
+        )
         root = QVBoxLayout(self)
         boundary = QLabel(
             "v0.1.3 独立边界：眼动、SSVEP、被动 EEG 与运动想象分别运行、分别报告；"
-            "不融合为控制指令。"
+            "二选一沟通任务提供刺激、质量门禁、识别、反馈、重试与原始数据闭环；"
+            "不向外骨骼等外部设备下发动作。"
         )
         boundary.setWordWrap(True)
         boundary.setStyleSheet("color:#17324d;font-weight:700")
@@ -128,6 +140,10 @@ class SignalWorkbenchDialog(QDialog):
         self.source_combo = QComboBox()
         if patient_code.casefold() == BUILTIN_TEST_PATIENT_CODE.casefold():
             self.source_combo.addItem("工程模拟（仅 Beta00）", SignalSourceKind.SIMULATION.value)
+        self.source_combo.addItem(
+            "Tieying/JustSsvep 实时桥（本机 12991）",
+            SignalSourceKind.MYLIAN_WEBSOCKET.value,
+        )
         self.source_combo.addItem("Mylian 本地桥接文件", SignalSourceKind.MYLIAN_BRIDGE.value)
         self.source_combo.addItem("标准本地 JSON 桥", SignalSourceKind.LOCAL_BRIDGE.value)
         self.source_combo.addItem("标准 EEG 回放文件", SignalSourceKind.REPLAY.value)
@@ -139,9 +155,9 @@ class SignalWorkbenchDialog(QDialog):
         source_path_layout = QHBoxLayout(self.source_path_row)
         source_path_layout.setContentsMargins(0, 0, 0, 0)
         source_path_layout.addWidget(self.source_path_edit, 1)
-        source_path_button = QPushButton("浏览")
-        source_path_button.clicked.connect(self._browse_source)
-        source_path_layout.addWidget(source_path_button)
+        self.source_path_button = QPushButton("浏览")
+        self.source_path_button.clicked.connect(self._browse_source)
+        source_path_layout.addWidget(self.source_path_button)
         self.source_path_label = QLabel("来源文件")
         form.addRow(self.source_path_label, self.source_path_row)
 
@@ -155,6 +171,20 @@ class SignalWorkbenchDialog(QDialog):
         self.channels_edit = QLineEdit(", ".join(profile.eeg_channel_names))
         form.addRow("通道（逗号分隔）", self.channels_edit)
 
+        self.scale_spin = QDoubleSpinBox()
+        self.scale_spin.setRange(0.000001, 1_000.0)
+        self.scale_spin.setDecimals(6)
+        self.scale_spin.setValue(1.0)
+        self.scale_spin.setSuffix(" µV/计数")
+        self.scale_verified_check = QCheckBox("厂商/设备协议已确认此换算")
+        self.scale_row = QWidget()
+        scale_layout = QHBoxLayout(self.scale_row)
+        scale_layout.setContentsMargins(0, 0, 0, 0)
+        scale_layout.addWidget(self.scale_spin)
+        scale_layout.addWidget(self.scale_verified_check, 1)
+        self.scale_label = QLabel("原始计数换算")
+        form.addRow(self.scale_label, self.scale_row)
+
         self.duration_spin = QDoubleSpinBox()
         self.duration_spin.setRange(0.5, 20.0)
         self.duration_spin.setDecimals(1)
@@ -162,19 +192,26 @@ class SignalWorkbenchDialog(QDialog):
         self.duration_spin.setSuffix(" 秒/试次")
         form.addRow("采集窗", self.duration_spin)
 
-        self.frequency_edit = QLineEdit("8, 10, 12, 15")
+        self.frequency_edit = QLineEdit("6, 7.5, 8.57, 10")
         self.frequency_label = QLabel("SSVEP 频率")
         form.addRow(self.frequency_label, self.frequency_edit)
+
+        self.target_labels_edit = QLineEdit("是, 否")
+        self.target_labels_label = QLabel("选择标签")
+        form.addRow(self.target_labels_label, self.target_labels_edit)
 
         self.decoder_combo = QComboBox()
         for name in DecoderRegistry.names():
             self.decoder_combo.addItem(name.upper(), name)
-        self.decoder_combo.setCurrentIndex(1)
+        preferred_decoder = "trca" if profile.calibration_models else "fbcca"
+        self.decoder_combo.setCurrentIndex(self.decoder_combo.findData(preferred_decoder))
         self.decoder_label = QLabel("解码器")
         form.addRow(self.decoder_label, self.decoder_combo)
 
         self.model_path_edit = QLineEdit()
         self.model_path_edit.setPlaceholderText("TRCA/eTRCA 患者校准模型")
+        if profile.calibration_models:
+            self.model_path_edit.setText(profile.calibration_models[-1])
         self.model_row = QWidget()
         model_layout = QHBoxLayout(self.model_row)
         model_layout.setContentsMargins(0, 0, 0, 0)
@@ -187,7 +224,7 @@ class SignalWorkbenchDialog(QDialog):
 
         self.trial_count_spin = QSpinBox()
         self.trial_count_spin.setRange(1, 20)
-        self.trial_count_spin.setValue(2)
+        self.trial_count_spin.setValue(4)
         form.addRow("轮数", self.trial_count_spin)
 
         self.refresh_rate_spin = QDoubleSpinBox()
@@ -230,8 +267,17 @@ class SignalWorkbenchDialog(QDialog):
         task_kind = self._task_kind()
         capability = next(item for item in SIGNAL_TASK_CAPABILITIES if item.task_kind is task_kind)
         is_ssvep = capability.paradigm is SignalParadigm.SSVEP
-        requires_model = is_ssvep and str(self.decoder_combo.currentData()) in {"trca", "etrca"}
+        requires_model = is_ssvep and (
+            str(self.decoder_combo.currentData()) in {"trca", "etrca"}
+            or task_kind is SignalTaskKind.SSVEP_FREQUENCY_SCAN
+        )
         has_source_path = self._source_kind() is not SignalSourceKind.SIMULATION
+        is_websocket = self._source_kind() is SignalSourceKind.MYLIAN_WEBSOCKET
+        is_mylian = self._source_kind() in {
+            SignalSourceKind.MYLIAN_WEBSOCKET,
+            SignalSourceKind.MYLIAN_BRIDGE,
+        }
+        is_communication = task_kind is SignalTaskKind.SSVEP_BINARY_COMMUNICATION
         for ssvep_widget in (
             self.frequency_label,
             self.frequency_edit,
@@ -241,19 +287,41 @@ class SignalWorkbenchDialog(QDialog):
             ssvep_widget.setVisible(is_ssvep)
         for model_widget in (self.model_label, self.model_row):
             model_widget.setVisible(requires_model)
+        self.model_label.setText(
+            "既有模型（适配基线，可选）"
+            if task_kind is SignalTaskKind.SSVEP_FREQUENCY_SCAN
+            and str(self.decoder_combo.currentData()) not in {"trca", "etrca"}
+            else "患者校准模型"
+        )
+        for label_widget in (self.target_labels_label, self.target_labels_edit):
+            label_widget.setVisible(is_communication)
+        for scale_widget in (self.scale_label, self.scale_row):
+            scale_widget.setVisible(is_mylian)
         self.source_path_label.setVisible(has_source_path)
         self.source_path_row.setVisible(has_source_path)
+        self.source_path_button.setVisible(has_source_path and not is_websocket)
+        self.source_path_label.setText("实时桥地址" if is_websocket else "来源文件")
+        if is_websocket and not self.source_path_edit.text().strip():
+            self.source_path_edit.setText("ws://127.0.0.1:12991")
         defaults = {
             SignalTaskKind.SSVEP_SINGLE_TARGET: "10",
-            SignalTaskKind.SSVEP_BINARY_CHOICE: "10, 12",
-            SignalTaskKind.SSVEP_FOUR_TARGET: "8, 10, 12, 15",
+            SignalTaskKind.SSVEP_BINARY_CHOICE: "6, 10",
+            SignalTaskKind.SSVEP_BINARY_COMMUNICATION: "6, 10",
+            SignalTaskKind.SSVEP_FOUR_TARGET: "6, 7.5, 8.57, 10",
+            SignalTaskKind.SSVEP_FREQUENCY_SCAN: "6, 7.5, 8.57, 10",
+            SignalTaskKind.SSVEP_VALIDATION: "6, 7.5, 8.57, 10",
         }
         if task_kind in defaults:
             self.frequency_edit.setText(defaults[task_kind])
         self.notice_label.setText(
             "工程模拟会被永久标记，只生成工程报告，不进入患者临床报告。"
             if self._source_kind() is SignalSourceKind.SIMULATION
-            else "设备或回放不可用时任务会明确失败，不会自动切换到模拟数据。"
+            else (
+                "实时桥仅连接已观测的本机 WebSocket，不直接占用 COM4；连接或数据异常会明确失败，"
+                "不会自动切换到模拟。未确认 µV 换算时可做工程识别，但不会获得报告/模型晋级资格。"
+                if is_websocket
+                else "设备或回放不可用时任务会明确失败，不会自动切换到模拟数据。"
+            )
         )
 
     def _browse_source(self) -> None:
@@ -261,7 +329,7 @@ class SignalWorkbenchDialog(QDialog):
             self,
             "选择信号来源文件",
             str(Path.home()),
-            "Signal files (*.npz *.jsonl *.json);;All files (*)",
+            "Signal files (*.npz *.jsonl *.json *.csv);;All files (*)",
         )
         if path:
             self.source_path_edit.setText(path)
@@ -294,6 +362,15 @@ class SignalWorkbenchDialog(QDialog):
             channels = tuple(
                 value.strip() for value in self.channels_edit.text().split(",") if value.strip()
             )
+            target_labels = (
+                tuple(
+                    value.strip()
+                    for value in self.target_labels_edit.text().split(",")
+                    if value.strip()
+                )
+                if task_kind is SignalTaskKind.SSVEP_BINARY_COMMUNICATION
+                else ()
+            )
             self.config = SignalTaskConfig(
                 task_kind=task_kind,
                 source_kind=self._source_kind(),
@@ -306,6 +383,9 @@ class SignalWorkbenchDialog(QDialog):
                 source_path=(self.source_path_edit.text().strip() or None),
                 model_path=(self.model_path_edit.text().strip() or None),
                 refresh_rate_hz=self.refresh_rate_spin.value(),
+                target_labels=target_labels,
+                value_scale_uv_per_count=self.scale_spin.value(),
+                scale_verified=self.scale_verified_check.isChecked(),
             )
         except (TypeError, ValueError) as error:
             QMessageBox.warning(self, "信号任务设置无效", str(error))

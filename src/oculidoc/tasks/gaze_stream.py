@@ -28,6 +28,7 @@ from oculidoc.devices.preflight import (
     observed_sample_capabilities,
     run_gaze_preflight,
 )
+from oculidoc.devices.seveninvensun_bridge import SeveninvensunBridgeDevice
 from oculidoc.devices.simulated import (
     SimulatedEyeTrackerDevice,
 )
@@ -88,6 +89,12 @@ def create_eye_tracker(
 
     if settings.gaze_source == "just_need_to_see_bundle":
         return JustNeedToSeeBundleDevice(bundle_root=settings.just_need_to_see_root)
+
+    if settings.gaze_source == "seveninvensun_bridge":
+        return SeveninvensunBridgeDevice(
+            host=settings.tobii_bridge_host,
+            port=settings.tobii_bridge_port,
+        )
 
     if settings.gaze_source == "tobii_hospital_bridge":
         return TobiiHospitalBridgeDevice(
