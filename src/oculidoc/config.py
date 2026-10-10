@@ -14,15 +14,22 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from oculidoc.app_paths import application_root
+
 GazeSource = Literal[
     "auto",
+    "auto_webcam",
+    "webcam",
     "gaze_collect_legacy",
     "just_need_to_see_bundle",
     "mock",
+    "seveninvensun_bridge",
+    "thinks_tracker",
     "tobii_hospital_bridge",
     "tobii_stream_engine",
     "tobii_legacy_bridge",
 ]
+WebcamCalibrationProfile = Literal["strict", "balanced", "tolerant"]
 
 
 class Settings(BaseSettings):
@@ -48,7 +55,12 @@ class Settings(BaseSettings):
     admin_host: str = "127.0.0.1"
     admin_port: int = Field(default=8000, ge=1, le=65535)
 
-    gaze_source: GazeSource = "mock"
+    gaze_source: GazeSource = "auto_webcam"
+    webcam_config_path: Path | None = None
+    thinks_config_path: Path | None = None
+    webcam_calibration_profile: WebcamCalibrationProfile = "balanced"
+    patient_id: str = ""
+    patient_screen_name: str = ""
     tobii_stream_engine_dll: Path | None = None
     gaze_preflight_seconds: int = Field(default=3, ge=3, le=10)
     gaze_minimum_valid_ratio: float = Field(default=0.35, ge=0.0, le=1.0)
@@ -81,6 +93,17 @@ class Settings(BaseSettings):
     just_need_to_see_root: Path = Path(r"D:\JustNeedToSee")
 
     @property
+    def thinks_tracker_config_path(self) -> Path:
+        return self.thinks_config_path or application_root() / "data/runtime/thinks_tracker.json"
+
+    @property
+    def webcam_providers_path(self) -> Path:
+        return (
+            self.webcam_config_path
+            or application_root() / "data" / "runtime" / "webcam_providers.json"
+        )
+
+    @property
     def database_path(self) -> Path:
         """Return the resolved SQLite database path."""
         return (self.data_dir.expanduser() / "oculidoc.sqlite3").resolve()
@@ -100,6 +123,9 @@ class GazeDeviceConfig(BaseModel):
     """The small device configuration edited inside OculiDoC."""
 
     gaze_source: GazeSource
+    webcam_config_path: Path | None = None
+    thinks_config_path: Path | None = None
+    webcam_calibration_profile: WebcamCalibrationProfile = "balanced"
     tobii_stream_engine_dll: Path | None = None
     tobii_bridge_host: str = "127.0.0.1"
     tobii_bridge_port: int = Field(default=9999, ge=1, le=65535)
@@ -115,6 +141,9 @@ class GazeDeviceConfig(BaseModel):
     def from_settings(cls, settings: Settings) -> GazeDeviceConfig:
         return cls(
             gaze_source=settings.gaze_source,
+            webcam_config_path=settings.webcam_config_path,
+            thinks_config_path=settings.thinks_config_path,
+            webcam_calibration_profile=settings.webcam_calibration_profile,
             tobii_stream_engine_dll=settings.tobii_stream_engine_dll,
             tobii_bridge_host=settings.tobii_bridge_host,
             tobii_bridge_port=settings.tobii_bridge_port,
@@ -130,6 +159,9 @@ class GazeDeviceConfig(BaseModel):
         return settings.model_copy(
             update={
                 "gaze_source": self.gaze_source,
+                "webcam_config_path": self.webcam_config_path,
+                "thinks_config_path": self.thinks_config_path,
+                "webcam_calibration_profile": self.webcam_calibration_profile,
                 "tobii_stream_engine_dll": self.tobii_stream_engine_dll,
                 "tobii_bridge_host": self.tobii_bridge_host,
                 "tobii_bridge_port": self.tobii_bridge_port,
@@ -144,6 +176,9 @@ class GazeDeviceConfig(BaseModel):
     def to_dict(self) -> dict[str, object]:
         return {
             "gaze_source": self.gaze_source,
+            "webcam_config_path": str(self.webcam_config_path) if self.webcam_config_path else None,
+            "thinks_config_path": str(self.thinks_config_path) if self.thinks_config_path else None,
+            "webcam_calibration_profile": self.webcam_calibration_profile,
             "tobii_stream_engine_dll": (
                 str(self.tobii_stream_engine_dll)
                 if self.tobii_stream_engine_dll is not None

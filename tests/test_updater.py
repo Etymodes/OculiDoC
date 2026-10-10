@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import subprocess
+from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
 
 import pytest
 
+import oculidoc
 import oculidoc.updater as updater
 from oculidoc.updater import (
     UpdateError,
@@ -38,6 +40,56 @@ def test_find_repository_root_walks_from_source_file(tmp_path: Path) -> None:
 def test_release_versions_compare_numerically() -> None:
     assert _version_tuple("v0.10.0") > _version_tuple("0.9.9")
     assert _version_tuple("v1.2.3") == (1, 2, 3)
+
+
+def test_installed_version_works_without_distribution_metadata() -> None:
+    assert updater.installed_version() == oculidoc.__version__
+
+
+@pytest.mark.parametrize("valid_hash", [True, False])
+def test_release_installer_starts_only_after_hash_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, valid_hash: bool
+) -> None:
+    payload = b"synthetic installer bytes"
+    expected_hash = sha256(payload).hexdigest() if valid_hash else "0" * 64
+    release = {
+        "tag_name": "v99.0.0",
+        "assets": [
+            {"name": name, "browser_download_url": f"https://example.test/{name}"}
+            for name in (updater.SETUP_ASSET_NAME, updater.SETUP_HASH_ASSET_NAME)
+        ],
+    }
+    launches: list[tuple[list[str], dict[str, object]]] = []
+    monkeypatch.setattr(updater, "_latest_release", lambda: release)
+    monkeypatch.setattr(updater.tempfile, "mkdtemp", lambda **_kwargs: str(tmp_path))
+
+    def fake_download(_url: str, destination: Path) -> None:
+        if destination.name == updater.SETUP_HASH_ASSET_NAME:
+            destination.write_text(expected_hash, encoding="utf-8")
+        else:
+            destination.write_bytes(payload)
+
+    def fake_launch(arguments: list[str], **kwargs: object) -> object:
+        launches.append((arguments, kwargs))
+        return object()
+
+    monkeypatch.setattr(updater, "_download", fake_download)
+    monkeypatch.setattr(updater.subprocess, "Popen", fake_launch)
+
+    if valid_hash:
+        result = updater.install_latest_release(current_version="0.1.3")
+        assert result["status"] == "installer_started"
+        assert launches == [
+            (
+                [str(tmp_path / updater.SETUP_ASSET_NAME), "/OFFLINE"],
+                {"close_fds": True, "creationflags": 0x00000008 if updater.os.name == "nt" else 0},
+            )
+        ]
+    else:
+        with pytest.raises(UpdateError, match="SHA-256 校验失败"):
+            updater.install_latest_release(current_version="0.1.3")
+        assert launches == []
+        assert not (tmp_path / updater.SETUP_ASSET_NAME).exists()
 
 
 def test_release_asset_requires_https() -> None:

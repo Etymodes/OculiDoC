@@ -376,5 +376,13 @@ def test_task_cli_enables_screen_mapping_before_gaze_delivery() -> None:
             if isinstance(node.func, ast.Attribute) and node.func.attr == attribute
         )
 
+    def line_for_named_call(name: str) -> int:
+        return next(
+            node.lineno
+            for node in calls
+            if isinstance(node.func, ast.Name) and node.func.id == name
+        )
+
+    assert line_for_named_call("_place_window_on_patient_screen") < line_for_call("showFullScreen")
     assert line_for_call("showFullScreen") < line_for_call("start")
     assert line_for_call("start") < line_for_call("singleShot")

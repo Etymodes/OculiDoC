@@ -618,6 +618,10 @@ def build_patient_trend_document(
     points: list[dict[str, object]] = []
 
     for entry in entries:
+        # Neural-signal paradigms own a separate report chain in v0.1.3 and
+        # must not be interpreted as gaze longitudinal points.
+        if entry.module_id == "neural_interaction":
+            continue
         task_results = (
             entry.task_results
             if entry.task_results

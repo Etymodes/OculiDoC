@@ -10,9 +10,10 @@ import shutil
 import subprocess
 import tempfile
 import urllib.request
-from importlib.metadata import version
 from pathlib import Path
 from urllib.parse import urlparse
+
+from oculidoc import __version__
 
 PUBLIC_REPOSITORY_URL = "https://github.com/Etymodes/OculiDoC.git"
 PUBLIC_REPOSITORY_SSH_443_URL = "ssh://git@ssh.github.com:443/Etymodes/OculiDoC.git"
@@ -27,7 +28,7 @@ class UpdateError(RuntimeError):
 
 
 def installed_version() -> str:
-    return version("oculidoc")
+    return __version__
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:

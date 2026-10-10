@@ -46,6 +46,11 @@ from oculidoc.application.gaze_task_session import (
     create_gaze_task_launch,
     finalize_gaze_task_launch,
 )
+from oculidoc.application.signal_task_session import (
+    SignalTaskLaunch,
+    create_signal_task_launch,
+    finalize_signal_task_launch,
+)
 from oculidoc.branding import brand_mark_pixmap
 from oculidoc.config import (
     AdminUiMode,
@@ -78,11 +83,18 @@ from oculidoc.lan_control import (
     generate_pairing_token,
     preferred_private_ipv4,
 )
-from oculidoc.modules.registry import DEFAULT_MODULES, ModuleDefinition
+from oculidoc.modules.registry import ALL_MODULES, DEFAULT_MODULES, ModuleDefinition
 from oculidoc.process_launch import (
+    PATIENT_SCREEN_NAME_ENV,
     gaze_task_process_command,
     is_frozen_application,
     local_api_process_command,
+    signal_task_process_command,
+)
+from oculidoc.signals.models import SignalParadigm
+from oculidoc.signals.profile import (
+    PatientSignalProfileStore,
+    SignalProfileConflict,
 )
 from oculidoc.speech_replay import SpeechReplayStore
 from oculidoc.task_configs import TaskConfigStore
@@ -97,6 +109,10 @@ from oculidoc.ui.patient_management import (
 )
 from oculidoc.ui.patient_window import PatientDisplayWindow
 from oculidoc.ui.session_history import PatientSessionHistoryDialog
+from oculidoc.ui.signal_workbench import (
+    SignalParadigmSelector,
+    SignalWorkbenchDialog,
+)
 from oculidoc.ui.test_plan import (
     CLINICAL_TASK_ORDER,
     TestPlan,
@@ -112,6 +128,49 @@ from oculidoc.vision.camera_preview_window import (
 )
 
 RESULT_DISPLAY_MILLISECONDS = 6_000
+
+
+def _updater_command(
+    executable: Path, *, frozen: bool, repository_root: Path | None
+) -> tuple[str, list[str]]:
+    if frozen:
+        return str(executable), ["--install-latest-release"]
+    if repository_root is None:
+        raise ValueError("未找到 OculiDoC 源码仓库。")
+    return str(executable), ["-m", "oculidoc.updater", "--repo", str(repository_root)]
+
+
+def _default_patient_screen_name(application: QApplication) -> str | None:
+    """Choose one stable patient-display target for this application run."""
+    primary_screen = application.primaryScreen()
+    if primary_screen is None:
+        return None
+
+    target_screen = next(
+        (screen for screen in application.screens() if screen != primary_screen),
+        primary_screen,
+    )
+    name = target_screen.name().strip()
+    return name or None
+
+
+def _place_window_on_named_screen(
+    window: QWidget,
+    application: QApplication,
+    screen_name: str | None,
+) -> bool:
+    """Place a top-level window on an existing screen without fallback."""
+    target_name = screen_name.strip() if screen_name else ""
+    target_screen = next(
+        (screen for screen in application.screens() if screen.name() == target_name),
+        None,
+    )
+    if target_screen is None:
+        return False
+
+    window.setScreen(target_screen)
+    window.move(target_screen.geometry().topLeft())
+    return True
 
 
 class AdminMainWindow(QMainWindow):
@@ -144,6 +203,10 @@ class AdminMainWindow(QMainWindow):
             GazeTaskLaunch,
         ] = {}
         self._active_gaze_module_ids: set[str] = set()
+        self._signal_processes: dict[UUID, QProcess] = {}
+        self._signal_launches: dict[UUID, SignalTaskLaunch] = {}
+        self._active_signal_module_ids: set[str] = set()
+        self._manually_stopped_signal_sessions: set[UUID] = set()
         self._backend_process: QProcess | None = None
         self._update_process: QProcess | None = None
         self._pairing_dialog: LanPairingDialog | None = None
@@ -170,6 +233,9 @@ class AdminMainWindow(QMainWindow):
             self.settings.data_dir.expanduser() / "runtime" / "task_configs.json"
         )
         self._task_config_store.set_active_patient(None)
+        self._signal_profile_store = PatientSignalProfileStore(
+            self.settings.data_dir.expanduser() / "runtime" / "patient_signal_profiles.json"
+        )
         self._gaze_device_config_store = GazeDeviceConfigStore.for_settings(self.settings)
         self._gaze_preflight_store = GazePreflightStore(
             self.settings.data_dir.expanduser() / "runtime" / "gaze_preflight.json"
@@ -187,12 +253,19 @@ class AdminMainWindow(QMainWindow):
         self._lan_command_timer.timeout.connect(self._poll_lan_commands)
         self._patient_window = PatientDisplayWindow()
         self._patient_window.exit_requested.connect(self._handle_patient_display_exit)
+        application = QApplication.instance()
+        self._patient_screen_name = (
+            _default_patient_screen_name(application)
+            if isinstance(application, QApplication)
+            else None
+        )
         initial_display_state = self._lan_state_store.reset_idle()
         self._last_lan_revision = initial_display_state.revision
         self._patient_window.apply_state(initial_display_state)
 
         self.setWindowTitle("OculiDoC 管理员端")
-        self.resize(1280, 820)
+        available_height = self.screen().availableGeometry().height()
+        self.resize(1280, min(960, max(700, available_height - 48)))
         self.setMinimumSize(1080, 700)
         self.setStyleSheet(
             """
@@ -203,7 +276,8 @@ class AdminMainWindow(QMainWindow):
             QLabel#sectionTitle { color: #17324d; font-size: 21px; font-weight: 700; }
             QLabel#moduleTitle { color: #18344c; font-size: 19px; font-weight: 700; }
             QLabel#moduleDescription { color: #577083; font-size: 14px; }
-            QFrame#panel, QFrame#moduleCard, QFrame#workbenchTaskStrip {
+            QFrame#panel, QFrame#moduleCard, QFrame#workbenchSignalStrip,
+            QFrame#workbenchTaskStrip {
                 background: white;
                 border: 1px solid #d9e3ec;
                 border-radius: 14px;
@@ -359,8 +433,12 @@ class AdminMainWindow(QMainWindow):
 
         labels = {
             "auto": "硬件自动检测",
+            "auto_webcam": "自动：眼动仪 → 摄像头",
+            "webcam": "ACIES 摄像头识别（研究估计）",
             "gaze_collect_legacy": "第三方兼容",
             "just_need_to_see_bundle": "Tobii DLL兼容",
+            "seveninvensun_bridge": "七鑫易维 aSee 本机 SDK 桥",
+            "thinks_tracker": "ThinksTracker 眼动仪",
             "tobii_hospital_bridge": "原监听兼容",
             "tobii_stream_engine": "Tobii 原生 Stream",
             "tobii_legacy_bridge": "第三方兼容",
@@ -370,8 +448,8 @@ class AdminMainWindow(QMainWindow):
         if preflight is None:
             return f"眼动源：{source_name} · 尚未预检"
 
-        if self.settings.gaze_source == "auto":
-            source_name = f"硬件自动检测 → {preflight.device_name}"
+        if self.settings.gaze_source in {"auto", "auto_webcam", "webcam"}:
+            source_name = f"{source_name} → {preflight.device_name}"
 
         connection = "已连接" if self._active_gaze_module_ids else "最近预检"
         suffix = (
@@ -550,14 +628,13 @@ class AdminMainWindow(QMainWindow):
         if confirmation != QMessageBox.StandardButton.Yes:
             return
 
+        program, arguments = _updater_command(
+            Path(sys.executable), frozen=frozen, repository_root=repository_root
+        )
         process = QProcess(self)
         process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        process.setProgram(sys.executable)
-        process.setArguments(
-            ["--install-latest-release"]
-            if frozen
-            else ["-m", "oculidoc.updater", "--repo", str(repository_root)]
-        )
+        process.setProgram(program)
+        process.setArguments(arguments)
         process.finished.connect(self._finish_update_check)
         self._update_process = process
         self.update_button.setEnabled(False)
@@ -651,6 +728,12 @@ class AdminMainWindow(QMainWindow):
         text.addWidget(title)
         text.addWidget(self.patient_label)
 
+        self.signal_paradigm_selector = SignalParadigmSelector()
+        self.signal_paradigm_selector.setObjectName("signalParadigmSelector")
+        self.signal_paradigm_selector.set_patient_available(False)
+        self.signal_paradigm_selector.selection_changed.connect(self._persist_signal_paradigms)
+        text.addWidget(self.signal_paradigm_selector)
+
         manage_button = QPushButton("患者管理")
         manage_button.setObjectName("secondaryButton")
         manage_button.clicked.connect(self._show_patient_placeholder)
@@ -658,6 +741,11 @@ class AdminMainWindow(QMainWindow):
         self.history_button = QPushButton("实验记录")
         self.history_button.setObjectName("patientSessionHistoryButton")
         self.history_button.clicked.connect(self._open_session_history)
+
+        self.signal_workbench_button = QPushButton("神经信号独立任务")
+        self.signal_workbench_button.setObjectName("openSignalWorkbenchButton")
+        self.signal_workbench_button.clicked.connect(self._open_signal_workbench)
+        self.signal_workbench_button.setEnabled(False)
 
         display_button = QPushButton("打开患者显示端")
         display_button.setObjectName("primaryButton")
@@ -670,6 +758,7 @@ class AdminMainWindow(QMainWindow):
         layout.addLayout(text, 1)
         layout.addWidget(manage_button)
         layout.addWidget(self.history_button)
+        layout.addWidget(self.signal_workbench_button)
         layout.addWidget(project_text_button)
         layout.addWidget(display_button)
         return panel
@@ -731,6 +820,7 @@ class AdminMainWindow(QMainWindow):
         self.recent_result_label.setWordWrap(True)
         self.recent_result_label.setStyleSheet("color:#5a7184;")
         current_layout.addWidget(self.recent_result_label)
+
         current_layout.addStretch(1)
 
         self.plan_button = QPushButton("编排本次测试")
@@ -787,6 +877,25 @@ class AdminMainWindow(QMainWindow):
         panels.addWidget(current_panel, 2)
         panels.addWidget(tools_panel, 1)
         root.addLayout(panels, 1)
+
+        signal_strip = QFrame()
+        signal_strip.setObjectName("workbenchSignalStrip")
+        signal_strip_layout = QHBoxLayout(signal_strip)
+        signal_strip_layout.setContentsMargins(12, 9, 12, 9)
+        signal_strip_layout.setSpacing(12)
+
+        self.signal_paradigm_selector = SignalParadigmSelector()
+        self.signal_paradigm_selector.setObjectName("signalParadigmSelector")
+        self.signal_paradigm_selector.set_patient_available(False)
+        self.signal_paradigm_selector.selection_changed.connect(self._persist_signal_paradigms)
+        signal_strip_layout.addWidget(self.signal_paradigm_selector, 1)
+
+        self.signal_workbench_button = QPushButton("配置神经信号独立任务")
+        self.signal_workbench_button.setObjectName("openSignalWorkbenchButton")
+        self.signal_workbench_button.clicked.connect(self._open_signal_workbench)
+        self.signal_workbench_button.setEnabled(False)
+        signal_strip_layout.addWidget(self.signal_workbench_button)
+        root.addWidget(signal_strip)
 
         task_strip = QFrame()
         task_strip.setObjectName("workbenchTaskStrip")
@@ -853,7 +962,7 @@ class AdminMainWindow(QMainWindow):
         session_id: UUID,
     ) -> bool:
         """Return whether this window still owns a live task process."""
-        return session_id in self._gaze_launches
+        return session_id in self._gaze_launches or session_id in self._signal_launches
 
     def _build_module_area(self) -> QScrollArea:
         scroll = QScrollArea()
@@ -961,7 +1070,14 @@ class AdminMainWindow(QMainWindow):
             return
 
         dialog = DeviceSettingsDialog(
-            self.settings,
+            self.settings.model_copy(
+                update={
+                    "patient_id": str(self.current_patient.patient_id)
+                    if self.current_patient
+                    else "",
+                    "patient_screen_name": self._patient_screen_name or "",
+                }
+            ),
             self._gaze_device_config_store,
             self._current_gaze_preflight(),
             self,
@@ -1186,6 +1302,7 @@ class AdminMainWindow(QMainWindow):
             state.mode is not PatientDisplayMode.CLOSED
             and self.settings.environment != "test"
             and not self._patient_window.isVisible()
+            and self._place_patient_display()
         ):
             self._patient_window.showFullScreen()
 
@@ -1273,7 +1390,8 @@ class AdminMainWindow(QMainWindow):
 
     def _execute_lan_command(self, command: LanCommand) -> str:
         if command.command_type is LanCommandType.OPEN_PATIENT_DISPLAY:
-            self._open_patient_display()
+            if not self._open_patient_display():
+                raise LanCommandRejected("启动时选定的患者显示屏已断开，请恢复显示连接并重启。")
             return "患者显示端已打开。"
 
         if command.command_type is LanCommandType.START_TASK:
@@ -1400,7 +1518,15 @@ class AdminMainWindow(QMainWindow):
         request = self._speech_replay_store.request(active_module)
         return f"已请求重播当前任务语音（版本 {request.revision}）。"
 
-    def _open_patient_display(self, checked: bool = False) -> None:
+    def _place_patient_display(self) -> bool:
+        application = QApplication.instance()
+        return isinstance(application, QApplication) and _place_window_on_named_screen(
+            self._patient_window,
+            application,
+            self._patient_screen_name,
+        )
+
+    def _open_patient_display(self, checked: bool = False) -> bool:
         del checked
         state = self._lan_state_store.load()
 
@@ -1409,20 +1535,26 @@ class AdminMainWindow(QMainWindow):
 
         self._last_lan_revision = state.revision
         self._patient_window.apply_state(state)
+        if not self._place_patient_display():
+            return False
         self._patient_window.showFullScreen()
         self._patient_window.raise_()
         self._patient_window.activateWindow()
+        return True
 
-    def _show_patient_display_behind_admin(self) -> None:
+    def _show_patient_display_behind_admin(self) -> bool:
         """Prepare the patient screen without covering the administrator."""
         state = self._lan_state_store.load()
         if state.mode is PatientDisplayMode.CLOSED:
             state = self._lan_state_store.reset_idle()
         self._last_lan_revision = state.revision
         self._patient_window.apply_state(state)
+        if not self._place_patient_display():
+            return False
         self._patient_window.showFullScreen()
         self._patient_window.lower()
         self._restore_admin_window()
+        return True
 
     def _handle_patient_display_exit(self) -> None:
         state = self._lan_state_store.load()
@@ -1439,6 +1571,45 @@ class AdminMainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def _refresh_signal_profile_ui(self) -> None:
+        """Load patient-scoped paradigm defaults without starting a task."""
+        if not hasattr(self, "signal_paradigm_selector"):
+            return
+        if self.current_patient is None:
+            self.signal_paradigm_selector.set_selected((SignalParadigm.GAZE,))
+            self.signal_paradigm_selector.set_patient_available(False)
+            self.signal_workbench_button.setEnabled(False)
+            return
+        try:
+            profile = self._signal_profile_store.load(str(self.current_patient.patient_id))
+        except ValueError as error:
+            self.signal_paradigm_selector.set_patient_available(False)
+            self.signal_workbench_button.setEnabled(False)
+            QMessageBox.warning(self, "患者信号档案无效", str(error))
+            return
+        self.signal_paradigm_selector.set_selected(profile.default_paradigms)
+        self.signal_paradigm_selector.set_patient_available(not self._task_in_progress())
+        self.signal_workbench_button.setEnabled(not self._task_in_progress())
+
+    def _persist_signal_paradigms(self, paradigms: object) -> None:
+        """Persist homepage multi-select as a revisioned patient profile."""
+        if self.current_patient is None or not isinstance(paradigms, tuple):
+            return
+        try:
+            profile = self._signal_profile_store.load(str(self.current_patient.patient_id))
+            updated = profile.with_session_defaults(paradigms=paradigms)
+            self._signal_profile_store.save(updated, expected_revision=profile.revision)
+        except SignalProfileConflict as error:
+            self.signal_paradigm_selector.set_selected(error.current.default_paradigms)
+            QMessageBox.information(
+                self,
+                "输入范式已在其他窗口更新",
+                "已载入最新患者信号档案，请重新选择。",
+            )
+        except (TypeError, ValueError) as error:
+            QMessageBox.warning(self, "无法保存输入范式", str(error))
+            self._refresh_signal_profile_ui()
+
     def _refresh_patient_summary(self) -> None:
         """Refresh patient labels after database changes."""
         self.patient_label.setText(self._patient_panel_text())
@@ -1449,6 +1620,7 @@ class AdminMainWindow(QMainWindow):
             self._refresh_workbench_patient_list()
             self._refresh_workbench_plan()
             self._refresh_workbench_recent_sessions()
+            self._refresh_signal_profile_ui()
 
     def _reload_current_patient(self) -> None:
         """Reload or clear the current patient."""
@@ -1562,7 +1734,7 @@ class AdminMainWindow(QMainWindow):
             )
             return
         patient = self.patient_service.get_patient(UUID(str(raw_patient_id)))
-        self._set_current_patient(patient)
+        QTimer.singleShot(0, lambda patient=patient: self._set_current_patient(patient))
 
     def _task_config_revisions(self) -> dict[str, int]:
         revisions: dict[str, int] = {}
@@ -1713,7 +1885,7 @@ class AdminMainWindow(QMainWindow):
             self.recent_result_label.setText("最近结果：暂无")
             return
 
-        titles = {module.module_id: module.title for module in DEFAULT_MODULES}
+        titles = {module.module_id: module.title for module in ALL_MODULES}
         status_labels = {
             ExperimentSessionStatus.CREATED: "已创建",
             ExperimentSessionStatus.RUNNING: "进行中",
@@ -1981,6 +2153,10 @@ class AdminMainWindow(QMainWindow):
             self._open_eye_observation_module(module)
             return
 
+        if module.module_id == "neural_interaction":
+            self._open_signal_workbench()
+            return
+
         if module.module_id in {
             "tracking_ball",
             "binary_horizontal",
@@ -1996,6 +2172,138 @@ class AdminMainWindow(QMainWindow):
             return
 
         self._show_module_placeholder(module)
+
+    def _open_signal_workbench(self, checked: bool = False) -> None:
+        """Configure and launch an EEG/SSVEP/MI task independent from gaze."""
+        del checked
+        if self.current_patient is None:
+            QMessageBox.warning(self, "尚未选择患者", "请先选择一名启用患者。")
+            return
+        if self.experiment_session_service is None:
+            QMessageBox.warning(self, "实验会话服务未连接", "无法创建神经信号会话。")
+            return
+        if self._task_in_progress():
+            QMessageBox.information(self, "任务已在运行", "请先结束当前任务。")
+            return
+        profile = self._signal_profile_store.load(str(self.current_patient.patient_id))
+        selected = (
+            self.signal_paradigm_selector.selected_paradigms()
+            if hasattr(self, "signal_paradigm_selector")
+            else profile.default_paradigms
+        )
+        dialog = SignalWorkbenchDialog(
+            profile,
+            patient_code=self.current_patient.patient_code,
+            selected_paradigms=selected,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.config is None:
+            return
+        self._launch_signal_task_process(dialog.config)
+
+    def _set_signal_module_busy(self, busy: bool) -> None:
+        if busy:
+            self._active_signal_module_ids.add("neural_interaction")
+        else:
+            self._active_signal_module_ids.discard("neural_interaction")
+        self._refresh_task_controls()
+
+    def _launch_signal_task_process(self, config: object) -> None:
+        """Create an immutable signal snapshot and start its child process."""
+        from oculidoc.signal_tasks.config import SignalTaskConfig
+
+        if not isinstance(config, SignalTaskConfig):
+            raise TypeError("Signal task launch requires SignalTaskConfig.")
+        if self.current_patient is None or self.experiment_session_service is None:
+            return
+        launch: SignalTaskLaunch | None = None
+        service = self.experiment_session_service
+        self._set_signal_module_busy(True)
+        try:
+            launch = create_signal_task_launch(
+                service,
+                self._signal_profile_store,
+                patient_id=self.current_patient.patient_id,
+                config=config,
+            )
+            process = QProcess(self)
+            environment = QProcessEnvironment.systemEnvironment()
+            for name, value in launch.process_environment.items():
+                environment.insert(name, value)
+            environment.insert("OCULIDOC_DATA_DIR", str(self.settings.data_dir))
+            process.setProcessEnvironment(environment)
+            program, arguments = signal_task_process_command(
+                launch.config_path,
+                launch.session_directory,
+                snapshot_path=launch.snapshot_path,
+                patient_id=str(launch.patient_id),
+            )
+            process.setProgram(program)
+            process.setArguments(arguments)
+            process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+            process.finished.connect(partial(self._finish_signal_task_process, launch.session_id))
+            self._signal_processes[launch.session_id] = process
+            self._signal_launches[launch.session_id] = launch
+            self.lower()
+            process.start()
+            if not process.waitForStarted(5_000):
+                raise RuntimeError(process.errorString() or "神经信号任务子进程启动失败。")
+        except Exception as error:
+            self._set_signal_module_busy(False)
+            self._restore_admin_window()
+            if launch is not None:
+                self._signal_processes.pop(launch.session_id, None)
+                self._signal_launches.pop(launch.session_id, None)
+                with suppress(Exception):
+                    session = service.get_session(launch.session_id)
+                    if not session.is_terminal:
+                        service.fail_session(launch.session_id, str(error))
+            QMessageBox.warning(self, "无法启动神经信号任务", str(error))
+
+    def _finish_signal_task_process(
+        self,
+        session_id: UUID,
+        exit_code: int,
+        exit_status: object,
+    ) -> None:
+        del exit_status
+        process = self._signal_processes.pop(session_id, None)
+        launch = self._signal_launches.pop(session_id, None)
+        manually_stopped = session_id in self._manually_stopped_signal_sessions
+        self._manually_stopped_signal_sessions.discard(session_id)
+        self._set_signal_module_busy(False)
+        self._restore_admin_window()
+        if process is None or launch is None or self.experiment_session_service is None:
+            return
+        process_output = bytes(  # type: ignore[call-overload]
+            process.readAllStandardOutput()
+        ).decode("utf-8", errors="replace")
+        try:
+            status = finalize_signal_task_launch(
+                self.experiment_session_service,
+                launch,
+                exit_code=(2 if manually_stopped else exit_code),
+                process_output=process_output,
+                profile_store=self._signal_profile_store,
+            )
+        except Exception as error:
+            QMessageBox.warning(self, "神经信号会话结束失败", str(error))
+            self._refresh_patient_summary()
+            return
+        if status is ExperimentSessionStatus.COMPLETED:
+            QMessageBox.information(
+                self,
+                "神经信号任务已保存",
+                "独立信号结果、配置快照和报告已保存至实验历史。",
+            )
+        elif status is ExperimentSessionStatus.ABORTED:
+            QMessageBox.information(self, "神经信号任务已取消", "已保留可复核的中间文件。")
+        else:
+            message = "信号任务未正常完成。"
+            if process_output.strip():
+                message += "\n\n进程输出：\n" + process_output.strip()[-2_000:]
+            QMessageBox.warning(self, "神经信号任务失败", message)
+        self._refresh_patient_summary()
 
     def _open_eye_observation_module(
         self,
@@ -2192,10 +2500,14 @@ class AdminMainWindow(QMainWindow):
         self._refresh_patient_summary()
 
     def _task_in_progress(self) -> bool:
-        return bool(self._active_gaze_module_ids or self._eye_windows)
+        return bool(
+            self._active_gaze_module_ids or self._active_signal_module_ids or self._eye_windows
+        )
 
     def _is_patient_task_active(self, patient_id: UUID) -> bool:
         if any(launch.patient_id == patient_id for launch in self._gaze_launches.values()):
+            return True
+        if any(launch.patient_id == patient_id for launch in self._signal_launches.values()):
             return True
         if self.experiment_session_service is None:
             return False
@@ -2215,12 +2527,19 @@ class AdminMainWindow(QMainWindow):
             button.setEnabled(not busy)
             button.setText(
                 "任务运行中…"
-                if busy and module_id in self._active_gaze_module_ids
+                if busy
+                and module_id in (self._active_gaze_module_ids | self._active_signal_module_ids)
                 else str(button.property("idleText") or "打开项目")
             )
         if hasattr(self, "workbench_patient_list"):
             self.workbench_patient_list.setEnabled(not busy)
             self._refresh_workbench_plan()
+        if hasattr(self, "signal_paradigm_selector"):
+            self.signal_paradigm_selector.set_patient_available(
+                not busy and self.current_patient is not None
+            )
+        if hasattr(self, "signal_workbench_button"):
+            self.signal_workbench_button.setEnabled(not busy and self.current_patient is not None)
 
     def _stop_active_tasks(self, checked: bool = False) -> None:
         del checked
@@ -2237,6 +2556,12 @@ class AdminMainWindow(QMainWindow):
             return
 
         for process in tuple(self._gaze_processes.values()):
+            process.terminate()
+            if not process.waitForFinished(1_500):
+                process.kill()
+
+        for session_id, process in tuple(self._signal_processes.items()):
+            self._manually_stopped_signal_sessions.add(session_id)
             process.terminate()
             if not process.waitForFinished(1_500):
                 process.kill()
@@ -2304,7 +2629,15 @@ class AdminMainWindow(QMainWindow):
         patient_id = self.current_patient.patient_id
         self._set_gaze_module_busy(module.module_id, True)
         self.lower()
-        self._open_patient_display()
+        if not self._open_patient_display():
+            self._set_gaze_module_busy(module.module_id, False)
+            self._restore_admin_window()
+            QMessageBox.warning(
+                self,
+                "患者显示屏不可用",
+                "启动时选定的患者显示屏已断开。请恢复显示连接并重启 OculiDoC。",
+            )
+            return
         self._launch_gaze_task_process(
             module,
             patient_id=patient_id,
@@ -2356,6 +2689,9 @@ class AdminMainWindow(QMainWindow):
                 "OCULIDOC_DATA_DIR",
                 str(self.settings.data_dir),
             )
+            if not self._patient_screen_name:
+                raise RuntimeError("启动时未找到可用的患者显示屏。")
+            environment.insert(PATIENT_SCREEN_NAME_ENV, self._patient_screen_name)
             process.setProcessEnvironment(environment)
             program, arguments = gaze_task_process_command(
                 launch.command,
@@ -2627,6 +2963,28 @@ class AdminMainWindow(QMainWindow):
 
         for workbench in tuple(self._eye_windows.values()):
             workbench.close()
+
+        if self.experiment_session_service is not None:
+            for launch in tuple(self._gaze_launches.values()) + tuple(
+                self._signal_launches.values()
+            ):
+                with suppress(Exception):
+                    session = self.experiment_session_service.get_session(launch.session_id)
+                    if not session.is_terminal:
+                        self.experiment_session_service.abort_session(
+                            launch.session_id,
+                            "OculiDoC 管理端退出。",
+                        )
+
+        for process in tuple(self._gaze_processes.values()) + tuple(
+            self._signal_processes.values()
+        ):
+            if process.state() == QProcess.ProcessState.NotRunning:
+                continue
+            process.terminate()
+            if not process.waitForFinished(1_500):
+                process.kill()
+                process.waitForFinished(1_000)
 
         self._patient_window.close()
         super().closeEvent(event)

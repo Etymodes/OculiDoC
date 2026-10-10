@@ -76,3 +76,14 @@ DEFAULT_MODULES: tuple[ModuleDefinition, ...] = (
         "available",
     ),
 )
+
+INDEPENDENT_MODULES: tuple[ModuleDefinition, ...] = (
+    ModuleDefinition(
+        "neural_interaction",
+        "神经信号与 BCI",
+        "独立运行 EEG 质量、SSVEP 与运动想象协议；保留配置快照并分别生成报告。",
+        "available",
+    ),
+)
+
+ALL_MODULES = DEFAULT_MODULES + INDEPENDENT_MODULES

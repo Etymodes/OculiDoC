@@ -8,6 +8,7 @@ from pathlib import Path
 from time import monotonic
 
 from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtGui import QGuiApplication
 
 from oculidoc.config import Settings
 from oculidoc.devices.auto_detect import AutoDetectEyeTrackerDevice, EyeTrackerFactory
@@ -28,9 +29,11 @@ from oculidoc.devices.preflight import (
     observed_sample_capabilities,
     run_gaze_preflight,
 )
+from oculidoc.devices.seveninvensun_bridge import SeveninvensunBridgeDevice
 from oculidoc.devices.simulated import (
     SimulatedEyeTrackerDevice,
 )
+from oculidoc.devices.thinks_tracker import ThinksTrackerDevice
 from oculidoc.devices.tobii_hospital_bridge import (
     TobiiHospitalBridgeDevice,
 )
@@ -40,6 +43,30 @@ from oculidoc.devices.tobii_legacy_bridge import (
 from oculidoc.devices.tobii_stream_engine import (
     TobiiStreamEngineDevice,
 )
+from oculidoc.devices.webcam_gaze import create_webcam_tracker
+
+
+def _webcam_tracker(settings: Settings) -> EyeTrackerDevice:
+    screen = next(
+        (
+            screen
+            for screen in QGuiApplication.screens()
+            if screen.name() == settings.patient_screen_name
+        ),
+        None,
+    )
+    identity = (
+        (screen.name(), screen.geometry().width(), screen.geometry().height())
+        if screen
+        else ("", 0, 0)
+    )
+    return create_webcam_tracker(
+        settings.webcam_providers_path,
+        settings.data_dir / "runtime" / "webcam",
+        settings.patient_id,
+        identity,
+        settings.webcam_calibration_profile,
+    )
 
 
 def create_eye_tracker(
@@ -52,7 +79,23 @@ def create_eye_tracker(
             realtime=True,
         )
 
-    if settings.gaze_source == "auto":
+    if settings.gaze_source == "webcam":
+        return _webcam_tracker(settings)
+
+    if settings.gaze_source == "thinks_tracker":
+        screen = next(
+            (s for s in QGuiApplication.screens() if s.name() == settings.patient_screen_name), None
+        )
+        return ThinksTrackerDevice(
+            settings.thinks_tracker_config_path,
+            settings.data_dir / "runtime/thinks_tracker",
+            settings.patient_id,
+            (screen.name(), screen.geometry().width(), screen.geometry().height())
+            if screen
+            else ("", 0, 0),
+        )
+
+    if settings.gaze_source in {"auto", "auto_webcam"}:
         third_party_candidates: list[EyeTrackerFactory] = [
             lambda: TobiiStreamEngineDevice(library_path=settings.tobii_stream_engine_dll),
             lambda: TobiiLegacyBridgeDevice(
@@ -71,6 +114,14 @@ def create_eye_tracker(
                     helper_executable=settings.tobii_helper_executable,
                 )
             )
+        if settings.gaze_source == "auto_webcam":
+            third_party_candidates.append(lambda: _webcam_tracker(settings))
+            return AutoDetectEyeTrackerDevice(
+                tuple(third_party_candidates),
+                sample_predicate=lambda sample: sample.gaze_valid,
+                failure_message="专用眼动仪及摄像头均不可用，未使用模拟数据。",
+                strict_cleanup=True,
+            )
         return AutoDetectEyeTrackerDevice(tuple(third_party_candidates))
 
     if settings.gaze_source == "tobii_stream_engine":
@@ -88,6 +139,12 @@ def create_eye_tracker(
 
     if settings.gaze_source == "just_need_to_see_bundle":
         return JustNeedToSeeBundleDevice(bundle_root=settings.just_need_to_see_root)
+
+    if settings.gaze_source == "seveninvensun_bridge":
+        return SeveninvensunBridgeDevice(
+            host=settings.tobii_bridge_host,
+            port=settings.tobii_bridge_port,
+        )
 
     if settings.gaze_source == "tobii_hospital_bridge":
         return TobiiHospitalBridgeDevice(

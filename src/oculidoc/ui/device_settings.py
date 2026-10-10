@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -25,13 +27,21 @@ from PySide6.QtWidgets import (
 )
 
 from oculidoc.config import GazeDeviceConfig, GazeDeviceConfigStore, Settings
+from oculidoc.devices.acies import ACIES_VERSION, PROFILE_LABELS
+from oculidoc.devices.diagnostics import probe_cameras
+from oculidoc.devices.errors import DeviceConnectionError
 from oculidoc.devices.preflight import GazePreflightResult, GazePreflightStore
 from oculidoc.devices.tobii_stream_engine import discover_tobii_stream_engine_dll
+from oculidoc.devices.webcam_gaze import read_webcam_config, save_webcam_camera_index
 from oculidoc.ui.gaze_self_check import GazeSelfCheckDialog
 from oculidoc.ui.opoin_thesis import OpoinThesisDialog
 
 _SOURCE_ITEMS = (
-    ("Tobii 原生 Stream（推荐）", "tobii_stream_engine"),
+    ("Tobii 原生 Stream", "tobii_stream_engine"),
+    ("七鑫易维 aSee（本机 SDK 桥）", "seveninvensun_bridge"),
+    ("ThinksTracker（120 / 300 Hz）", "thinks_tracker"),
+    ("自动：眼动仪 → 摄像头", "auto_webcam"),
+    ("ACIES 摄像头识别（需校准）", "webcam"),
     ("工程模拟测试", "mock"),
     ("原监听兼容", "tobii_hospital_bridge"),
     ("Tobii DLL兼容", "just_need_to_see_bundle"),
@@ -225,8 +235,54 @@ class DeviceSettingsDialog(QDialog):
         self.minimum_validity_spin.setValue(current.gaze_minimum_valid_ratio * 100)
 
         form.addRow("眼动源：", self.source_combo)
+        self.thinks_config_edit = QLineEdit(str(current.thinks_config_path or ""))
+        self.thinks_config_edit.setPlaceholderText("留空使用工程中的 ThinksTracker 配置")
+        self.thinks_setup_button = QPushButton("屏幕 / SDK 设置")
+        self.thinks_setup_button.clicked.connect(self._setup_thinks)
+        self.thinks_calibrate_button = QPushButton("九点校准")
+        self.thinks_calibrate_button.clicked.connect(self._calibrate_thinks)
+        thinks_row = QHBoxLayout()
+        thinks_row.addWidget(self.thinks_config_edit, 1)
+        thinks_row.addWidget(self.thinks_setup_button)
+        thinks_row.addWidget(self.thinks_calibrate_button)
+        form.addRow("ThinksTracker：", thinks_row)
+        self.webcam_config_edit = QLineEdit(str(current.webcam_config_path or ""))
+        self.webcam_config_edit.setPlaceholderText(
+            "留空使用工程 data/runtime/webcam_providers.json"
+        )
+        form.addRow("摄像头配置：", self.webcam_config_edit)
+        self.camera_combo = QComboBox()
+        self.camera_combo.setObjectName("aciesCameraCombo")
+        self._load_camera_selection()
+        self.camera_scan_button = QPushButton("扫描摄像头")
+        self.camera_scan_button.clicked.connect(self._scan_webcam_cameras)
+        camera_row = QHBoxLayout()
+        camera_row.addWidget(self.camera_combo, 1)
+        camera_row.addWidget(self.camera_scan_button)
+        form.addRow("ACIES 摄像头：", camera_row)
+        self.webcam_provider_combo = QComboBox()
+        self.webcam_provider_combo.addItem("ACIES · 独立虹膜估计", "acies")
+        self.webcam_calibrate_button = QPushButton("校准当前受试者")
+        self.webcam_calibrate_button.clicked.connect(self._calibrate_webcam)
+        webcam_row = QHBoxLayout()
+        webcam_row.addWidget(self.webcam_provider_combo)
+        webcam_row.addWidget(self.webcam_calibrate_button)
+        self.webcam_history_button = QPushButton("校准记录")
+        self.webcam_history_button.clicked.connect(self._open_calibration_records)
+        webcam_row.addWidget(self.webcam_history_button)
+        self.webcam_experiment_button = QPushButton("对照测试")
+        self.webcam_experiment_button.clicked.connect(self._experiment_webcam)
+        webcam_row.addWidget(self.webcam_experiment_button)
+        form.addRow("摄像头校准：", webcam_row)
+        self.webcam_profile_combo = QComboBox()
+        for value, label in PROFILE_LABELS.items():
+            self.webcam_profile_combo.addItem(label, value)
+        self.webcam_profile_combo.setCurrentIndex(
+            self.webcam_profile_combo.findData(current.webcam_calibration_profile)
+        )
+        form.addRow("校准容忍度：", self.webcam_profile_combo)
         form.addRow("原生 Stream DLL：", dll_row)
-        form.addRow("兼容地址：", bridge_row)
+        form.addRow("本机/兼容桥地址：", bridge_row)
         form.addRow("第三方数据目录：", third_party_json_row)
         form.addRow("Tobii 兼容 DLL：", compatibility_dll_row)
         form.addRow("任务前预检：", self.preflight_seconds_spin)
@@ -235,7 +291,12 @@ class DeviceSettingsDialog(QDialog):
 
         source_tip = QLabel(
             "这里选择的是连接方式；实际传感器名称和可用数据字段以自检结果为准。"
-            "Tobii 原生 Stream 保留为推荐主链路。原监听兼容用于既有 TCP 发送程序；"
+            "摄像头使用 ACIES 独立估计；必须先为当前受试者在患者屏幕校准。"
+            "宽容档允许较大误差，适合粗分区试验；完全闭眼或信息不足时暂停输出。"
+            "Tobii、七鑫易维和 ThinksTracker 是并列的可选眼动源。"
+            "七鑫易维 aSee 入口只连接本机 SDK 桥，"
+            "不内置或猜测厂商 DLL；眼动眼镜必须先把场景坐标映射到当前屏幕。"
+            "原监听兼容用于既有 TCP 发送程序；"
             "它由 OculiDoC 在 0.0.0.0 和所设端口（原版为 9999）建立服务端。"
             "Tobii DLL兼容使用管理员明确选择的 Stream Engine DLL；第三方兼容会先尝试"
             "通用 NDJSON 桥接，再尝试所选目录中的 *_gaze.json。兼容模式均不会回退到模拟数据。"
@@ -244,6 +305,15 @@ class DeviceSettingsDialog(QDialog):
         source_tip.setStyleSheet("color:#5a7184;")
         root.addWidget(source_tip)
 
+        if latest_preflight is not None and latest_preflight.source != current.gaze_source:
+            latest_preflight = None
+        if (
+            latest_preflight is not None
+            and current.gaze_source in {"webcam", "auto_webcam"}
+            and "webcam_estimate" in latest_preflight.advertised_capabilities
+            and latest_preflight.device_model != f"ACIES {ACIES_VERSION}"
+        ):
+            latest_preflight = None
         self.preflight_label = QLabel(self._preflight_text(latest_preflight))
         self.preflight_label.setWordWrap(True)
         self.preflight_label.setStyleSheet(
@@ -268,24 +338,24 @@ class DeviceSettingsDialog(QDialog):
         self.opoin_thesis_button = QPushButton("打开 OpoinThesis 眼位监测")
         self.opoin_thesis_button.setObjectName("openOpoinThesisButton")
         self.opoin_thesis_button.clicked.connect(self._open_opoin_thesis)
-        opoin_thesis_tip = QLabel(
+        self.opoin_thesis_tip = QLabel(
             "主观查看左右眼位置；不计算有效率，不保存，也不纳入自检或任务报告。"
         )
-        opoin_thesis_tip.setWordWrap(True)
+        self.opoin_thesis_tip.setWordWrap(True)
         opoin_thesis_row.addWidget(self.opoin_thesis_button)
-        opoin_thesis_row.addWidget(opoin_thesis_tip, 1)
+        opoin_thesis_row.addWidget(self.opoin_thesis_tip, 1)
         root.addLayout(opoin_thesis_row)
 
         calibration_row = QHBoxLayout()
-        open_tobii_button = QPushButton("打开 Tobii Experience / 校准")
-        open_tobii_button.setObjectName("openTobiiExperienceButton")
-        open_tobii_button.clicked.connect(self._open_tobii_experience)
-        calibration_tip = QLabel(
+        self.open_tobii_button = QPushButton("打开 Tobii Experience / 校准")
+        self.open_tobii_button.setObjectName("openTobiiExperienceButton")
+        self.open_tobii_button.clicked.connect(self._open_tobii_experience)
+        self.calibration_tip = QLabel(
             "正式任务前请先完成 Display Setup，再在用户资料中执行校准或 Improve calibration。"
         )
-        calibration_tip.setWordWrap(True)
-        calibration_row.addWidget(open_tobii_button)
-        calibration_row.addWidget(calibration_tip, 1)
+        self.calibration_tip.setWordWrap(True)
+        calibration_row.addWidget(self.open_tobii_button)
+        calibration_row.addWidget(self.calibration_tip, 1)
         root.addLayout(calibration_row)
 
         buttons = QDialogButtonBox(
@@ -295,6 +365,15 @@ class DeviceSettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
         self._update_source_controls()
+        self.source_combo.currentIndexChanged.connect(self._clear_preflight_display)
+        self.webcam_profile_combo.currentIndexChanged.connect(self._clear_preflight_display)
+        self.webcam_config_edit.textChanged.connect(self._clear_preflight_display)
+        self.webcam_config_edit.editingFinished.connect(self._load_camera_selection)
+        self.camera_combo.currentIndexChanged.connect(self._camera_selection_changed)
+        self.thinks_config_edit.textChanged.connect(self._clear_preflight_display)
+
+    def _clear_preflight_display(self, *_: object) -> None:
+        self.preflight_label.setText("设置已变更，请完成校准后重新运行自检。")
 
     @staticmethod
     def _preflight_text(result: GazePreflightResult | None) -> str:
@@ -315,13 +394,31 @@ class DeviceSettingsDialog(QDialog):
 
     def _update_source_controls(self) -> None:
         source = self.source_combo.currentData()
+        for thinks_control in (
+            self.thinks_config_edit,
+            self.thinks_setup_button,
+            self.thinks_calibrate_button,
+        ):
+            thinks_control.setEnabled(source == "thinks_tracker")
+        webcam_selected = source in {"webcam", "auto_webcam"}
+        for control in (
+            self.webcam_config_edit,
+            self.camera_combo,
+            self.camera_scan_button,
+            self.webcam_provider_combo,
+            self.webcam_calibrate_button,
+            self.webcam_experiment_button,
+            self.webcam_profile_combo,
+        ):
+            control.setEnabled(webcam_selected)
         enabled = source == "tobii_stream_engine"
         for dll_widget in self.dll_controls:
             dll_widget.setEnabled(enabled)
-        self.bridge_host_edit.setEnabled(source == "tobii_legacy_bridge")
+        self.bridge_host_edit.setEnabled(source in {"seveninvensun_bridge", "tobii_legacy_bridge"})
         self.bridge_port_spin.setEnabled(
             source
             in {
+                "seveninvensun_bridge",
                 "tobii_hospital_bridge",
                 "tobii_legacy_bridge",
             }
@@ -332,6 +429,138 @@ class DeviceSettingsDialog(QDialog):
         compatibility_enabled = source == "just_need_to_see_bundle"
         for widget in self.compatibility_dll_controls:
             widget.setEnabled(compatibility_enabled)
+        seveninvensun_selected = source == "seveninvensun_bridge"
+        self.opoin_thesis_button.setEnabled(not seveninvensun_selected)
+        self.open_tobii_button.setEnabled(not seveninvensun_selected)
+        self.opoin_thesis_tip.setText(
+            "当前七鑫易维桥契约只接收屏幕注视点，不声明三维眼位能力。"
+            if seveninvensun_selected
+            else "主观查看左右眼位置；不计算有效率，不保存，也不纳入自检或任务报告。"
+        )
+        self.calibration_tip.setText(
+            "请先在七鑫易维随设备提供的工具中完成当前用户和当前屏幕校准，再运行自检。"
+            if seveninvensun_selected
+            else "正式任务前请先完成 Display Setup，再在用户资料中执行校准或 Improve calibration。"
+        )
+        if webcam_selected:
+            self.calibration_tip.setText(
+                "摄像头估计仅供研究。更换受试者、摄像头、屏幕或姿势后请重新校准，再运行自检。"
+            )
+            self.opoin_thesis_button.setEnabled(False)
+            self.open_tobii_button.setEnabled(False)
+        if source == "thinks_tracker":
+            self.open_tobii_button.setEnabled(False)
+            self.opoin_thesis_button.setEnabled(False)
+            self.opoin_thesis_tip.setText("ThinksTracker 当前接入屏幕注视点，不声明三维眼位能力。")
+            self.calibration_tip.setText(
+                "先关闭厂家测试程序，确认屏幕和安装参数，再为当前受试者完成九点校准与自检。"
+            )
+
+    def _webcam_config_path(self) -> Path:
+        entered = self.webcam_config_edit.text().strip()
+        return Path(entered) if entered else self.settings.webcam_providers_path
+
+    def _load_camera_selection(self) -> None:
+        try:
+            index = int(read_webcam_config(self._webcam_config_path()).get("camera_index", 0))
+            label = f"摄像头 {index}（当前配置，点击扫描确认）"
+        except DeviceConnectionError:
+            index = 0
+            label = "摄像头 0（配置文件不可用）"
+        self.camera_combo.blockSignals(True)
+        self.camera_combo.clear()
+        self.camera_combo.addItem(label, index)
+        self.camera_combo.blockSignals(False)
+        self._camera_choice_dirty = False
+
+    def _camera_selection_changed(self, *_: object) -> None:
+        self._camera_choice_dirty = True
+        self._clear_preflight_display()
+
+    def _scan_webcam_cameras(self) -> None:
+        # The runtime worker uses the same DirectShow backend on Windows.
+        try:
+            results = probe_cameras(6)
+        except Exception as error:
+            QMessageBox.warning(self, "扫描摄像头失败", str(error))
+            return
+        selected = self.camera_combo.currentData()
+        self.camera_combo.blockSignals(True)
+        self.camera_combo.clear()
+        for result in results:
+            state = "可用" if result.available else "未找到或不可读取"
+            size = (
+                f" · {result.width_px}×{result.height_px}"
+                if result.width_px and result.height_px
+                else ""
+            )
+            self.camera_combo.addItem(f"摄像头 {result.index} · {state}{size}", result.index)
+        if isinstance(selected, int) and self.camera_combo.findData(selected) < 0:
+            self.camera_combo.addItem(f"摄像头 {selected}（当前配置，未扫描）", selected)
+        self.camera_combo.setCurrentIndex(max(0, self.camera_combo.findData(selected)))
+        self.camera_combo.blockSignals(False)
+
+    def _persist_webcam_camera_selection(self) -> bool:
+        if not self._camera_choice_dirty:
+            return True
+        index = self.camera_combo.currentData()
+        if type(index) is not int:
+            QMessageBox.warning(self, "摄像头选择无效", "请先扫描并选择摄像头。")
+            return False
+        path = self._webcam_config_path()
+        try:
+            current = read_webcam_config(path)
+            if current.get("camera_index", 0) != index:
+                save_webcam_camera_index(path, index)
+        except (DeviceConnectionError, OSError, ValueError) as error:
+            QMessageBox.warning(self, "无法保存摄像头", str(error))
+            return False
+        self._camera_choice_dirty = False
+        return True
+
+    def _setup_thinks(self) -> None:
+        from oculidoc.ui.thinks_calibration import ThinksSetupDialog
+
+        dialog = ThinksSetupDialog(self.build_config().apply(self.settings), self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._clear_preflight_display()
+
+    def _calibrate_thinks(self) -> None:
+        from oculidoc.ui.thinks_calibration import ThinksCalibrationDialog
+
+        dialog = ThinksCalibrationDialog(self.build_config().apply(self.settings), self)
+        dialog.start()
+        if dialog.result() == QDialog.DialogCode.Accepted:
+            self.preflight_label.setText("ThinksTracker 九点校准已保存，请运行自检并保存设置。")
+
+    def _calibrate_webcam(self) -> None:
+        from oculidoc.ui.webcam_calibration import WebcamCalibrationDialog
+
+        if not self._persist_webcam_camera_selection():
+            return
+        config = self.build_config()
+        dialog = WebcamCalibrationDialog(
+            config.apply(self.settings), self.webcam_provider_combo.currentData(), self
+        )
+        dialog.start()
+        if dialog.result() == QDialog.DialogCode.Accepted:
+            self.preflight_label.setText(dialog.summary_text + "\n请运行自检并保存设置。")
+
+    def _open_calibration_records(self) -> None:
+        directory = self.settings.data_dir / "runtime" / "webcam" / "calibration_attempts"
+        if not directory.is_dir():
+            QMessageBox.information(self, "校准记录", "尚无校准记录。按空格开始校准后自动记录。")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory.resolve()))):
+            QMessageBox.information(self, "校准记录", f"记录保存在：\n{directory}")
+
+    def _experiment_webcam(self) -> None:
+        from oculidoc.ui.acies_experiment import AciesExperimentDialog
+
+        if not self._persist_webcam_camera_selection():
+            return
+        dialog = AciesExperimentDialog(self.build_config().apply(self.settings), self)
+        dialog.start()
 
     def _browse_third_party_json(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -394,6 +623,9 @@ class DeviceSettingsDialog(QDialog):
         config = self.build_config()
         if not self._validate_config(config):
             return
+        if config.gaze_source in {"webcam", "auto_webcam"}:
+            if not self._persist_webcam_camera_selection():
+                return
         applied_settings = config.apply(self.settings)
         GazeSelfCheckDialog(
             applied_settings,
@@ -432,6 +664,13 @@ class DeviceSettingsDialog(QDialog):
         )
         return GazeDeviceConfig(
             gaze_source=self.source_combo.currentData(),
+            thinks_config_path=Path(self.thinks_config_edit.text().strip())
+            if self.thinks_config_edit.text().strip()
+            else None,
+            webcam_calibration_profile=self.webcam_profile_combo.currentData(),
+            webcam_config_path=Path(self.webcam_config_edit.text().strip())
+            if self.webcam_config_edit.text().strip()
+            else None,
             tobii_stream_engine_dll=Path(dll_text) if dll_text else None,
             tobii_bridge_host=self.bridge_host_edit.text().strip(),
             tobii_bridge_port=self.bridge_port_spin.value(),
@@ -450,6 +689,18 @@ class DeviceSettingsDialog(QDialog):
                 "请输入兼容程序的主机地址。",
             )
             return False
+        if config.gaze_source == "seveninvensun_bridge":
+            if config.tobii_bridge_host.strip().lower() not in {
+                "localhost",
+                "127.0.0.1",
+                "::1",
+            }:
+                QMessageBox.warning(
+                    self,
+                    "七鑫易维桥地址无效",
+                    "七鑫易维 SDK 桥只允许使用 localhost、127.0.0.1 或 ::1。",
+                )
+                return False
         if config.gaze_source == "tobii_stream_engine" and config.tobii_stream_engine_dll:
             if not config.tobii_stream_engine_dll.is_file():
                 QMessageBox.warning(
@@ -473,5 +724,8 @@ class DeviceSettingsDialog(QDialog):
         config = self.build_config()
         if not self._validate_config(config):
             return
+        if config.gaze_source in {"webcam", "auto_webcam"}:
+            if not self._persist_webcam_camera_selection():
+                return
         self.store.save(config)
         self.accept()

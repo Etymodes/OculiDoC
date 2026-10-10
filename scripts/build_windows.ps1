@@ -22,6 +22,9 @@
     $versionGenerator = Join-Path `
         $repositoryRoot `
         "scripts\generate_windows_version_info.py"
+    $stdioChecker = Join-Path `
+        $repositoryRoot `
+        "scripts\check_frozen_stdio.py"
     $workRoot = Join-Path `
         $repositoryRoot `
         "build\pyinstaller"
@@ -41,7 +44,8 @@
     foreach ($path in @(
         $specPath,
         $iconPath,
-        $versionGenerator
+        $versionGenerator,
+        $stdioChecker
     )) {
         if (-not (Test-Path $path -PathType Leaf)) {
             throw "缺少 Windows 构建文件：$path"
@@ -157,6 +161,13 @@
             throw "未生成预期 EXE：$executablePath"
         }
 
+        $shadowIcuPath = Join-Path `
+            $bundleRoot `
+            "_internal\icuuc.dll"
+        if (Test-Path $shadowIcuPath -PathType Leaf) {
+            throw "冻结包包含可能遮蔽 Windows ICU 的 DLL：$shadowIcuPath"
+        }
+
         $forbiddenQtNamePatterns = @(
             "*WebEngine*",
             "Qt6CanvasPainter*",
@@ -246,6 +257,11 @@
         }
 
         $bundleDocuments = [ordered]@{
+            "LICENSE-v0.1.3.txt" = (
+                Join-Path `
+                    $repositoryRoot `
+                    "LICENSE-v0.1.3.txt"
+            )
             "LICENSE-v0.1.1.txt" = (
                 Join-Path `
                     $repositoryRoot `
@@ -457,6 +473,13 @@
             throw "冻结程序自检未识别 frozen 状态。"
         }
 
+        & $PythonCommand `
+            $stdioChecker `
+            $executablePath
+        if ($LASTEXITCODE -ne 0) {
+            throw "冻结程序标准流管道自检失败。"
+        }
+
         Add-Type `
             -AssemblyName `
             System.Drawing
@@ -502,6 +525,7 @@
             embedded_icon = $true
             frozen_smoke_report = $smokePath
             frozen_smoke_ok = $true
+            frozen_stdio_ok = $true
             forbidden_qt_payload_count = (
                 $remainingForbiddenQtPayload.Count
             )

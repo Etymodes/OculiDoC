@@ -43,6 +43,10 @@ def test_pyinstaller_spec_has_branding_and_onedir() -> None:
     assert '"assets/stimuli/*.json"' in source
     assert '"assets/stimuli/*.png"' in source
     assert "collect_submodules(" in source
+    assert '"oculidoc.signal_tasks"' in source
+    assert '"oculidoc.bci"' in source
+    assert '"oculidoc.signals"' in source
+    assert '"oculidoc.devices.eeg"' in source
     assert '"oculidoc.package_smoke"' in source
     assert '"PySide6.QtWebEngineCore"' in source
     assert '"PySide6.QtWebEngineWidgets"' in source
@@ -105,7 +109,7 @@ def test_inno_installer_supports_online_offline_upgrade_and_shortcuts() -> None:
     assert "HasCommandLineParam('/OFFLINE')" in source
     assert r"{autodesktop}\OculiDoC" in source
     assert r"{autoprograms}\OculiDoC" in source
-    assert r"LicenseFile={#SourceDir}\LICENSE-v0.1.1.txt" in source
+    assert r"LicenseFile={#SourceDir}\LICENSE-v0.1.3.txt" in source
     assert "仅限非临床工程评估" in source
 
 
@@ -116,6 +120,7 @@ def test_release_packager_builds_standard_installer() -> None:
     assert "ISCC.exe" in source
     assert "OculiDoC-Setup.exe" in source
     assert '"$setupPath.sha256"' in source
+    assert "LICENSE-v0.1.3.txt" in source
     assert "LICENSE-v0.1.1.txt" in source
     assert "THIRD_PARTY_NOTICES.md" in source
     assert "THIRD_PARTY_LICENSES.json" in source
@@ -137,20 +142,25 @@ def test_report_summary_uses_system_browser_without_qt_webengine() -> None:
 
 
 def test_release_license_material_is_version_scoped_and_complete() -> None:
-    license_text = (ROOT / "LICENSE-v0.1.1.txt").read_text(encoding="utf-8")
+    license_text = (ROOT / "LICENSE-v0.1.3.txt").read_text(encoding="utf-8")
+    historical_license = (ROOT / "LICENSE-v0.1.1.txt").read_text(encoding="utf-8")
     notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
     qt_offer = (ROOT / "QT_SOURCE_OFFER.md").read_text(encoding="utf-8")
     license_root = ROOT / "packaging" / "windows" / "licenses"
     normalized_license = " ".join(license_text.split())
 
-    assert "official OculiDoC v0.1.1" in license_text
+    assert "official OculiDoC v0.1.3" in license_text
+    assert "official OculiDoC v0.1.1" in historical_license
+    assert "any version other than official v0.1.3" in license_text
     assert "solely for non-clinical engineering evaluation" in normalized_license
     assert "any real patient" in license_text
     assert 'PROVIDED "AS IS"' in license_text
     assert "PySide6 / Qt 6.11" in notices
+    assert "LICENSE-v0.1.3.txt" in notices
     assert "Qt WebEngine/Chromium" in notices
     assert "LGPL-3.0" in notices
     assert "reverse engineering" in qt_offer
+    assert "public `v0.1.3` tag" in qt_offer
     assert (license_root / "LGPL-3.0-only.txt").is_file()
     assert (license_root / "GPL-3.0-only.txt").is_file()
     qt_license_root = license_root / "qt-6.11.1"

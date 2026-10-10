@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -5,6 +6,7 @@ from pytestqt.qtbot import QtBot
 
 import oculidoc.ui.device_settings as device_settings_module
 from oculidoc.config import GazeDeviceConfig, GazeDeviceConfigStore, Settings
+from oculidoc.devices.models import CameraProbeResult, ProbeStatus
 from oculidoc.ui.device_settings import (
     DeviceSettingsDialog,
     find_tobii_experience_app_id,
@@ -27,7 +29,11 @@ def test_device_settings_keeps_native_stream_and_only_generic_sources(
     ]
 
     assert items == [
-        ("Tobii 原生 Stream（推荐）", "tobii_stream_engine"),
+        ("Tobii 原生 Stream", "tobii_stream_engine"),
+        ("七鑫易维 aSee（本机 SDK 桥）", "seveninvensun_bridge"),
+        ("ThinksTracker（120 / 300 Hz）", "thinks_tracker"),
+        ("自动：眼动仪 → 摄像头", "auto_webcam"),
+        ("ACIES 摄像头识别（需校准）", "webcam"),
         ("工程模拟测试", "mock"),
         ("原监听兼容", "tobii_hospital_bridge"),
         ("Tobii DLL兼容", "just_need_to_see_bundle"),
@@ -57,6 +63,72 @@ def test_device_settings_dialog_saves_native_source(qtbot: QtBot, tmp_path: Path
     assert saved.gaze_minimum_valid_ratio == 0.70
 
 
+def test_acies_camera_scan_selection_is_saved_without_changing_provider(
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    webcam_path = tmp_path / "webcam_providers.json"
+    provider = {"python": "C:/ACIES/python.exe", "face_model": "C:/ACIES/face.task"}
+    webcam_path.write_text(
+        json.dumps({"camera_index": 0, "camera_width": 1280, "providers": {"acies": provider}}),
+        encoding="utf-8",
+    )
+    settings = Settings(
+        environment="test",
+        data_dir=tmp_path,
+        gaze_source="webcam",
+        webcam_config_path=webcam_path,
+    )
+    store = GazeDeviceConfigStore.for_settings(settings)
+    dialog = DeviceSettingsDialog(settings, store)
+    qtbot.addWidget(dialog)
+    monkeypatch.setattr(
+        device_settings_module,
+        "probe_cameras",
+        lambda _maximum: (
+            CameraProbeResult(0, ProbeStatus.UNAVAILABLE),
+            CameraProbeResult(
+                1,
+                ProbeStatus.AVAILABLE,
+                width_px=640,
+                height_px=480,
+                frame_received=True,
+            ),
+        ),
+    )
+
+    dialog._scan_webcam_cameras()
+    assert "640×480" in dialog.camera_combo.itemText(dialog.camera_combo.findData(1))
+    dialog.camera_combo.setCurrentIndex(dialog.camera_combo.findData(1))
+    dialog._save()
+
+    saved = json.loads(webcam_path.read_text(encoding="utf-8"))
+    assert saved["camera_index"] == 1
+    assert saved["camera_width"] == 1280
+    assert saved["providers"]["acies"] == provider
+    assert store.load(GazeDeviceConfig.from_settings(settings)).gaze_source == "webcam"
+
+
+def test_unconfigured_optional_webcam_does_not_block_device_settings_save(
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        environment="test",
+        data_dir=tmp_path,
+        gaze_source="auto_webcam",
+        webcam_config_path=tmp_path / "missing-webcam.json",
+    )
+    store = GazeDeviceConfigStore.for_settings(settings)
+    dialog = DeviceSettingsDialog(settings, store)
+    qtbot.addWidget(dialog)
+
+    dialog._save()
+
+    assert store.load(GazeDeviceConfig.from_settings(settings)).gaze_source == "auto_webcam"
+
+
 def test_device_settings_modes_enable_only_their_controls(
     qtbot: QtBot,
     tmp_path: Path,
@@ -76,9 +148,39 @@ def test_device_settings_modes_enable_only_their_controls(
     assert dialog.bridge_port_spin.isEnabled()
     assert dialog.third_party_json_edit.isEnabled()
 
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("seveninvensun_bridge"))
+    assert dialog.bridge_host_edit.isEnabled()
+    assert dialog.bridge_port_spin.isEnabled()
+    assert not dialog.third_party_json_edit.isEnabled()
+    assert not dialog.opoin_thesis_button.isEnabled()
+    assert not dialog.open_tobii_button.isEnabled()
+    assert "七鑫易维" in dialog.calibration_tip.text()
+
     dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("just_need_to_see_bundle"))
     assert dialog.compatibility_dll_edit.isEnabled()
     assert not dialog.bridge_host_edit.isEnabled()
+
+
+def test_seveninvensun_source_rejects_nonlocal_bridge(
+    qtbot: QtBot,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(environment="test", data_dir=tmp_path, gaze_source="mock")
+    dialog = DeviceSettingsDialog(settings, GazeDeviceConfigStore.for_settings(settings))
+    qtbot.addWidget(dialog)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        device_settings_module.QMessageBox,
+        "warning",
+        lambda _parent, _title, message: warnings.append(message),
+    )
+
+    dialog.source_combo.setCurrentIndex(dialog.source_combo.findData("seveninvensun_bridge"))
+    dialog.bridge_host_edit.setText("192.168.1.20")
+
+    assert not dialog._validate_config(dialog.build_config())
+    assert warnings == ["七鑫易维 SDK 桥只允许使用 localhost、127.0.0.1 或 ::1。"]
 
 
 def test_legacy_file_source_is_presented_as_third_party_compatibility(

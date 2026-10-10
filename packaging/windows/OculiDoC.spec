@@ -38,6 +38,9 @@ datas = collect_data_files(
         "assets/stimuli/*.png",
     ],
 )
+datas.append((str(SOURCE_ROOT / "oculidoc" / "devices" / "webcam_worker.py"), "oculidoc/devices"))
+datas.append((str(SOURCE_ROOT / "oculidoc" / "devices" / "acies.py"), "oculidoc/devices"))
+datas.append((str(SOURCE_ROOT / "oculidoc" / "vendor_helpers" / "thinks_tracker_worker.py"), "oculidoc/vendor_helpers"))
 hiddenimports = sorted(
     set(
         collect_submodules(
@@ -45,6 +48,21 @@ hiddenimports = sorted(
         )
         + collect_submodules(
             "oculidoc.api"
+        )
+        + collect_submodules(
+            "oculidoc.signal_tasks"
+        )
+        + collect_submodules(
+            "oculidoc.bci"
+        )
+        + collect_submodules(
+            "oculidoc.signals"
+        )
+        + collect_submodules(
+            "oculidoc.devices.eeg"
+        )
+        + collect_submodules(
+            "websockets"
         )
         + [
             "oculidoc.package_smoke",
@@ -94,6 +112,14 @@ analysis = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# Qt6Core on Windows links against the OS ICU DLL. A similarly named DLL on
+# the builder's PATH may have incompatible exports and must not shadow it.
+analysis.binaries = [
+    binary
+    for binary in analysis.binaries
+    if Path(binary[0]).name.casefold() not in {"icuuc.dll", "icudt78.dll"}
+]
 
 pyz = PYZ(
     analysis.pure

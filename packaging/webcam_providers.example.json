@@ -1,0 +1,11 @@
+{
+  "camera_index": 0,
+  "camera_width": 1280,
+  "camera_height": 720,
+  "providers": {
+    "acies": {
+      "python": "C:/path/to/External/Webcam/ACIES/.venv/Scripts/python.exe",
+      "face_model": "C:/path/to/External/Webcam/ACIES/models/face_landmarker.task"
+    }
+  }
+}

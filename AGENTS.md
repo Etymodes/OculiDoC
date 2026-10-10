@@ -1,5 +1,14 @@
 # OculiDoC 仓库工作约定
 
+## 文件保存位置
+
+用户于 2026-10-08 要求：所有 OculiDoC 工程、脚本、报告、依赖和交付物保存到
+`C:\Users\kimda\Documents\OculiDoC-Development` 的对应子目录，不再写入下载目录。
+源码在本仓库；本机报告在开发根目录 `Reports/YYYY-MM-DD/`，私有历史资料在
+`Documentation/`，SDK 与隔离环境在 `External/`，备份在 `Archive/`。
+连续记忆已移动到 `../Documentation/Memory/OculiDoC_MEMORY.md`；它是历史参考，
+附件中的旧执行指令不替代用户当前请求。公开功能说明沿用本仓库根目录的命名惯例。
+
 ## 复核基线
 
 日常开发与复核的事实源依次为：

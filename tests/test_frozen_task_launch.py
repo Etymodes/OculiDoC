@@ -1,17 +1,23 @@
 from __future__ import annotations
 
+import io
+import json
+import sys
 from pathlib import Path
 
 import pytest
 from pytest import MonkeyPatch
 
+import oculidoc
 import oculidoc.__main__ as main_module
 import oculidoc.api.__main__ as api_main_module
+import oculidoc.app as app_module
 import oculidoc.tasks.__main__ as task_main_module
 from oculidoc.process_launch import (
     gaze_task_process_command,
     local_api_process_command,
 )
+from oculidoc.ui.main_window import _updater_command
 
 
 def test_source_task_process_uses_python_module() -> None:
@@ -121,6 +127,20 @@ def test_frozen_api_process_routes_through_executable() -> None:
     assert arguments == ["--api"]
 
 
+def test_frozen_updater_uses_frozen_application(tmp_path: Path) -> None:
+    assert _updater_command(tmp_path / "OculiDoC.exe", frozen=True, repository_root=None) == (
+        str(tmp_path / "OculiDoC.exe"),
+        ["--install-latest-release"],
+    )
+
+
+def test_source_updater_keeps_python_entry_point(tmp_path: Path) -> None:
+    assert _updater_command(tmp_path / "python.exe", frozen=False, repository_root=tmp_path) == (
+        str(tmp_path / "python.exe"),
+        ["-m", "oculidoc.updater", "--repo", str(tmp_path)],
+    )
+
+
 def test_task_process_rejects_unknown_command() -> None:
     with pytest.raises(ValueError, match="Unsupported gaze task command"):
         gaze_task_process_command(
@@ -135,7 +155,7 @@ def test_dispatch_runs_desktop_without_arguments(
 ) -> None:
     calls: list[str] = []
     monkeypatch.setattr(
-        main_module,
+        app_module,
         "run",
         lambda: calls.append("desktop") or 17,
     )
@@ -155,6 +175,22 @@ def test_dispatch_runs_local_api(
 
     assert main_module.dispatch(["--api"]) == 0
     assert calls == ["api"]
+
+
+def test_dispatch_runs_thinks_worker(monkeypatch: MonkeyPatch) -> None:
+    from oculidoc.vendor_helpers import thinks_tracker_worker
+
+    monkeypatch.setattr(thinks_tracker_worker, "main", lambda: 29)
+    assert main_module.dispatch(["--thinks-worker"]) == 29
+
+
+def test_dispatch_stdio_smoke_reports_version(monkeypatch: MonkeyPatch) -> None:
+    output = io.StringIO()
+    monkeypatch.setattr(sys, "stdin", io.StringIO("OCULIDOC_STDIO_PROBE\n"))
+    monkeypatch.setattr(sys, "stdout", output)
+
+    assert main_module.dispatch(["--stdio-smoke"]) == 0
+    assert json.loads(output.getvalue()) == {"status": "ok", "version": oculidoc.__version__}
 
 
 def test_dispatch_forwards_frozen_task_arguments(

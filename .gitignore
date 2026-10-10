@@ -10,6 +10,7 @@ htmlcov/
 
 # Virtual environments
 .venv/
+.release-venv/
 venv/
 env/
 ops/
@@ -31,6 +32,7 @@ Thumbs.db
 !.env.example
 *.pem
 *.key
+*.lic
 
 # Runtime and patient data
 var/*
@@ -40,6 +42,8 @@ data/sessions/
 data/exports/
 data/backups/
 logs/
+*.log
+data/runtime/
 tmp/
 temp/
 user_log/
@@ -53,10 +57,14 @@ user_log/
 *.hdf5
 *.pkl
 *.pickle
+*.dat
 
 # Legacy binaries are not committed
 MCeyegazethesisNET461.exe
 *.dll
+*.exe
+*.pdb
+*.zip
 
 # Runtime eye-observation images and labels
 data/eye_observations/

@@ -171,6 +171,8 @@ def prepare_window(
     )
     qtbot.addWidget(window)
     window._set_current_patient(patient)
+    window._patient_screen_name = "patient-display"
+    monkeypatch.setattr(window, "_place_patient_display", lambda: True)
 
     return window, runtime, patient, messages
 

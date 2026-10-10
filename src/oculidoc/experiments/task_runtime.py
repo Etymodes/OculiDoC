@@ -72,6 +72,7 @@ class RecordedTaskRuntime(QObject):
         self.session_id = session_id or os.getenv("OCULIDOC_SESSION_ID") or str(uuid4())
         self.task_kind = task_kind or self._infer_task_kind(task)
         self.announce = announce
+        self.gaze_source_metadata: dict[str, object] = {}
 
         if session_directory is None:
             session_directory = os.getenv("OCULIDOC_SESSION_DIRECTORY")
@@ -659,6 +660,8 @@ class RecordedTaskRuntime(QObject):
                 task_result = {"task_result_error": (str(error))}
 
             task_result["recording_failed"] = self._recording_failed
+            if self.gaze_source_metadata:
+                task_result["gaze_source"] = dict(self.gaze_source_metadata)
             recorder.finish(
                 reason=reason_text,
                 result=task_result,

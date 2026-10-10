@@ -12,20 +12,22 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_release_uses_one_consistent_version() -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert metadata["project"]["version"] == "0.1.2"
-    assert oculidoc.__version__ == "0.1.2"
+    assert metadata["project"]["version"] == "0.1.3"
+    assert oculidoc.__version__ == "0.1.3"
 
 
 def test_public_readme_has_evaluation_license_and_support_path() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "面向意识障碍患者的眼动仪操作界面与实验数据台" in readme
-    assert "公众可下载、安装和运行官方 v0.1.1" in readme
+    assert "公众可下载、安装和运行官方 v0.1.3" in readme
     assert "76 张刺激图和品牌资源" in readme
     assert "仅限非临床工程评估" in readme
     assert "不代表医院或科室的官方发布" in readme
     assert "不得用于任何\n真实患者或临床用途" in readme
-    assert "LICENSE-v0.1.1.txt" in readme
+    assert "LICENSE-v0.1.3.txt" in readme
+    assert "摄像头索引保存至本机配置" in readme
+    assert "ThinksTracker 是与 Tobii、七鑫易维并列的独立眼动源" in readme
     assert "GitHub Issues" in readme
     assert "mailto:" not in readme
     assert "首都医科大学天坛医院意识障碍病区所有" not in readme
@@ -37,16 +39,19 @@ def test_public_readme_has_evaluation_license_and_support_path() -> None:
     assert "校准显示器与全屏任务所在显示器为同一固定显示器" in readme
 
 
-def test_notice_limits_public_permission_to_v011_nonclinical_evaluation() -> None:
+def test_notice_limits_public_permission_to_v013_nonclinical_evaluation() -> None:
     notice = (ROOT / "NOTICE.md").read_text(encoding="utf-8")
 
-    assert "`v0.1.1` 标签及其官方 GitHub Release" in notice
+    assert "`v0.1.3` 标签及其官方 GitHub Release" in notice
     assert "76 张刺激图和品牌资源" in notice
-    assert "安装和运行 OculiDoC v0.1.1" in notice
+    assert "安装和运行 OculiDoC v0.1.3" in notice
     assert "仅限非临床工程评估" in notice
     assert "不授予通用开源许可" in notice
     assert "任何真实患者或临床用途" in notice
     assert "拆出、独立复用、改作或再分发刺激图及品牌资源" in notice
+    assert "LICENSE-v0.1.3.txt" in notice
+    assert "v0.1.1 的历史许可保留" in notice
+    assert "ThinksTracker" in notice
     assert "本版本不是医院或科室的官方发行" in notice
     assert "mailto:" not in notice
     assert "首都医科大学天坛医院意识障碍病区所有" not in notice
@@ -184,7 +189,9 @@ def test_release_notes_disclose_pre_1_0_trust_boundary() -> None:
     assert "76 张刺激图和品牌资源" in notes
     assert "仅限非临床工程评估" in notes
     assert "不得用于任何真实患者或临床" in notes
-    assert "LICENSE-v0.1.1.txt" in notes
+    assert "LICENSE-v0.1.3.txt" in notes
+    assert "OculiDoC-v0.1.3-windows-x64-portable.zip" in notes
+    assert "检查更新" in notes
     assert "gh attestation verify" in notes
     assert "真实 Tobii" in notes
     assert "床旁" in notes
