@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import UUID
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -92,6 +93,59 @@ def test_default_workbench_lists_only_active_patients_without_auto_selection(
     work_area = window.plan_button.parentWidget()
     assert work_area is not None
     assert window.plan_button.geometry().top() > work_area.height() * 0.55
+
+    window.close()
+    runtime.dispose()
+
+
+def test_scrolled_patient_click_keeps_current_patient_and_highlight_in_sync(
+    qtbot: QtBot,
+    tmp_path: Path,
+) -> None:
+    settings = Settings(environment="test", data_dir=tmp_path)
+    runtime = initialize_database(settings.database_path, data_root=tmp_path)
+    patients = [
+        runtime.patient_service.register_patient(
+            RegisterPatientRequest(
+                patient_code=f"DOC-{index:02}",
+                family_name=f"患者{index:02}",
+            )
+        )
+        for index in range(40)
+    ]
+    window = AdminMainWindow(
+        settings,
+        runtime.patient_service,
+        runtime.experiment_session_service,
+    )
+    qtbot.addWidget(window)
+    window.show()
+
+    patient_list = window.workbench_patient_list
+    for target in (patients[30], patients[39]):
+        target_id = str(target.patient_id)
+        target_item = next(
+            patient_list.item(index)
+            for index in range(patient_list.count())
+            if patient_list.item(index).data(Qt.ItemDataRole.UserRole) == target_id
+        )
+        patient_list.scrollToItem(target_item)
+        qtbot.mouseClick(
+            patient_list.viewport(),
+            Qt.MouseButton.LeftButton,
+            pos=patient_list.visualItemRect(target_item).center(),
+        )
+        qtbot.waitUntil(
+            lambda target_id=target_id: (
+                window.current_patient is not None
+                and str(window.current_patient.patient_id) == target_id
+            )
+        )
+
+        current_item = patient_list.currentItem()
+        assert current_item is not None
+        assert current_item.data(Qt.ItemDataRole.UserRole) == target_id
+        assert patient_list.selectedItems() == [current_item]
 
     window.close()
     runtime.dispose()

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from oculidoc.config import Settings
+from oculidoc.devices.acies import OBSERVATION_LABELS
 from oculidoc.devices.contracts import EyeTrackerSample
 from oculidoc.devices.preflight import (
     GazePreflightResult,
@@ -56,6 +57,9 @@ class GazeSelfCheckDialog(QDialog):
         self.metrics_label = QLabel("采样率：— · 有效率：—")
         self.metrics_label.setStyleSheet("font-size:17px; color:#38566f;")
         root.addWidget(self.metrics_label)
+        self.quality_label = QLabel("")
+        self.quality_label.setWordWrap(True)
+        root.addWidget(self.quality_label)
 
         self.capability_label = QLabel("实际采集字段：等待自检…")
         self.capability_label.setWordWrap(True)
@@ -87,6 +91,18 @@ class GazeSelfCheckDialog(QDialog):
         self.connection_label.setText(text)
 
     def _consume_sample(self, sample: EyeTrackerSample) -> None:
+        if sample.gaze_confidence is not None:
+            mode = {
+                "binocular": "双眼",
+                "left_eye": "左眼",
+                "right_eye": "右眼",
+                "unavailable": "信息不足",
+            }.get(sample.gaze_estimation_mode or "", "未知")
+            self.quality_label.setText(
+                f"ACIES · {mode} · 信号质量 {sample.gaze_confidence:.0%}（非准确率）"
+                f"\n{OBSERVATION_LABELS.get(sample.gaze_observation_status or '', '')}"
+                " · 屏幕聚焦状态无法判定"
+            )
         self._sample_count += 1
         self._valid_count += int(sample.gaze_valid)
         self._observed_capabilities.update(observed_sample_capabilities(sample))
@@ -131,6 +147,11 @@ class GazeSelfCheckDialog(QDialog):
             device_text += f"（{identity}）"
         self.capability_label.setText(
             f"实际设备：{device_text}\n{live_result.observed_capability_text()}"
+            + (
+                "\n" + "\n".join(live_result.capability_notes)
+                if live_result.capability_notes
+                else ""
+            )
         )
 
     def _show_error(self, message: str) -> None:

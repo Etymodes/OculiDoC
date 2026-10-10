@@ -5,19 +5,33 @@ OculiDoC 自有代码、文档和素材的权属与使用限制见 [NOTICE.md](N
 
 ## Windows 冻结包
 
+### ACIES 可选视觉前端
+
+ACIES 的注视估计、质量融合、个人校准与平滑逻辑由 OculiDoC 实现；通用人脸/虹膜
+关键点来自 Google MediaPipe Face Landmarker。可选安装器把 MediaPipe 1.1.0（Apache 2.0）、
+NumPy 和 OpenCV 及它们的依赖安装在开发目录的独立环境，保留各 wheel 的许可元数据。
+Face Landmarker 模型从 Google 官方模型地址取得，单独存放，不进入 Git 或当前冻结包。
+模型和第三方软件不属于 ACIES 原创内容。三个旧摄像头估计器不参与当前推理链。
+
+[MediaPipe 官方文档](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker/python)
+及其软件/模型各自许可继续适用；本节不改变第三方组件权属。
+
+### 主程序依赖
+
 官方 Windows 安装器和便携包包含 CPython 3.11 解释器以及由 `pyproject.toml` 声明的
 第三方 Python 包。每次正式构建都会在发行目录内生成 `THIRD_PARTY_LICENSES.json`，
 记录构建环境中已安装包的名称、精确版本、上游网址、许可证元数据以及可获得的许可证和
 NOTICE 正文。该清单可能保守地列出构建或测试工具；列入清单不表示对应组件一定被加载。
 
-冻结包根目录同时包含本文件、`NOTICE.md`、`LICENSE-v0.1.1.txt`、
-`QT_SOURCE_OFFER.md`，以及 `licenses/` 内的完整许可文本。CPython 的许可证从实际用于
+冻结包根目录同时包含本文件、`NOTICE.md`、当前 `LICENSE-v0.1.3.txt`、
+仅适用于历史版本的 `LICENSE-v0.1.1.txt`、`QT_SOURCE_OFFER.md`，以及 `licenses/`
+内的完整许可文本。CPython 的许可证从实际用于
 冻结发行包的官方 CPython 3.11.9 源码标签中逐字复制，并由构建门禁锁定解释器版本。
 OpenCV 等 wheel 内附带的第三方归属正文由 `THIRD_PARTY_LICENSES.json` 一并保留。
 
 ## PySide6 / Qt
 
-OculiDoC v0.1.1 使用未修改的 PySide6 / Qt 6.11 动态库，并选择其 LGPL-3.0 许可路径；
+OculiDoC v0.1.3 使用未修改的 PySide6 / Qt 6.11 动态库，并选择其 LGPL-3.0 许可路径；
 Qt/PySide 库在安装目录的 `_internal/PySide6` 下保持为可替换的独立文件。GNU LGPL
 3.0 与 GPL 3.0 完整文本分别见 `licenses/LGPL-3.0-only.txt` 和
 `licenses/GPL-3.0-only.txt`。Qt/PySide 6.11.1 官方源码标签中的开源许可文本及精确
@@ -32,6 +46,19 @@ Qt Quick 3D/Physics、Qt Quick Timeline、Qt Virtual Keyboard 与 Qt Wayland Com
 
 Qt and the Qt logo are trademarks of The Qt Company Ltd. PySide is provided by
 the Qt for Python project. OculiDoC is not endorsed by The Qt Company.
+
+## Seveninvensun aSeeGlasses Plus SDK declarations
+
+`src/oculidoc/vendor_helpers/seveninvensun_glasses_sdk.py` 中的 C API 名称、常量和 `ctypes`
+结构布局改编自用户另行取得的七鑫易维 aSeeGlasses Plus SDK 头文件。OculiDoC 仓库及
+发行包不包含厂商 DLL、配置、授权口令、UKey 信息或校准系数；使用者必须另行取得设备、
+SDK 和相应用途的有效授权。
+
+厂商头文件要求保留的完整版权、许可和免责声明见
+`licenses/Seveninvensun-aSeeGlassesPlus-SDK.txt`（源码位置：
+`src/oculidoc/vendor_helpers/Seveninvensun-aSeeGlassesPlus-SDK.txt`，Windows 发行副本位于
+`packaging/windows/licenses/Seveninvensun-aSeeGlassesPlus-SDK.txt`）。该许可只适用于
+相应 SDK 声明，不改变 OculiDoC 其他代码和内容的权属或使用限制。
 
 ## Inno Setup
 

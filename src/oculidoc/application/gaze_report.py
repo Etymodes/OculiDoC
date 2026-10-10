@@ -352,6 +352,19 @@ def _task_result_rows(
     rows: list[tuple[str, str]] = []
     result_value = task_record.get("result")
     result = result_value if isinstance(result_value, dict) else {}
+    gaze_source = result.get("gaze_source")
+    if isinstance(gaze_source, dict):
+        rows.append(("眼动数据来源", _display_value(gaze_source.get("device_name"))))
+        if gaze_source.get("webcam_estimate") is True:
+            notes = gaze_source.get("capability_notes")
+            if isinstance(notes, list):
+                rows.append(("摄像头校准与质量", "；".join(str(note) for note in notes)))
+            rows.append(
+                (
+                    "摄像头估计边界",
+                    "已校准的摄像头算法估计，仅供研究；不等同于专用眼动仪或临床验收。",
+                )
+            )
     task_kind = task_record.get("task_kind")
     end_reason = task_record.get("end_reason")
     show_gaze_cursor = task_record.get("show_gaze_cursor")

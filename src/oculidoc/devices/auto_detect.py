@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import suppress
+from threading import Event
 from time import monotonic, sleep
 
 from oculidoc.devices.contracts import (
@@ -29,6 +30,9 @@ class AutoDetectEyeTrackerDevice:
         probe_timeout_seconds: float = 1.25,
         sample_predicate: SamplePredicate | None = None,
         required_sample_description: str = "眼动样本",
+        required_consecutive_samples: int = 1,
+        failure_message: str | None = None,
+        strict_cleanup: bool = False,
     ) -> None:
         if not candidate_factories:
             raise ValueError("Auto-detection requires at least one hardware candidate.")
@@ -39,6 +43,13 @@ class AutoDetectEyeTrackerDevice:
         self.probe_timeout_seconds = float(probe_timeout_seconds)
         self.sample_predicate = sample_predicate or (lambda _sample: True)
         self.required_sample_description = required_sample_description.strip() or "眼动样本"
+        if required_consecutive_samples < 1:
+            raise ValueError("required_consecutive_samples must be positive.")
+        self.required_consecutive_samples = required_consecutive_samples
+        self.failure_message = failure_message
+        self.strict_cleanup = strict_cleanup
+        self._cancelled = Event()
+        self._probing_device: EyeTrackerDevice | None = None
         self._device: EyeTrackerDevice | None = None
         self._prefetched_sample: EyeTrackerSample | None = None
         self._state = DeviceState.DISCONNECTED
@@ -71,6 +82,10 @@ class AutoDetectEyeTrackerDevice:
     def library_path(self) -> object | None:
         return getattr(self._device, "library_path", None)
 
+    def capability_diagnostics(self) -> tuple[str, ...]:
+        diagnostics = getattr(self._device, "capability_diagnostics", None)
+        return tuple(str(note) for note in diagnostics()) if callable(diagnostics) else ()
+
     @staticmethod
     def _cleanup_candidate(candidate: EyeTrackerDevice) -> None:
         if candidate.state is DeviceState.STREAMING:
@@ -82,14 +97,21 @@ class AutoDetectEyeTrackerDevice:
 
     def _probe_sample(self, candidate: EyeTrackerDevice) -> EyeTrackerSample:
         deadline = monotonic() + self.probe_timeout_seconds
+        consecutive = 0
         while monotonic() < deadline:
+            if self._cancelled.is_set():
+                raise DeviceConnectionError("眼动源探测已取消。")
             try:
                 sample = candidate.read_sample()
             except TimeoutError:
                 sleep(0.005)
                 continue
             if self.sample_predicate(sample):
-                return sample
+                consecutive += 1
+                if consecutive >= self.required_consecutive_samples:
+                    return sample
+            else:
+                consecutive = 0
         raise DeviceConnectionError(
             f"已连接接口，但检测时限内没有收到{self.required_sample_description}。"
         )
@@ -100,10 +122,13 @@ class AutoDetectEyeTrackerDevice:
 
         failures: list[str] = []
         for factory in self.candidate_factories:
+            if self._cancelled.is_set():
+                raise DeviceConnectionError("眼动源探测已取消。")
             candidate: EyeTrackerDevice | None = None
             name = "候选眼动接口"
             try:
                 candidate = factory()
+                self._probing_device = candidate
                 name = candidate.info.name
                 if candidate.info.is_simulated:
                     raise DeviceConnectionError("自动检测禁止使用模拟眼动源。")
@@ -113,15 +138,22 @@ class AutoDetectEyeTrackerDevice:
             except Exception as error:
                 failures.append(f"{name}：{error}")
                 if candidate is not None:
-                    self._cleanup_candidate(candidate)
+                    if self.strict_cleanup:
+                        candidate.disconnect()
+                    else:
+                        self._cleanup_candidate(candidate)
+                self._probing_device = None
                 continue
 
             self._device = candidate
+            self._probing_device = None
             self._prefetched_sample = sample
             self._state = DeviceState.CONNECTED
             return
 
         detail = "；".join(failures) if failures else "没有可探测接口"
+        if self.failure_message:
+            raise DeviceConnectionError(f"{self.failure_message} 详情：{detail}")
         raise DeviceConnectionError(
             "自动检测未发现可读取的眼动传感器。"
             "已尝试 Tobii Stream Engine 与 OculiDoC 通用 NDJSON 桥接；"
@@ -148,6 +180,8 @@ class AutoDetectEyeTrackerDevice:
             raise InvalidDeviceStateError("Connect the auto source before streaming.")
         # Detection deliberately leaves the selected hardware stream open so the
         # verified first sample and connection are not lost between probe and task.
+        if self._device.state is DeviceState.CONNECTED:
+            self._device.start_stream()
         self._state = DeviceState.STREAMING
 
     def stop_stream(self) -> None:
@@ -168,6 +202,7 @@ class AutoDetectEyeTrackerDevice:
         return self._device.read_sample()
 
     def interrupt(self) -> None:
-        interrupt = getattr(self._device, "interrupt", None)
+        self._cancelled.set()
+        interrupt = getattr(self._device or self._probing_device, "interrupt", None)
         if callable(interrupt):
             interrupt()

@@ -68,6 +68,8 @@ build = [
 [project.scripts]
 oculidoc = "oculidoc.__main__:main"
 oculidoc-api = "oculidoc.api.__main__:main"
+oculidoc-asee-glasses-probe = "oculidoc.vendor_helpers.check_seveninvensun_glasses_live:main"
+oculidoc-asee-glasses-calibrate = "oculidoc.vendor_helpers.calibrate_seveninvensun_glasses:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -99,4 +101,9 @@ oculidoc = [
   "assets/*.png",
   "assets/stimuli/*.json",
   "assets/stimuli/*.png",
+]
+"oculidoc.devices" = ["webcam_worker.py", "acies.py"]
+"oculidoc.vendor_helpers" = [
+  "Seveninvensun-aSeeGlassesPlus-SDK.txt",
+  "thinks_tracker_worker.py",
 ]

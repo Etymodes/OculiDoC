@@ -41,6 +41,7 @@ from oculidoc.infrastructure.database import (
 )
 from oculidoc.lan_control import PatientDisplayMode
 from oculidoc.modules.registry import DEFAULT_MODULES
+from oculidoc.process_launch import PATIENT_SCREEN_NAME_ENV
 from oculidoc.ui.main_window import AdminMainWindow
 
 
@@ -467,6 +468,13 @@ def test_main_window_launches_patient_scoped_task(
     )
     qtbot.addWidget(window)
     window._set_current_patient(patient)
+    window._patient_screen_name = "patient-display"
+    monkeypatch.setattr(window, "_place_patient_display", lambda: True)
+    monkeypatch.setattr(
+        window._patient_window,
+        "screen",
+        lambda: type("OperatorScreen", (), {"name": lambda self: "operator-display"})(),
+    )
 
     module = next(item for item in DEFAULT_MODULES if item.module_id == "tracking_ball")
     window._open_module(module)
@@ -485,6 +493,7 @@ def test_main_window_launches_patient_scoped_task(
     assert process.environment.value("OCULIDOC_PATIENT_ID") == str(patient.patient_id)
     assert process.environment.value("OCULIDOC_SESSION_ID") == str(session_id)
     assert process.environment.value("OCULIDOC_SESSION_DIRECTORY") == str(launch.session_directory)
+    assert process.environment.value(PATIENT_SCREEN_NAME_ENV) == "patient-display"
 
     window._lan_state_store.set_display(
         "准备",

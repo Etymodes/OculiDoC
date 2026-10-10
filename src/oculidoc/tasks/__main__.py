@@ -1,13 +1,17 @@
 """Standalone demos for gaze-driven tasks."""
 
 import argparse
+import os
+import sys
 from collections.abc import Sequence
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtTextToSpeech import QTextToSpeech
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QMessageBox,
+    QWidget,
 )
 
 from oculidoc.app import create_qt_application
@@ -20,6 +24,7 @@ from oculidoc.lan_control import (
     LanControlTransitionError,
     PatientDisplayMode,
 )
+from oculidoc.process_launch import PATIENT_SCREEN_NAME_ENV
 from oculidoc.speech_replay import SpeechReplayStore
 from oculidoc.task_configs import (
     TaskConfigConflict,
@@ -87,6 +92,25 @@ TASK_RESULT_MESSAGE_MILLISECONDS = 6_000
 
 def _task_exit_code(reason: str) -> int:
     return 3 if reason == "device_error" else 0
+
+
+def _place_window_on_patient_screen(
+    window: QWidget,
+    application: QApplication,
+    screen_name: str | None,
+) -> bool:
+    """Move a patient-facing task to the screen selected by the administrator."""
+    target_name = screen_name.strip() if screen_name else ""
+    target_screen = next(
+        (screen for screen in application.screens() if screen.name() == target_name),
+        None,
+    )
+    if target_screen is None:
+        return False
+
+    window.setScreen(target_screen)
+    window.move(target_screen.geometry().topLeft())
+    return True
 
 
 def _exec_task_setup(dialog: QDialog) -> QDialog.DialogCode:
@@ -679,6 +703,28 @@ def main(
             app.quit()
             return
 
+        patient_screen_name = os.environ.get(PATIENT_SCREEN_NAME_ENV)
+        if patient_screen_name and not _place_window_on_patient_screen(
+            window,
+            app,
+            patient_screen_name,
+        ):
+            print(
+                f"Patient screen is unavailable: {patient_screen_name!r}",
+                file=sys.stderr,
+                flush=True,
+            )
+            try:
+                display_state_store.set_display(
+                    "患者显示屏已断开\n任务未启动",
+                    mode=PatientDisplayMode.ERROR,
+                    task_id=module_id,
+                )
+            except LanControlTransitionError:
+                pass
+            app.exit(3)
+            return
+
         task_started = True
         display_state_store.set_display(
             f"正在进行：{title}",
@@ -702,6 +748,16 @@ def main(
     def begin_countdown(result: GazePreflightResult) -> None:
         if not result.passed:
             return
+
+        recorded_runtime.gaze_source_metadata = {
+            "configured_source": result.source,
+            "device_name": result.device_name,
+            "is_simulated": result.is_simulated,
+            "webcam_estimate": "webcam_estimate" in result.advertised_capabilities,
+            "preflight_valid_ratio": result.valid_ratio,
+            "preflight_sample_rate_hz": result.sample_rate_hz,
+            "capability_notes": list(result.capability_notes),
+        }
 
         current = display_state_store.load()
         if current.mode is not PatientDisplayMode.PREVIEW or current.task_id != module_id:

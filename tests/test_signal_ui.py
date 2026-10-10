@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QCheckBox, QPushButton
+from PySide6.QtWidgets import QCheckBox, QFrame, QPushButton
 from pytestqt.qtbot import QtBot
 
 from oculidoc.config import Settings
@@ -78,7 +78,22 @@ def test_admin_homepage_registers_neural_module_without_breaking_gaze(
     identifiers = {module.module_id for module in ALL_MODULES}
     assert "neural_interaction" in identifiers
     assert window.findChild(QPushButton, "moduleButton_tracking_ball") is not None
-    assert window.findChild(QPushButton, "openSignalWorkbenchButton") is not None
+    signal_strip = window.findChild(QFrame, "workbenchSignalStrip")
+    task_strip = window.findChild(QFrame, "workbenchTaskStrip")
+    signal_selector = window.findChild(SignalParadigmSelector, "signalParadigmSelector")
+    signal_button = window.findChild(QPushButton, "openSignalWorkbenchButton")
+    assert signal_strip is not None
+    assert task_strip is not None
+    assert signal_selector is not None
+    assert signal_button is not None
+    assert signal_selector.parentWidget() is signal_strip
+    assert signal_button.parentWidget() is signal_strip
+    strip_parent = signal_strip.parentWidget()
+    assert strip_parent is not None
+    assert strip_parent is task_strip.parentWidget()
+    parent_layout = strip_parent.layout()
+    assert parent_layout is not None
+    assert parent_layout.indexOf(signal_strip) + 1 == parent_layout.indexOf(task_strip)
 
 
 def test_signal_stimulus_window_completes_off_main_thread(

@@ -24,6 +24,7 @@ if (-not (Test-Path $installerDefinition -PathType Leaf)) {
 }
 
 $requiredBundleDocuments = @(
+    "LICENSE-v0.1.3.txt",
     "LICENSE-v0.1.1.txt",
     "NOTICE.md",
     "THIRD_PARTY_NOTICES.md",

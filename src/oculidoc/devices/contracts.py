@@ -214,8 +214,18 @@ class EyeTrackerSample:
     right_eye_position_normalized: tuple[float, float, float] | None = None
     left_eye_position_mm: tuple[float, float, float] | None = None
     right_eye_position_mm: tuple[float, float, float] | None = None
+    gaze_confidence: float | None = None
+    gaze_estimation_mode: str | None = None
+    gaze_observation_status: str | None = None
+    screen_focus_status: str | None = None
 
     def __post_init__(self) -> None:
+        if self.screen_focus_status not in (None, "unknown"):
+            raise ValueError("screen_focus_status is not an available optical-focus measurement.")
+        if self.gaze_confidence is not None and (
+            not isfinite(self.gaze_confidence) or not 0 <= self.gaze_confidence <= 1
+        ):
+            raise ValueError("gaze_confidence must be finite and between zero and one.")
         for field_name in (
             "gaze_x_normalized",
             "gaze_y_normalized",

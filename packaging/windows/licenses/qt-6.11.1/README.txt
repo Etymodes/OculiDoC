@@ -2,7 +2,7 @@ Qt / PySide6 6.11.1 license-text provenance
 
 These license texts were copied verbatim from the official v6.11.1 source
 tags on 2026-07-30. Commercial-license and documentation-only GFDL texts were
-not included because OculiDoC v0.1.1 selects the LGPL-3.0 path and does not
+not included because OculiDoC v0.1.3 selects the LGPL-3.0 path and does not
 redistribute Qt documentation.
 
 qtbase

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from pytestqt.qtbot import QtBot
 
 from oculidoc.app import create_admin_window
@@ -36,7 +37,15 @@ def test_create_admin_window_initializes_database(
     patients = database_runtime.patient_service.list_patients()
 
     assert [patient.patient_code for patient in patients] == [BUILTIN_TEST_PATIENT_CODE]
-    assert window.patient_label.text() == ("已登记 1 名患者，其中 1 名启用；尚未选择当前患者。")
+    assert window.current_patient is not None
+    assert window.current_patient.patient_code == BUILTIN_TEST_PATIENT_CODE
+    selected_item = window.workbench_patient_list.currentItem()
+    assert selected_item is not None
+    assert selected_item.data(Qt.ItemDataRole.UserRole) == str(window.current_patient.patient_id)
+    assert window.workbench_patient_list.selectedItems() == [selected_item]
+    assert window.patient_label.text().startswith(
+        f"当前患者：{window.current_patient.display_label}"
+    )
 
     window.close()
     database_runtime.dispose()

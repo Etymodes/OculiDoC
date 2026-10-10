@@ -240,13 +240,18 @@ def test_patient_display_is_prepared_below_admin_at_startup(
     )
     monkeypatch.setattr(
         window,
+        "_place_patient_display",
+        lambda: events.append("patient-place") or True,
+    )
+    monkeypatch.setattr(
+        window,
         "_restore_admin_window",
         lambda: events.append("admin-raise"),
     )
 
     window._show_patient_display_behind_admin()
 
-    assert events == ["patient-show", "patient-lower", "admin-raise"]
+    assert events == ["patient-place", "patient-show", "patient-lower", "admin-raise"]
 
 
 def test_task_launch_lowers_admin_then_raises_patient_before_child_process(
@@ -264,7 +269,7 @@ def test_task_launch_lowers_admin_then_raises_patient_before_child_process(
     monkeypatch.setattr(
         window,
         "_open_patient_display",
-        lambda: events.append("patient-raise"),
+        lambda: events.append("patient-raise") or True,
     )
     monkeypatch.setattr(
         window,
@@ -275,6 +280,41 @@ def test_task_launch_lowers_admin_then_raises_patient_before_child_process(
     window._open_gaze_task_module(module)
 
     assert events == ["admin-lower", "patient-raise", "task-process"]
+
+
+def test_task_launch_stops_when_the_assigned_patient_screen_is_missing(
+    qtbot: QtBot,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    window = AdminMainWindow(Settings(environment="test", data_dir=tmp_path, gaze_source="mock"))
+    qtbot.addWidget(window)
+    window.current_patient = SimpleNamespace(patient_id=uuid4())  # type: ignore[assignment]
+    window.experiment_session_service = object()  # type: ignore[assignment]
+    module = next(item for item in DEFAULT_MODULES if item.module_id == "tracking_ball")
+    events: list[str] = []
+    monkeypatch.setattr(window, "lower", lambda: events.append("admin-lower"))
+    monkeypatch.setattr(window, "_open_patient_display", lambda: False)
+    monkeypatch.setattr(
+        window,
+        "_restore_admin_window",
+        lambda: events.append("admin-restore"),
+    )
+    monkeypatch.setattr(
+        window,
+        "_launch_gaze_task_process",
+        lambda *args, **kwargs: events.append("task-process"),
+    )
+    monkeypatch.setattr(
+        main_window_module.QMessageBox,
+        "warning",
+        lambda *args: events.append("warning"),
+    )
+
+    window._open_gaze_task_module(module)
+
+    assert events == ["admin-lower", "admin-restore", "warning"]
+    assert module.module_id not in window._active_gaze_module_ids
 
 
 def test_main_window_refreshes_lan_address(

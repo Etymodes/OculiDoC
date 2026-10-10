@@ -17,6 +17,7 @@ _TASK_COMMANDS = frozenset(
     }
 )
 _GAZE_GAME_MODES = frozenset({"garden", "treasure_hunt", "starlight_route"})
+PATIENT_SCREEN_NAME_ENV = "OCULIDOC_PATIENT_SCREEN_NAME"
 
 
 def is_frozen_application() -> bool:

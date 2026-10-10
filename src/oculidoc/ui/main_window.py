@@ -85,6 +85,7 @@ from oculidoc.lan_control import (
 )
 from oculidoc.modules.registry import ALL_MODULES, DEFAULT_MODULES, ModuleDefinition
 from oculidoc.process_launch import (
+    PATIENT_SCREEN_NAME_ENV,
     gaze_task_process_command,
     is_frozen_application,
     local_api_process_command,
@@ -127,6 +128,49 @@ from oculidoc.vision.camera_preview_window import (
 )
 
 RESULT_DISPLAY_MILLISECONDS = 6_000
+
+
+def _updater_command(
+    executable: Path, *, frozen: bool, repository_root: Path | None
+) -> tuple[str, list[str]]:
+    if frozen:
+        return str(executable), ["--install-latest-release"]
+    if repository_root is None:
+        raise ValueError("未找到 OculiDoC 源码仓库。")
+    return str(executable), ["-m", "oculidoc.updater", "--repo", str(repository_root)]
+
+
+def _default_patient_screen_name(application: QApplication) -> str | None:
+    """Choose one stable patient-display target for this application run."""
+    primary_screen = application.primaryScreen()
+    if primary_screen is None:
+        return None
+
+    target_screen = next(
+        (screen for screen in application.screens() if screen != primary_screen),
+        primary_screen,
+    )
+    name = target_screen.name().strip()
+    return name or None
+
+
+def _place_window_on_named_screen(
+    window: QWidget,
+    application: QApplication,
+    screen_name: str | None,
+) -> bool:
+    """Place a top-level window on an existing screen without fallback."""
+    target_name = screen_name.strip() if screen_name else ""
+    target_screen = next(
+        (screen for screen in application.screens() if screen.name() == target_name),
+        None,
+    )
+    if target_screen is None:
+        return False
+
+    window.setScreen(target_screen)
+    window.move(target_screen.geometry().topLeft())
+    return True
 
 
 class AdminMainWindow(QMainWindow):
@@ -209,12 +253,19 @@ class AdminMainWindow(QMainWindow):
         self._lan_command_timer.timeout.connect(self._poll_lan_commands)
         self._patient_window = PatientDisplayWindow()
         self._patient_window.exit_requested.connect(self._handle_patient_display_exit)
+        application = QApplication.instance()
+        self._patient_screen_name = (
+            _default_patient_screen_name(application)
+            if isinstance(application, QApplication)
+            else None
+        )
         initial_display_state = self._lan_state_store.reset_idle()
         self._last_lan_revision = initial_display_state.revision
         self._patient_window.apply_state(initial_display_state)
 
         self.setWindowTitle("OculiDoC 管理员端")
-        self.resize(1280, 820)
+        available_height = self.screen().availableGeometry().height()
+        self.resize(1280, min(960, max(700, available_height - 48)))
         self.setMinimumSize(1080, 700)
         self.setStyleSheet(
             """
@@ -225,7 +276,8 @@ class AdminMainWindow(QMainWindow):
             QLabel#sectionTitle { color: #17324d; font-size: 21px; font-weight: 700; }
             QLabel#moduleTitle { color: #18344c; font-size: 19px; font-weight: 700; }
             QLabel#moduleDescription { color: #577083; font-size: 14px; }
-            QFrame#panel, QFrame#moduleCard, QFrame#workbenchTaskStrip {
+            QFrame#panel, QFrame#moduleCard, QFrame#workbenchSignalStrip,
+            QFrame#workbenchTaskStrip {
                 background: white;
                 border: 1px solid #d9e3ec;
                 border-radius: 14px;
@@ -381,9 +433,12 @@ class AdminMainWindow(QMainWindow):
 
         labels = {
             "auto": "硬件自动检测",
+            "auto_webcam": "自动：眼动仪 → 摄像头",
+            "webcam": "ACIES 摄像头识别（研究估计）",
             "gaze_collect_legacy": "第三方兼容",
             "just_need_to_see_bundle": "Tobii DLL兼容",
             "seveninvensun_bridge": "七鑫易维 aSee 本机 SDK 桥",
+            "thinks_tracker": "ThinksTracker 眼动仪",
             "tobii_hospital_bridge": "原监听兼容",
             "tobii_stream_engine": "Tobii 原生 Stream",
             "tobii_legacy_bridge": "第三方兼容",
@@ -393,8 +448,8 @@ class AdminMainWindow(QMainWindow):
         if preflight is None:
             return f"眼动源：{source_name} · 尚未预检"
 
-        if self.settings.gaze_source == "auto":
-            source_name = f"硬件自动检测 → {preflight.device_name}"
+        if self.settings.gaze_source in {"auto", "auto_webcam", "webcam"}:
+            source_name = f"{source_name} → {preflight.device_name}"
 
         connection = "已连接" if self._active_gaze_module_ids else "最近预检"
         suffix = (
@@ -573,14 +628,13 @@ class AdminMainWindow(QMainWindow):
         if confirmation != QMessageBox.StandardButton.Yes:
             return
 
+        program, arguments = _updater_command(
+            Path(sys.executable), frozen=frozen, repository_root=repository_root
+        )
         process = QProcess(self)
         process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        process.setProgram(sys.executable)
-        process.setArguments(
-            ["--install-latest-release"]
-            if frozen
-            else ["-m", "oculidoc.updater", "--repo", str(repository_root)]
-        )
+        process.setProgram(program)
+        process.setArguments(arguments)
         process.finished.connect(self._finish_update_check)
         self._update_process = process
         self.update_button.setEnabled(False)
@@ -767,17 +821,6 @@ class AdminMainWindow(QMainWindow):
         self.recent_result_label.setStyleSheet("color:#5a7184;")
         current_layout.addWidget(self.recent_result_label)
 
-        self.signal_paradigm_selector = SignalParadigmSelector()
-        self.signal_paradigm_selector.setObjectName("signalParadigmSelector")
-        self.signal_paradigm_selector.set_patient_available(False)
-        self.signal_paradigm_selector.selection_changed.connect(self._persist_signal_paradigms)
-        current_layout.addWidget(self.signal_paradigm_selector)
-
-        self.signal_workbench_button = QPushButton("配置神经信号独立任务")
-        self.signal_workbench_button.setObjectName("openSignalWorkbenchButton")
-        self.signal_workbench_button.clicked.connect(self._open_signal_workbench)
-        self.signal_workbench_button.setEnabled(False)
-        current_layout.addWidget(self.signal_workbench_button)
         current_layout.addStretch(1)
 
         self.plan_button = QPushButton("编排本次测试")
@@ -834,6 +877,25 @@ class AdminMainWindow(QMainWindow):
         panels.addWidget(current_panel, 2)
         panels.addWidget(tools_panel, 1)
         root.addLayout(panels, 1)
+
+        signal_strip = QFrame()
+        signal_strip.setObjectName("workbenchSignalStrip")
+        signal_strip_layout = QHBoxLayout(signal_strip)
+        signal_strip_layout.setContentsMargins(12, 9, 12, 9)
+        signal_strip_layout.setSpacing(12)
+
+        self.signal_paradigm_selector = SignalParadigmSelector()
+        self.signal_paradigm_selector.setObjectName("signalParadigmSelector")
+        self.signal_paradigm_selector.set_patient_available(False)
+        self.signal_paradigm_selector.selection_changed.connect(self._persist_signal_paradigms)
+        signal_strip_layout.addWidget(self.signal_paradigm_selector, 1)
+
+        self.signal_workbench_button = QPushButton("配置神经信号独立任务")
+        self.signal_workbench_button.setObjectName("openSignalWorkbenchButton")
+        self.signal_workbench_button.clicked.connect(self._open_signal_workbench)
+        self.signal_workbench_button.setEnabled(False)
+        signal_strip_layout.addWidget(self.signal_workbench_button)
+        root.addWidget(signal_strip)
 
         task_strip = QFrame()
         task_strip.setObjectName("workbenchTaskStrip")
@@ -1008,7 +1070,14 @@ class AdminMainWindow(QMainWindow):
             return
 
         dialog = DeviceSettingsDialog(
-            self.settings,
+            self.settings.model_copy(
+                update={
+                    "patient_id": str(self.current_patient.patient_id)
+                    if self.current_patient
+                    else "",
+                    "patient_screen_name": self._patient_screen_name or "",
+                }
+            ),
             self._gaze_device_config_store,
             self._current_gaze_preflight(),
             self,
@@ -1233,6 +1302,7 @@ class AdminMainWindow(QMainWindow):
             state.mode is not PatientDisplayMode.CLOSED
             and self.settings.environment != "test"
             and not self._patient_window.isVisible()
+            and self._place_patient_display()
         ):
             self._patient_window.showFullScreen()
 
@@ -1320,7 +1390,8 @@ class AdminMainWindow(QMainWindow):
 
     def _execute_lan_command(self, command: LanCommand) -> str:
         if command.command_type is LanCommandType.OPEN_PATIENT_DISPLAY:
-            self._open_patient_display()
+            if not self._open_patient_display():
+                raise LanCommandRejected("启动时选定的患者显示屏已断开，请恢复显示连接并重启。")
             return "患者显示端已打开。"
 
         if command.command_type is LanCommandType.START_TASK:
@@ -1447,7 +1518,15 @@ class AdminMainWindow(QMainWindow):
         request = self._speech_replay_store.request(active_module)
         return f"已请求重播当前任务语音（版本 {request.revision}）。"
 
-    def _open_patient_display(self, checked: bool = False) -> None:
+    def _place_patient_display(self) -> bool:
+        application = QApplication.instance()
+        return isinstance(application, QApplication) and _place_window_on_named_screen(
+            self._patient_window,
+            application,
+            self._patient_screen_name,
+        )
+
+    def _open_patient_display(self, checked: bool = False) -> bool:
         del checked
         state = self._lan_state_store.load()
 
@@ -1456,20 +1535,26 @@ class AdminMainWindow(QMainWindow):
 
         self._last_lan_revision = state.revision
         self._patient_window.apply_state(state)
+        if not self._place_patient_display():
+            return False
         self._patient_window.showFullScreen()
         self._patient_window.raise_()
         self._patient_window.activateWindow()
+        return True
 
-    def _show_patient_display_behind_admin(self) -> None:
+    def _show_patient_display_behind_admin(self) -> bool:
         """Prepare the patient screen without covering the administrator."""
         state = self._lan_state_store.load()
         if state.mode is PatientDisplayMode.CLOSED:
             state = self._lan_state_store.reset_idle()
         self._last_lan_revision = state.revision
         self._patient_window.apply_state(state)
+        if not self._place_patient_display():
+            return False
         self._patient_window.showFullScreen()
         self._patient_window.lower()
         self._restore_admin_window()
+        return True
 
     def _handle_patient_display_exit(self) -> None:
         state = self._lan_state_store.load()
@@ -1649,7 +1734,7 @@ class AdminMainWindow(QMainWindow):
             )
             return
         patient = self.patient_service.get_patient(UUID(str(raw_patient_id)))
-        self._set_current_patient(patient)
+        QTimer.singleShot(0, lambda patient=patient: self._set_current_patient(patient))
 
     def _task_config_revisions(self) -> dict[str, int]:
         revisions: dict[str, int] = {}
@@ -2544,7 +2629,15 @@ class AdminMainWindow(QMainWindow):
         patient_id = self.current_patient.patient_id
         self._set_gaze_module_busy(module.module_id, True)
         self.lower()
-        self._open_patient_display()
+        if not self._open_patient_display():
+            self._set_gaze_module_busy(module.module_id, False)
+            self._restore_admin_window()
+            QMessageBox.warning(
+                self,
+                "患者显示屏不可用",
+                "启动时选定的患者显示屏已断开。请恢复显示连接并重启 OculiDoC。",
+            )
+            return
         self._launch_gaze_task_process(
             module,
             patient_id=patient_id,
@@ -2596,6 +2689,9 @@ class AdminMainWindow(QMainWindow):
                 "OCULIDOC_DATA_DIR",
                 str(self.settings.data_dir),
             )
+            if not self._patient_screen_name:
+                raise RuntimeError("启动时未找到可用的患者显示屏。")
+            environment.insert(PATIENT_SCREEN_NAME_ENV, self._patient_screen_name)
             process.setProcessEnvironment(environment)
             program, arguments = gaze_task_process_command(
                 launch.command,
