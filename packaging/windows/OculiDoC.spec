@@ -40,6 +40,7 @@ datas = collect_data_files(
 )
 datas.append((str(SOURCE_ROOT / "oculidoc" / "devices" / "webcam_worker.py"), "oculidoc/devices"))
 datas.append((str(SOURCE_ROOT / "oculidoc" / "devices" / "acies.py"), "oculidoc/devices"))
+datas.append((str(PROJECT_ROOT / "scripts" / "install_webcam_acies.ps1"), "scripts"))
 datas.append((str(SOURCE_ROOT / "oculidoc" / "vendor_helpers" / "thinks_tracker_worker.py"), "oculidoc/vendor_helpers"))
 hiddenimports = sorted(
     set(

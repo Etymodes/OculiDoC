@@ -441,6 +441,7 @@
                 "--package-smoke",
                 $smokePath
             ) `
+            -WindowStyle Hidden `
             -Wait `
             -PassThru
 

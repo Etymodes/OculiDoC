@@ -20,7 +20,7 @@ from oculidoc.devices.acies import (
     validate_observation_model,
 )
 from oculidoc.devices.errors import DeviceConnectionError
-from oculidoc.devices.webcam_gaze import load_calibration, predict_calibration
+from oculidoc.devices.webcam_gaze import calibration_snapshot, load_calibration, predict_calibration
 
 CONDITIONS = {
     "baseline": "正常注视：自然坐姿，看蓝点",
@@ -65,7 +65,7 @@ def load_paired_candidate(runtime: Path, original: dict[str, Any]) -> dict[str, 
         return None
     value = json.loads(path.read_text(encoding="utf-8-sig"))
     fingerprint = hashlib.sha256(
-        json.dumps(original, sort_keys=True, allow_nan=False).encode()
+        json.dumps(calibration_snapshot(original), sort_keys=True, allow_nan=False).encode()
     ).hexdigest()
     if value["baseline_sha256"] != fingerprint:
         return None  # A later calibration starts a different comparison.
@@ -83,13 +83,18 @@ def load_paired_candidate(runtime: Path, original: dict[str, Any]) -> dict[str, 
 
 
 def load_experiment_model(runtime: Path, identity: str, profile: str) -> dict[str, Any]:
-    """Read a validated model or a clearly marked local diagnostic candidate.
+    """Read a saved reusable model or a clearly marked local diagnostic candidate.
 
-    This function is exclusive to experiments. Task acquisition still uses the
-    strict loader and never reads candidates. Neither path writes a calibration.
+    Task acquisition never reads diagnostic candidates. Loading-time age and
+    accuracy grades do not become part of the frozen mapping or its identity.
+    Neither path writes a calibration.
     """
     try:
-        return {**load_calibration(runtime, identity, profile), "experiment_source": "validated"}
+        model = calibration_snapshot(load_calibration(runtime, identity, profile))
+        return {
+            **model,
+            "experiment_source": "validated" if model["validated"] else "saved_reusable",
+        }
     except DeviceConnectionError:
         pass
     files = sorted(
@@ -105,7 +110,8 @@ def load_experiment_model(runtime: Path, identity: str, profile: str) -> dict[st
             ).total_seconds()
             if (
                 metrics["identity"] != identity
-                or not 0 <= age < 8 * 3600
+                or not np.isfinite(age)
+                or age < 0
                 or metrics["algorithm_version"] not in COMPATIBLE_MODEL_VERSIONS
                 or model.get("feature_version", CALIBRATION_FEATURE_VERSION)
                 != CALIBRATION_FEATURE_VERSION

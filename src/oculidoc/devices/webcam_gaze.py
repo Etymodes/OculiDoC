@@ -45,6 +45,7 @@ from oculidoc.devices.errors import DeviceConnectionError, InvalidDeviceStateErr
 
 PROVIDERS = ("acies",)
 PROVIDER_LABELS = {"acies": "ACIES"}
+CALIBRATION_IDENTITY_PROVIDERS = "calibration_identity_providers"
 
 
 def read_webcam_config(path: Path) -> dict[str, Any]:
@@ -52,6 +53,12 @@ def read_webcam_config(path: Path) -> dict[str, Any]:
         value = json.loads(path.read_text(encoding="utf-8-sig"))
         if not isinstance(value, dict) or not isinstance(value.get("providers"), dict):
             raise ValueError("providers must be an object")
+        if CALIBRATION_IDENTITY_PROVIDERS in value:
+            identity_providers = value[CALIBRATION_IDENTITY_PROVIDERS]
+            if not isinstance(identity_providers, dict) or not isinstance(
+                identity_providers.get("acies"), dict
+            ):
+                raise ValueError("calibration_identity_providers must contain an acies object")
         camera = value.get("camera_index", 0)
         if type(camera) is not int or not 0 <= camera <= 16:
             raise ValueError("camera_index must be an integer from 0 to 16")
@@ -96,7 +103,13 @@ def save_webcam_camera_index(path: Path, index: int) -> None:
 def calibration_identity(
     config: dict[str, Any], provider: str, patient_id: str, screen: tuple[str, int, int]
 ) -> str:
-    payload = [config, provider, patient_id, screen, CALIBRATION_FEATURE_VERSION]
+    # Installation repair changes executable/model paths, not the calibrated camera.
+    # Preserve the original provider basis while all capture/subject/screen settings
+    # still participate in the existing identity hash.
+    basis = {key: value for key, value in config.items() if key != CALIBRATION_IDENTITY_PROVIDERS}
+    if CALIBRATION_IDENTITY_PROVIDERS in config:
+        basis["providers"] = config[CALIBRATION_IDENTITY_PROVIDERS]
+    payload = [basis, provider, patient_id, screen, CALIBRATION_FEATURE_VERSION]
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -120,10 +133,16 @@ class WebcamFeatureProcess:
         config = read_webcam_config(self.config_path)
         provider = config["providers"].get(self.provider)
         if not isinstance(provider, dict) or not provider.get("python"):
-            raise DeviceConnectionError(f"{PROVIDER_LABELS[self.provider]} 尚未安装或配置。")
+            raise DeviceConnectionError(
+                f"{PROVIDER_LABELS[self.provider]} 尚未安装或配置。"
+                "请在眼动设备设置中点击“安装 / 修复 ACIES”。"
+            )
         python = Path(provider["python"])
         if not python.is_absolute() or not python.is_file():
-            raise DeviceConnectionError("摄像头算法需要已安装的独立 Python 绝对路径。")
+            raise DeviceConnectionError(
+                "摄像头算法需要本机可用的独立 Python 路径。"
+                "请在眼动设备设置中点击“安装 / 修复 ACIES”。"
+            )
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         lock_path = self.runtime_dir / f"camera-{config.get('camera_index', 0)}.lock"
         self._lock_file = lock_path.open("a+b")
@@ -391,8 +410,11 @@ def predict_packet(model: dict[str, Any], packet: dict[str, Any]) -> tuple[float
                 continue
             points.append(predict_calibration(child, features))
             monocular_allowed.append(
-                child.get("validated") is not False
-                and (not model.get("validated") or child.get("validated") is True)
+                child.get("reusable") is True
+                or (
+                    child.get("validated") is not False
+                    and (not model.get("validated") or child.get("validated") is True)
+                )
             )
     if not points:
         return None
@@ -402,30 +424,84 @@ def predict_packet(model: dict[str, Any], packet: dict[str, Any]) -> tuple[float
     return float(point[0]), float(point[1])
 
 
+CALIBRATION_RUNTIME_FIELDS = frozenset({"meets_current_profile", "calibration_age_hours"})
+
+
+def calibration_snapshot(model: dict[str, Any]) -> dict[str, Any]:
+    """Exclude loading-time diagnostics from reproducible model snapshots and hashes."""
+    snapshot = {key: value for key, value in model.items() if key not in CALIBRATION_RUNTIME_FIELDS}
+    if "eye_models" in snapshot:
+        snapshot["eye_models"] = {
+            name: calibration_snapshot(child) for name, child in snapshot["eye_models"].items()
+        }
+    return snapshot
+
+
+def _saved_validation_status(
+    model: dict[str, Any], saved_profile: str, current_profile: str, *, optional: bool = False
+) -> bool:
+    if type(model.get("validated")) is not bool:
+        raise ValueError("Missing saved validation status")
+    if saved_profile not in PROFILE_LABELS or current_profile not in PROFILE_LABELS:
+        raise ValueError("Unknown calibration accuracy target")
+    mean, maximum = model.get("validation_error"), model.get("validation_max_error")
+    if (
+        optional
+        and model["validated"] is False
+        and model.get("reusable") is not True
+        and mean is None
+        and maximum is None
+    ):
+        return False  # An incomplete single-eye holdout cannot authorize monocular reuse.
+    if (
+        not isinstance(mean, (int, float))
+        or isinstance(mean, bool)
+        or not isinstance(maximum, (int, float))
+        or isinstance(maximum, bool)
+    ):
+        raise ValueError("Invalid saved validation metrics")
+    try:
+        mean_value, maximum_value = float(mean), float(maximum)
+    except OverflowError as error:
+        raise ValueError("Invalid saved validation metrics") from error
+    if (
+        not np.isfinite([mean_value, maximum_value]).all()
+        or not 0 <= mean_value <= maximum_value
+        or (model["validated"] and not validation_passes(mean_value, maximum_value, saved_profile))
+    ):
+        raise ValueError("Invalid saved validation metrics")
+    return validation_passes(mean_value, maximum_value, current_profile)
+
+
 def load_calibration(runtime_dir: Path, identity: str, profile: str) -> dict[str, Any]:
-    """Share the same validity policy between saved preview and task acquisition."""
+    """Reuse sound personal mappings; accuracy targets grade them without discarding work.
+
+    A completed low-accuracy mapping must be explicitly marked reusable by the
+    save layer. Legacy failed candidates are not activated by this loader.
+    """
     path = runtime_dir / "calibration" / f"{identity[:24]}.json"
+    if not path.exists():
+        # Older calibration dialogs moved the active map before collecting a
+        # replacement. An interrupted attempt must not strand that saved map.
+        path = path.with_name(f"{identity[:24]}.previous.json")
     try:
         model = json.loads(path.read_text(encoding="utf-8"))
         age = (datetime.now(UTC) - datetime.fromisoformat(model["created_at"])).total_seconds()
         if (
             model["identity"] != identity
-            or model["validated"] is not True
-            or not 0 <= age < 8 * 3600
+            or (model.get("validated") is not True and model.get("reusable") is not True)
+            or not np.isfinite(age)
+            or age < 0
             or model.get("algorithm_version") not in COMPATIBLE_MODEL_VERSIONS
             or model.get("feature_version", CALIBRATION_FEATURE_VERSION)
             != CALIBRATION_FEATURE_VERSION
-            or not validation_passes(
-                model["validation_error"],
-                model["validation_max_error"],
-                model["calibration_profile"],
-            )
-            or not validation_passes(
-                model["validation_error"], model["validation_max_error"], profile
-            )
             or len(model["mean"]) != FEATURE_COUNT
         ):
-            raise ValueError("校准已失效或验证误差过大")
+            raise ValueError("校准记录不完整或与当前设备不匹配")
+        model["meets_current_profile"] = _saved_validation_status(
+            model, model["calibration_profile"], profile
+        )
+        model["calibration_age_hours"] = age / 3600
         predict_calibration(model, model["mean"])
         validate_observation_model(model)
         if "eye_models" in model:
@@ -437,21 +513,12 @@ def load_calibration(runtime_dir: Path, identity: str, profile: str) -> dict[str
                     raise ValueError("Invalid per-eye mapping")
                 predict_calibration(child, child["mean"])
                 validate_observation_model(child)
-                if type(child.get("validated")) is not bool:
-                    raise ValueError("Missing per-eye validation")
-                if child["validated"]:
-                    if not validation_passes(
-                        child["validation_error"],
-                        child["validation_max_error"],
-                        model["calibration_profile"],
-                    ):
-                        raise ValueError("Invalid per-eye validation")
-                    if not validation_passes(
-                        child["validation_error"],
-                        child["validation_max_error"],
-                        profile,
-                    ):
-                        child["validated"] = False
+                child["meets_current_profile"] = _saved_validation_status(
+                    child,
+                    child.get("calibration_profile", model["calibration_profile"]),
+                    profile,
+                    optional=True,
+                )
         return model
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise DeviceConnectionError("ACIES 需要为当前受试者、摄像头和屏幕重新校准。") from error
@@ -567,8 +634,15 @@ class WebcamEyeTrackerDevice:
         return (
             f"ACIES {ACIES_VERSION} · {PROFILE_LABELS[self.calibration_profile]}",
             f"个人映射版本 {self._model.get('algorithm_version')} · 因果时序防抖",
+            "已保存个人校准，可跨次复用；"
+            + (
+                "当前精度目标达标。"
+                if self._model.get("meets_current_profile")
+                else "精度待改善，可继续研究估计。"
+            ),
             f"独立验证平均 {self._model.get('validation_error', 0):.1%} / "
             f"最大 {self._model.get('validation_max_error', 0):.1%}（屏幕归一化距离）",
+            "历史校准不会按时限作废；跨天或姿势、设备位置改变后建议快速检查。",
             "质量分数是图像信息指标；单眼/低信息估计不等于精确眼动测量。",
             "双眼状态变化与图像模糊分别监测；普通摄像头无法判定真实屏幕聚焦或注意力。",
         )

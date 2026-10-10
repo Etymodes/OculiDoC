@@ -79,7 +79,9 @@ def test_compatible_valid_map_keeps_its_identity_without_recalibration(tmp_path)
     ).hexdigest()
     assert calibration_identity(config, "acies", "participant-1", SCREEN) == expected
     original = save_model(path, algorithm_version="0.3.0")
-    assert load_calibration(tmp_path, expected, "balanced") == original
+    loaded = load_calibration(tmp_path, expected, "balanced")
+    assert {key: loaded[key] for key in original} == original
+    assert loaded["meets_current_profile"] is True
 
 
 def test_noisy_shortcut_is_rejected_on_unseen_locations_and_frames():
