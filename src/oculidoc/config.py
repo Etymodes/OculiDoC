@@ -98,10 +98,15 @@ class Settings(BaseSettings):
 
     @property
     def webcam_providers_path(self) -> Path:
-        return (
-            self.webcam_config_path
-            or application_root() / "data" / "runtime" / "webcam_providers.json"
-        )
+        if self.webcam_config_path is not None:
+            return self.webcam_config_path
+        current = self.data_dir.expanduser() / "runtime" / "webcam_providers.json"
+        if current.exists():
+            return current
+        # Read-only discovery preserves an existing source-checkout installation.
+        # The settings UI migrates validated contents before its first write.
+        legacy = application_root() / "data" / "runtime" / "webcam_providers.json"
+        return legacy if legacy.is_file() else current
 
     @property
     def database_path(self) -> Path:

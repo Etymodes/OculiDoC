@@ -32,7 +32,8 @@ from oculidoc.devices.diagnostics import probe_cameras
 from oculidoc.devices.errors import DeviceConnectionError
 from oculidoc.devices.preflight import GazePreflightResult, GazePreflightStore
 from oculidoc.devices.tobii_stream_engine import discover_tobii_stream_engine_dll
-from oculidoc.devices.webcam_gaze import read_webcam_config, save_webcam_camera_index
+from oculidoc.devices.webcam_gaze import read_webcam_config
+from oculidoc.devices.webcam_setup import acies_runtime_configured, ensure_webcam_config
 from oculidoc.ui.gaze_self_check import GazeSelfCheckDialog
 from oculidoc.ui.opoin_thesis import OpoinThesisDialog
 
@@ -248,9 +249,15 @@ class DeviceSettingsDialog(QDialog):
         form.addRow("ThinksTracker：", thinks_row)
         self.webcam_config_edit = QLineEdit(str(current.webcam_config_path or ""))
         self.webcam_config_edit.setPlaceholderText(
-            "留空使用工程 data/runtime/webcam_providers.json"
+            "留空使用当前数据目录 runtime/webcam_providers.json"
         )
-        form.addRow("摄像头配置：", self.webcam_config_edit)
+        self.webcam_setup_button = QPushButton("安装 / 修复 ACIES")
+        self.webcam_setup_button.setObjectName("setupAciesButton")
+        self.webcam_setup_button.clicked.connect(self._setup_webcam)
+        webcam_config_row = QHBoxLayout()
+        webcam_config_row.addWidget(self.webcam_config_edit, 1)
+        webcam_config_row.addWidget(self.webcam_setup_button)
+        form.addRow("摄像头配置：", webcam_config_row)
         self.camera_combo = QComboBox()
         self.camera_combo.setObjectName("aciesCameraCombo")
         self._load_camera_selection()
@@ -403,6 +410,7 @@ class DeviceSettingsDialog(QDialog):
         webcam_selected = source in {"webcam", "auto_webcam"}
         for control in (
             self.webcam_config_edit,
+            self.webcam_setup_button,
             self.camera_combo,
             self.camera_scan_button,
             self.webcam_provider_combo,
@@ -444,7 +452,7 @@ class DeviceSettingsDialog(QDialog):
         )
         if webcam_selected:
             self.calibration_tip.setText(
-                "摄像头估计仅供研究。更换受试者、摄像头、屏幕或姿势后请重新校准，再运行自检。"
+                "摄像头估计仅供研究。相同受试者、摄像头和屏幕沿用已存校准；姿势变化先检查漂移，再运行自检。"
             )
             self.opoin_thesis_button.setEnabled(False)
             self.open_tobii_button.setEnabled(False)
@@ -458,15 +466,22 @@ class DeviceSettingsDialog(QDialog):
 
     def _webcam_config_path(self) -> Path:
         entered = self.webcam_config_edit.text().strip()
-        return Path(entered) if entered else self.settings.webcam_providers_path
+        return (
+            Path(entered)
+            if entered
+            else self.settings.data_dir.expanduser() / "runtime" / "webcam_providers.json"
+        )
 
     def _load_camera_selection(self) -> None:
         try:
-            index = int(read_webcam_config(self._webcam_config_path()).get("camera_index", 0))
+            path = self._webcam_config_path()
+            if not path.exists() and not self.webcam_config_edit.text().strip():
+                path = self.settings.webcam_providers_path
+            index = int(read_webcam_config(path).get("camera_index", 0))
             label = f"摄像头 {index}（当前配置，点击扫描确认）"
         except DeviceConnectionError:
             index = 0
-            label = "摄像头 0（配置文件不可用）"
+            label = "摄像头 0（点击扫描；首次使用请安装 ACIES）"
         self.camera_combo.blockSignals(True)
         self.camera_combo.clear()
         self.camera_combo.addItem(label, index)
@@ -501,7 +516,7 @@ class DeviceSettingsDialog(QDialog):
         self.camera_combo.blockSignals(False)
 
     def _persist_webcam_camera_selection(self) -> bool:
-        if not self._camera_choice_dirty:
+        if not self._camera_choice_dirty and self._webcam_config_path().exists():
             return True
         index = self.camera_combo.currentData()
         if type(index) is not int:
@@ -509,14 +524,41 @@ class DeviceSettingsDialog(QDialog):
             return False
         path = self._webcam_config_path()
         try:
-            current = read_webcam_config(path)
-            if current.get("camera_index", 0) != index:
-                save_webcam_camera_index(path, index)
+            ensure_webcam_config(
+                path,
+                index,
+                legacy_path=(
+                    self.settings.webcam_providers_path
+                    if not self.webcam_config_edit.text().strip()
+                    else None
+                ),
+            )
         except (DeviceConnectionError, OSError, ValueError) as error:
             QMessageBox.warning(self, "无法保存摄像头", str(error))
             return False
         self._camera_choice_dirty = False
         return True
+
+    def _setup_webcam(self) -> bool:
+        from oculidoc.ui.acies_setup import AciesSetupDialog
+
+        if not self._persist_webcam_camera_selection():
+            return False
+        index = self.camera_combo.currentData()
+        if type(index) is not int:
+            QMessageBox.warning(self, "摄像头选择无效", "请先扫描并选择摄像头。")
+            return False
+        dialog = AciesSetupDialog(self.settings.data_dir, self._webcam_config_path(), index, self)
+        dialog.exec()
+        if dialog.succeeded:
+            self._camera_choice_dirty = False
+            self.preflight_label.setText("ACIES 已安装。请校准当前受试者，再运行自检。")
+        return dialog.succeeded
+
+    def _ensure_webcam_ready(self) -> bool:
+        if acies_runtime_configured(self._webcam_config_path()):
+            return True
+        return self._setup_webcam()
 
     def _setup_thinks(self) -> None:
         from oculidoc.ui.thinks_calibration import ThinksSetupDialog
@@ -538,6 +580,8 @@ class DeviceSettingsDialog(QDialog):
 
         if not self._persist_webcam_camera_selection():
             return
+        if not self._ensure_webcam_ready():
+            return
         config = self.build_config()
         dialog = WebcamCalibrationDialog(
             config.apply(self.settings), self.webcam_provider_combo.currentData(), self
@@ -558,6 +602,8 @@ class DeviceSettingsDialog(QDialog):
         from oculidoc.ui.acies_experiment import AciesExperimentDialog
 
         if not self._persist_webcam_camera_selection():
+            return
+        if not self._ensure_webcam_ready():
             return
         dialog = AciesExperimentDialog(self.build_config().apply(self.settings), self)
         dialog.start()

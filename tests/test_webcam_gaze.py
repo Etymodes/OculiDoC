@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import threading
@@ -11,6 +12,7 @@ import pytest
 
 from oculidoc.config import GazeDeviceConfig, GazeDeviceConfigStore, Settings
 from oculidoc.devices import webcam_gaze as webcam
+from oculidoc.devices.acies_experiments import load_experiment_model, load_paired_candidate
 from oculidoc.devices.contracts import DeviceState
 from oculidoc.devices.errors import DeviceConnectionError
 from oculidoc.ui.device_settings import DeviceSettingsDialog
@@ -44,6 +46,42 @@ def test_camera_selection_changes_runtime_config_and_calibration_identity(tmp_pa
     assert saved["camera_index"] == 2
     assert saved["providers"]["acies"]["python"] == sys.executable
     assert webcam.calibration_identity(saved, "acies", "participant-1", SCREEN) != initial
+
+
+def test_runtime_repair_keeps_existing_calibration_and_uses_new_provider(tmp_path: Path):
+    path = config_file(tmp_path)
+    original = webcam.read_webcam_config(path)
+    identity = webcam.calibration_identity(original, "acies", "participant-1", SCREEN)
+    save_model(path)
+    repaired = dict(original)
+    repaired[webcam.CALIBRATION_IDENTITY_PROVIDERS] = original["providers"]
+    repaired["providers"] = {"acies": {"python": "C:/new/python.exe", "face_model": "new.task"}}
+    path.write_text(json.dumps(repaired), encoding="utf-8")
+
+    loaded = webcam.read_webcam_config(path)
+    assert loaded["providers"]["acies"]["python"] == "C:/new/python.exe"
+    assert webcam.calibration_identity(loaded, "acies", "participant-1", SCREEN) == identity
+    assert webcam.load_calibration(path.parent, identity, "balanced")["identity"] == identity
+    for altered in (
+        {**loaded, "camera_index": 2},
+        {**loaded, "camera_width": 640},
+    ):
+        assert webcam.calibration_identity(altered, "acies", "participant-1", SCREEN) != identity
+    assert webcam.calibration_identity(loaded, "acies", "participant-2", SCREEN) != identity
+    assert (
+        webcam.calibration_identity(loaded, "acies", "participant-1", ("other", 1920, 1080))
+        != identity
+    )
+
+
+@pytest.mark.parametrize("basis", [None, [], {}, {"acies": None}, {"acies": "old"}])
+def test_invalid_identity_provider_snapshot_fails_explicitly(tmp_path: Path, basis):
+    path = config_file(tmp_path)
+    config = webcam.read_webcam_config(path)
+    config[webcam.CALIBRATION_IDENTITY_PROVIDERS] = basis
+    path.write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(DeviceConnectionError, match="calibration_identity_providers"):
+        webcam.read_webcam_config(path)
 
 
 def save_model(path: Path, provider: str = "acies", **overrides) -> dict:
@@ -105,11 +143,22 @@ def test_calibration_generalizes_to_held_out_positions():
         {"validation_error": 0.9},
         {"validation_max_error": 0.8},
         {"validation_error": float("nan")},
+        {"validated": False, "reusable": True, "validation_error": None},
+        {"validated": False, "reusable": True, "validation_max_error": float("inf")},
+        {"validated": False, "reusable": True, "validation_error": -0.1},
+        {"validated": 1, "reusable": True},
+        {"validated": False, "reusable": 1},
+        {"validated": False, "reusable": True, "calibration_profile": "unknown"},
         {"scale": [0, 1]},
-        {"created_at": (datetime.now(UTC) - timedelta(hours=9)).isoformat()},
+        {"created_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat()},
+        {"created_at": "2026-01-01T12:00:00"},
+        {"feature_version": "incompatible"},
+        {"identity": "another-person"},
     ],
 )
-def test_invalid_or_expired_calibration_cannot_open_camera(tmp_path, monkeypatch, overrides):
+def test_incomplete_or_incompatible_calibration_cannot_open_camera(
+    tmp_path, monkeypatch, overrides
+):
     path = config_file(tmp_path)
     save_model(path, **overrides)
     monkeypatch.setattr(
@@ -118,6 +167,169 @@ def test_invalid_or_expired_calibration_cannot_open_camera(tmp_path, monkeypatch
     device = webcam.WebcamEyeTrackerDevice(path, "acies", tmp_path, "participant-1", SCREEN)
     with pytest.raises(DeviceConnectionError, match="重新校准"):
         device.connect()
+
+
+def test_saved_calibration_survives_restart_days_later_without_rewriting_file(
+    tmp_path, monkeypatch
+):
+    path = config_file(tmp_path)
+    model = save_model(path, created_at=(datetime.now(UTC) - timedelta(days=9)).isoformat())
+    saved = tmp_path / "calibration" / f"{model['identity'][:24]}.json"
+    before = saved.read_bytes()
+    monkeypatch.setattr(webcam.WebcamFeatureProcess, "start", lambda _: None)
+    device = webcam.WebcamEyeTrackerDevice(path, "acies", tmp_path, "participant-1", SCREEN)
+    device.connect()
+    assert device._model["validated"] is True
+    assert device._model["meets_current_profile"] is True
+    assert device._model["calibration_age_hours"] == pytest.approx(216, abs=0.01)
+    assert webcam.calibration_snapshot(device._model) == model
+    assert any("跨天" in note for note in device.capability_diagnostics())
+    assert saved.read_bytes() == before
+    device.disconnect()
+
+
+def test_completed_low_accuracy_mapping_is_reusable_without_fabricating_pass(tmp_path, monkeypatch):
+    path = config_file(tmp_path)
+    model = save_model(
+        path, validated=False, reusable=True, validation_error=0.32, validation_max_error=0.9
+    )
+    monkeypatch.setattr(webcam.WebcamFeatureProcess, "start", lambda _: None)
+    device = webcam.WebcamEyeTrackerDevice(path, "acies", tmp_path, "participant-1", SCREEN)
+    device.connect()
+    assert device._model["validated"] is False
+    assert device._model["meets_current_profile"] is False
+    assert device._model["validation_error"] == model["validation_error"]
+    assert any("精度待改善" in note for note in device.capability_diagnostics())
+    device.start_stream()
+    device._process._queue.put_nowait(packet(0, [0.3, 0.4]))
+    assert device.read_sample().gaze_valid
+    device.disconnect()
+    experiment = load_experiment_model(tmp_path, model["identity"], "balanced")
+    assert experiment["experiment_source"] == "saved_reusable"
+    assert experiment["validated"] is False
+
+
+def test_interrupted_legacy_calibration_recovers_previous_only_when_active_is_missing(tmp_path):
+    model = save_model(
+        config_file(tmp_path), created_at=(datetime.now(UTC) - timedelta(days=2)).isoformat()
+    )
+    saved = tmp_path / "calibration" / f"{model['identity'][:24]}.json"
+    previous = saved.with_name(f"{model['identity'][:24]}.previous.json")
+    saved.rename(previous)
+    before = previous.read_bytes()
+    assert load_experiment_model(tmp_path, model["identity"], "balanced")["validated"] is True
+    assert previous.read_bytes() == before and not saved.exists()
+    saved.write_text("{corrupt", encoding="utf-8")
+    with pytest.raises(DeviceConnectionError):
+        webcam.load_calibration(tmp_path, model["identity"], "balanced")
+
+
+def test_reusable_eye_can_estimate_monocular_without_changing_validation_truth(tmp_path):
+    path = config_file(tmp_path)
+    child = save_model(
+        path, validated=False, reusable=True, validation_error=0.32, validation_max_error=0.9
+    )
+    model = save_model(path, **child, eye_models={"left": child.copy()})
+    loaded = webcam.load_calibration(tmp_path, model["identity"], "balanced")
+    data = packet(0, [0.3, 0.4])
+    data.update(right_eye_valid=False, eye_features={"left": data["features"], "right": None})
+    assert webcam.predict_packet(loaded, data) == pytest.approx((0.3, 0.4))
+    assert loaded["eye_models"]["left"]["validated"] is False
+    assert loaded["eye_models"]["left"]["meets_current_profile"] is False
+    loaded["eye_models"]["left"]["reusable"] = False
+    assert webcam.predict_packet(loaded, data) is None
+    data["eye_features"]["left"] = None
+    assert webcam.predict_packet(loaded, data) is None
+
+
+def test_stricter_accuracy_target_preserves_original_per_eye_validation(tmp_path):
+    path = config_file(tmp_path)
+    child = save_model(
+        path, calibration_profile="tolerant", validation_error=0.22, validation_max_error=0.4
+    )
+    model = save_model(path, **child, eye_models={"left": child.copy()})
+    loaded = webcam.load_calibration(tmp_path, model["identity"], "strict")
+    assert loaded["validated"] is True and loaded["meets_current_profile"] is False
+    assert loaded["eye_models"]["left"]["validated"] is True
+    assert loaded["eye_models"]["left"]["meets_current_profile"] is False
+    assert webcam.calibration_snapshot(loaded) == model
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"validation_error": None, "validation_max_error": None},
+        {"validation_error": float("nan")},
+        {"validation_error": -0.1},
+        {"validation_error": 0.9},
+    ],
+)
+def test_reusable_eye_still_requires_sound_validation_metrics(tmp_path, overrides):
+    path = config_file(tmp_path)
+    child = save_model(path, validated=False, reusable=True, **overrides)
+    model = save_model(path, eye_models={"left": child})
+    with pytest.raises(DeviceConnectionError):
+        webcam.load_calibration(tmp_path, model["identity"], "balanced")
+
+
+def test_incomplete_eye_holdout_is_retained_without_authorizing_monocular_reuse(tmp_path):
+    path = config_file(tmp_path)
+    child = save_model(
+        path, validated=False, reusable=False, validation_error=None, validation_max_error=None
+    )
+    model = save_model(path, eye_models={"left": child})
+    loaded = webcam.load_calibration(tmp_path, model["identity"], "balanced")
+    assert loaded["eye_models"]["left"]["meets_current_profile"] is False
+    data = packet(0, [0.3, 0.4])
+    data.update(right_eye_valid=False, eye_features={"left": data["features"], "right": None})
+    assert webcam.predict_packet(loaded, data) is None
+
+
+def test_loading_diagnostics_do_not_change_experiment_or_paired_baseline_hash(tmp_path):
+    path = config_file(tmp_path)
+    original = save_model(path)
+    baseline = {**original, "experiment_source": "validated"}
+    directory = tmp_path / "experiment_candidates"
+    directory.mkdir()
+    staged = {
+        "name": "control",
+        "baseline_sha256": hashlib.sha256(
+            json.dumps(baseline, sort_keys=True, allow_nan=False).encode()
+        ).hexdigest(),
+        "model": {
+            **original,
+            "feature_version": webcam.CALIBRATION_FEATURE_VERSION,
+            "validated": False,
+            "task_eligible": False,
+        },
+    }
+    (directory / f"{original['identity'][:24]}.json").write_text(
+        json.dumps(staged), encoding="utf-8"
+    )
+    first = load_experiment_model(tmp_path, original["identity"], "balanced")
+    second = load_experiment_model(tmp_path, original["identity"], "strict")
+    assert first == second == baseline
+    assert load_paired_candidate(tmp_path, second)["name"] == "control"
+    dynamic = {**first, "calibration_age_hours": 100.0, "meets_current_profile": False}
+    assert load_paired_candidate(tmp_path, dynamic)["name"] == "control"
+
+
+def test_older_failed_candidate_remains_diagnostic_and_does_not_replace_saved_calibration(tmp_path):
+    model = save_model(
+        config_file(tmp_path),
+        validated=False,
+        created_at=(datetime.now(UTC) - timedelta(days=9)).isoformat(),
+    )
+    directory = tmp_path / "calibration_candidates"
+    directory.mkdir()
+    candidate = directory / f"{model['identity'][:24]}-old.json"
+    candidate.write_text(
+        json.dumps({"model": model, "validation_metrics": model}), encoding="utf-8"
+    )
+    loaded = load_experiment_model(tmp_path, model["identity"], "balanced")
+    assert loaded["experiment_source"] == "candidate" and loaded["task_eligible"] is False
+    with pytest.raises(DeviceConnectionError):
+        webcam.load_calibration(tmp_path, model["identity"], "balanced")
 
 
 @pytest.mark.parametrize(

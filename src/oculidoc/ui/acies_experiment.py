@@ -362,9 +362,13 @@ class AciesExperimentDialog(QDialog):
         painter.setFont(font)
         if not self._active:
             source_note = (
-                "当前为未通过验收的候选映射，仅用于对照，不能用于正式任务。\n"
+                "当前为历史诊断候选，仅用于对照；尚未保存为可复用模型。\n"
                 if self._model.get("experiment_source") == "candidate"
-                else "当前使用已通过验收的固定映射。\n"
+                else (
+                    "当前使用已保存的固定映射；精度仍待改进，本轮如实记录误差。\n"
+                    if self._model.get("validated") is not True
+                    else "当前使用已保存的固定映射；精度以本轮实际误差为准。\n"
+                )
             )
             if self._candidate:
                 source_note += "本轮同时记录原模型与去眼睑特征候选；两者均不使用蓝点修正预测。\n"

@@ -152,17 +152,21 @@ def test_smoother_resets_after_missing_or_stale_data():
     assert smoother.update((0.1, 0.1), 2_100_000_000, 0.8) == (0.1, 0.1)
 
 
-def test_tolerant_model_cannot_bypass_stricter_runtime_policy(tmp_path, monkeypatch):
+def test_accuracy_profile_grades_saved_calibration_without_discarding_it(tmp_path, monkeypatch):
     path = config_file(tmp_path)
     save_model(
         path, validation_error=0.22, validation_max_error=0.40, calibration_profile="tolerant"
     )
     monkeypatch.setattr("oculidoc.devices.webcam_gaze.WebcamFeatureProcess.start", lambda _: None)
     strict = WebcamEyeTrackerDevice(path, "acies", tmp_path, "participant-1", SCREEN, "balanced")
-    with pytest.raises(DeviceConnectionError, match="重新校准"):
-        strict.connect()
+    strict.connect()
+    assert strict._model["validated"] is True
+    assert strict._model["meets_current_profile"] is False
+    strict.disconnect()
     tolerant = WebcamEyeTrackerDevice(path, "acies", tmp_path, "participant-1", SCREEN, "tolerant")
     tolerant.connect()
+    assert tolerant._model["validated"] is True
+    assert tolerant._model["meets_current_profile"] is True
     tolerant.disconnect()
 
 
@@ -267,11 +271,14 @@ def test_ui_saves_actual_metrics_for_pass_and_failure(
     assert attempt["validation_error"] == pytest.approx(mean)
     assert attempt["validated"] is accepted
     assert attempt["validation_cursor_visible"] is False
-    assert (root / "calibration" / "test-identity.json").exists() is accepted
+    saved = json.loads((root / "calibration" / "test-identity.json").read_text(encoding="utf-8"))
+    assert saved["reusable"] is True
+    assert saved["validated"] is accepted
+    assert attempt["status"] == "completed"
     assert dialog._reviewing
-    assert not dialog._closed  # Failed candidates can also be inspected without task use.
+    assert not dialog._closed
     dialog.reject()
-    assert (dialog.result() == QDialog.DialogCode.Accepted) is accepted
+    assert dialog.result() == QDialog.DialogCode.Accepted
     assert "features" not in attempt  # No images or biometric feature rows in attempts.
     candidate = json.loads(
         (root / "calibration_candidates" / attempt["candidate_file"]).read_text(encoding="utf-8")

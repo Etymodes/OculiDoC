@@ -7,6 +7,7 @@ from collections import Counter
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
+from shutil import copyfileobj
 from time import monotonic, monotonic_ns
 from typing import Any
 
@@ -37,6 +38,7 @@ from oculidoc.devices.webcam_gaze import (
     PROVIDER_LABELS,
     WebcamFeatureProcess,
     calibration_identity,
+    calibration_snapshot,
     fit_calibration,
     load_calibration,
     predict_calibration,
@@ -221,7 +223,9 @@ class WebcamCalibrationDialog(QDialog):
         try:
             # New attempts never remove the last usable model. Cancel/failure
             # must leave it available to the next launch and to this comparison.
-            self._incumbent_model = deepcopy(self._model or self._preview_model)
+            self._incumbent_model = deepcopy(
+                calibration_snapshot(self._model or self._preview_model)
+            )
             self._attempt_path = None
             self._attempt_started = None
             self._attempt_finished = False
@@ -342,15 +346,15 @@ class WebcamCalibrationDialog(QDialog):
         if (
             packet["features"] is not None
             and self._quality >= MIN_SIGNAL_QUALITY
-            and self._observation_state != "pose_unavailable"
-            and (self._index < len(TRAIN_POINTS) or candidate is not None)
+            and (self._index >= len(TRAIN_POINTS) or self._observation_state != "pose_unavailable")
         ):
             if len(self._point_samples) < 300:
                 self._point_samples.append(packet["features"])
                 self._point_qualities.append(self._quality)
                 self._point_eye_features.append(packet.get("eye_features", {}))
-                if self._index >= len(TRAIN_POINTS) and candidate is not None:
-                    self._point_predictions.append(candidate)
+                if self._index >= len(TRAIN_POINTS):
+                    if candidate is not None:
+                        self._point_predictions.append(candidate)
                     for name, child in self._model.get("eye_models", {}).items():
                         row = packet.get("eye_features", {}).get(name)
                         if row is not None and (not child.get("pose_required") or row[15] == 1):
@@ -441,8 +445,12 @@ class WebcamCalibrationDialog(QDialog):
                 predictions = np.array(
                     self._point_predictions
                     if "eye_models" in self._model
-                    else [predict_calibration(self._model, row) for row in self._point_samples]
-                )
+                    else [
+                        predict_calibration(self._model, row)
+                        for row in self._point_samples
+                        if not self._model.get("pose_required") or row[15] == 1
+                    ]
+                ).reshape(-1, 2)
                 residuals = predictions - target
                 errors = np.linalg.norm(residuals, axis=1).tolist()
                 self._errors.extend(errors)
@@ -457,17 +465,23 @@ class WebcamCalibrationDialog(QDialog):
                 self._validation_points.append(
                     {
                         "target": target.tolist(),
+                        "observed_sample_count": len(self._point_samples),
                         "sample_count": len(errors),
                         "valid_ratio": len(errors) / max(self._eligible_count, len(errors)),
-                        "mean_error": float(np.mean(errors)),
-                        "max_error": float(np.max(errors)),
+                        "evaluation_status": "scored" if errors else "no_prediction",
+                        "mean_error": float(np.mean(errors)) if errors else None,
+                        "max_error": float(np.max(errors)) if errors else None,
                         "mean_signal_quality": float(np.mean(self._point_qualities)),
-                        "mean_prediction": np.mean(predictions, axis=0).tolist(),
+                        "mean_prediction": np.mean(predictions, axis=0).tolist()
+                        if errors
+                        else None,
                         "eye_errors": eye_errors,
-                        "horizontal_mae": float(np.mean(np.abs(residuals[:, 0]))),
-                        "vertical_mae": float(np.mean(np.abs(residuals[:, 1]))),
-                        "horizontal_bias": float(np.mean(residuals[:, 0])),
-                        "vertical_bias": float(np.mean(residuals[:, 1])),
+                        "horizontal_mae": float(np.mean(np.abs(residuals[:, 0])))
+                        if errors
+                        else None,
+                        "vertical_mae": float(np.mean(np.abs(residuals[:, 1]))) if errors else None,
+                        "horizontal_bias": float(np.mean(residuals[:, 0])) if errors else None,
+                        "vertical_bias": float(np.mean(residuals[:, 1])) if errors else None,
                         "head_feature_span": np.ptp(samples[:, POSE_COLUMNS], axis=0).tolist(),
                         "observation_counts": dict(self._point_states),
                     }
@@ -526,23 +540,60 @@ class WebcamCalibrationDialog(QDialog):
             self._fail("患者屏幕已断开或分辨率改变，请重新校准。")
             return
         if len(self._validation_points) != len(VALIDATION_POINTS) or any(
-            p["sample_count"] < 5 for p in self._validation_points
+            p.get("observed_sample_count", p["sample_count"]) < 5 for p in self._validation_points
         ):
             self._fail("九点独立验证未完成。")
             return
         now = datetime.now(UTC)
-        current_metrics = self._grade_model(
-            self._model,
-            self._validation_points,
-            float(np.mean([p["mean_error"] for p in self._validation_points])),
-            float(np.max(self._errors)),
-            float(np.percentile(self._errors, 90)),
-            now,
-        )
+        current_complete = all(point["sample_count"] >= 5 for point in self._validation_points)
+        if current_complete:
+            current_metrics = self._grade_model(
+                self._model,
+                self._validation_points,
+                float(np.mean([p["mean_error"] for p in self._validation_points])),
+                float(np.max(self._errors)),
+                float(np.percentile(self._errors, 90)),
+                now,
+            )
+        else:
+            # Image observations and model output are different evidence. A
+            # failed contender must not prevent scoring a usable incumbent or
+            # acquire an invented error for its missing predictions.
+            current_metrics = {
+                "identity": self._identity,
+                "algorithm_version": self._model.get("algorithm_version", ACIES_VERSION),
+                "created_at": self._model.get("created_at", now.isoformat()),
+                "last_evaluated_at": now.isoformat(),
+                "calibration_profile": self.settings.webcam_calibration_profile,
+                "validated": False,
+                "validation_error": None,
+                "validation_max_error": None,
+                "validation_p90_error": None,
+                "validation_points": self._validation_points,
+                "evaluation_status": "incomplete_prediction_coverage",
+                "validation_cursor_visible": False,
+                "validation_role": "model_selection_holdout",
+                "cross_session_confirmed": False,
+                "screen_focus": "unknown",
+            }
+        current_metrics["validation_complete"] = current_complete
         current_model = {**self._model, **current_metrics}
         selected = "current"
         evaluations: dict[str, Any] = {}
         if self._frozen_models and len(self._validation_batches) == len(VALIDATION_POINTS):
+            # Qualify single-eye reuse before comparing fused predictions. A
+            # newly fitted eye has no saved validation flags yet; scoring that
+            # provisional policy would overstate output that is later denied.
+            # Only metadata changes here. Every contender's weights stay frozen.
+            qualification = evaluate_models(
+                self._frozen_models,
+                self._validation_batches,
+                self.settings.webcam_calibration_profile,
+            )
+            prepared_models = deepcopy(self._frozen_models)
+            for name, model in prepared_models.items():
+                self._apply_eye_validation(model, qualification[name]["eye_validation"], now)
+            self._frozen_models = prepared_models
             evaluations = evaluate_models(
                 self._frozen_models,
                 self._validation_batches,
@@ -564,10 +615,17 @@ class WebcamCalibrationDialog(QDialog):
             )
             selected_model.update(selected_metrics)
         else:
+            if not current_complete:
+                self._fail("本轮训练已保存；本轮模型输出不足，尚无可用模型，上次校准仍保留。")
+                return
             selected_model, selected_metrics = current_model, current_metrics
         self._model = selected_model
         passed = selected_metrics["validated"]
-        selection = {"selected": selected, "comparisons": evaluations}
+        selection = {
+            "selected": selected,
+            "comparisons": evaluations,
+            "eye_policy_qualified_on_holdout": bool(evaluations),
+        }
         self._model.update(
             reusable=True,
             quality_status="meets_target" if passed else "needs_improvement",
@@ -596,35 +654,46 @@ class WebcamCalibrationDialog(QDialog):
             ),
             encoding="utf-8",
         )
-        if passed:
-            calibration = directory / "calibration"
-            calibration.mkdir(parents=True, exist_ok=True)
-            path = calibration / f"{self._identity[:24]}.json"
-            versions = directory / "calibration_versions" / self._identity[:24]
-            versions.mkdir(parents=True, exist_ok=True)
-            version_name = now.strftime("%Y%m%dT%H%M%S%f") + ".json"
-            model_text = json.dumps(self._model, allow_nan=False, ensure_ascii=False, indent=2)
-            # Preserve rollback evidence before replacing the active file atomically.
-            if path.exists():
-                (versions / (now.strftime("%Y%m%dT%H%M%S%f") + "-previous.json")).write_bytes(
-                    path.read_bytes()
-                )
-            (versions / version_name).write_text(model_text, encoding="utf-8")
-            temporary = path.with_suffix(".tmp")
-            temporary.write_text(model_text, encoding="utf-8")
-            temporary.replace(path)
+        calibration = directory / "calibration"
+        calibration.mkdir(parents=True, exist_ok=True)
+        path = calibration / f"{self._identity[:24]}.json"
+        versions = directory / "calibration_versions" / self._identity[:24]
+        versions.mkdir(parents=True, exist_ok=True)
+        version_name = now.strftime("%Y%m%dT%H%M%S%f") + ".json"
+        model_text = json.dumps(self._model, allow_nan=False, ensure_ascii=False, indent=2)
+        # Preserve rollback evidence before replacing the active file atomically.
+        if path.exists():
+            (versions / (now.strftime("%Y%m%dT%H%M%S%f") + "-previous.json")).write_bytes(
+                path.read_bytes()
+            )
+        (versions / version_name).write_text(model_text, encoding="utf-8")
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(model_text, encoding="utf-8")
+        temporary.replace(path)
         current_metrics.update(
             candidate_file=candidate_name,
             reusable=True,
             active_model_metrics=deepcopy(selected_metrics),
             model_selection=selection,
-            training_round_ids=self._training_round_ids,
+            available_training_round_ids=self._training_round_ids,
+            axis_models=current_model.get("axis_models", {}),
+            eye_axis_models={
+                name: child.get("axis_models", {})
+                for name, child in current_model.get("eye_models", {}).items()
+            },
+            training_signal=current_model.get("training_signal", {}),
         )
-        self._write_attempt("completed", metrics=current_metrics)
+        try:
+            self._write_attempt("completed", metrics=current_metrics)
+        except OSError as error:
+            # The active model is already committed. A summary-write failure
+            # must not tell the participant that their saved calibration failed.
+            self._attempt_finished = True
+            self._learning_note += f"模型已保存；本轮摘要写入失败：{error}。"
         names = {"current": "本轮模型", "previous": "保留上次模型", "accumulated": "累计模型"}
         self.summary_text = (
             f"本轮采集已完成并保存；当前使用{names[selected]}。"
-            + ("达到精度目标。" if passed else "精度仍待改进；候选已保存，原有合格校准不变。")
+            + ("达到精度目标。" if passed else "精度仍待改进，可继续使用，无需反复重做。")
             + f"平均误差 {selected_metrics['validation_error']:.1%}，"
             f"最大误差 {selected_metrics['validation_max_error']:.1%}（屏幕归一化距离）；"
             f"横向 {selected_metrics['horizontal_mae']:.1%} 屏宽 / "
@@ -660,25 +729,24 @@ class WebcamCalibrationDialog(QDialog):
         profile = self.settings.webcam_calibration_profile
         passed = validation_passes(mean_error, max_error, profile)
         eye_validation = {}
-        for name, child in model.get("eye_models", {}).items():
+        for name in model.get("eye_models", {}):
             results = [point.get("eye_errors", {}).get(name, {}) for point in points]
-            complete = all(result.get("sample_count", 0) >= 5 for result in results)
+            complete = len(points) >= 9 and all(
+                result.get("sample_count", 0) >= 5 for result in results
+            )
             eye_mean = float(np.mean([r["mean_error"] for r in results])) if complete else None
             eye_max = float(np.max([r["max_error"] for r in results])) if complete else None
-            child["validated"] = bool(
-                eye_mean is not None
-                and eye_max is not None
-                and validation_passes(eye_mean, eye_max, profile)
-            )
-            child["validation_error"] = eye_mean
-            child["validation_max_error"] = eye_max
-            child["calibration_profile"] = profile
-            child["reusable"] = complete
             eye_validation[name] = {
-                "validated": child["validated"],
+                "complete": complete,
+                "validated": bool(
+                    eye_mean is not None
+                    and eye_max is not None
+                    and validation_passes(eye_mean, eye_max, profile)
+                ),
                 "mean_error": eye_mean,
                 "max_error": eye_max,
             }
+        self._apply_eye_validation(model, eye_validation, now)
         horizontal = float(np.mean([p["horizontal_mae"] for p in points]))
         vertical = float(np.mean([p["vertical_mae"] for p in points]))
         locations = [p.get("target", VALIDATION_POINTS[i]) for i, p in enumerate(points)]
@@ -708,8 +776,9 @@ class WebcamCalibrationDialog(QDialog):
             response[name] = float(centered @ predictions[:, axis] / (centered @ centered))
         return {
             "identity": self._identity,
-            "algorithm_version": ACIES_VERSION,
+            "algorithm_version": model.get("algorithm_version", ACIES_VERSION),
             "validated": passed,
+            "validation_complete": True,
             "calibration_profile": profile,
             "validation_error": mean_error,
             "validation_max_error": max_error,
@@ -724,8 +793,40 @@ class WebcamCalibrationDialog(QDialog):
             "created_at": model.get("created_at", now.isoformat()),
             "last_evaluated_at": now.isoformat(),
             "validation_cursor_visible": False,
+            "validation_role": "model_selection_holdout",
+            "cross_session_confirmed": False,
             "screen_focus": "unknown",
         }
+
+    def _apply_eye_validation(
+        self, model: dict[str, Any], results: dict[str, Any], now: datetime
+    ) -> None:
+        """Align persisted monocular policy with scored policy without changing weights.
+
+        A sparse new holdout cannot erase an incumbent eye's earlier complete
+        evidence. Preserve that evidence and separately describe the fresh
+        incomplete result; new eyes still require all nine locations.
+        """
+        for name, child in model.get("eye_models", {}).items():
+            result = results.get(name, {})
+            complete = result.get("complete") is True
+            previously_usable = child.get("reusable") is True or child.get("validated") is True
+            if complete or not previously_usable:
+                child.update(
+                    validated=result.get("validated") is True,
+                    validation_error=result.get("mean_error"),
+                    validation_max_error=result.get("max_error"),
+                    calibration_profile=self.settings.webcam_calibration_profile,
+                    reusable=complete,
+                )
+            else:
+                child["reusable"] = True
+            child["latest_validation"] = {
+                **result,
+                "evaluated_at": now.isoformat(),
+                "role": "model_selection_holdout",
+                "retained_previous_evidence": previously_usable and not complete,
+            }
 
     def _write_attempt(
         self, status: str, *, reason: str = "", metrics: dict[str, Any] | None = None
@@ -742,9 +843,21 @@ class WebcamCalibrationDialog(QDialog):
         trace_name = self._attempt_path.stem + ".jsonl"
         if self._trace_buffer:
             trace_dir.mkdir(parents=True, exist_ok=True)
-            with (trace_dir / trace_name).open("a", encoding="utf-8") as stream:
+            trace_path = trace_dir / trace_name
+            trace_temporary = trace_path.with_suffix(".tmp")
+            # Commit each chunk atomically. A partial disk write must leave the
+            # old trace intact, so a retry cannot duplicate frames or broken JSON.
+            with trace_temporary.open("wb") as stream:
+                if trace_path.exists():
+                    with trace_path.open("rb") as previous:
+                        copyfileobj(previous, stream)
                 for frame in self._trace_buffer:
-                    stream.write(json.dumps(frame, allow_nan=False, ensure_ascii=False) + "\n")
+                    stream.write(
+                        (json.dumps(frame, allow_nan=False, ensure_ascii=False) + "\n").encode(
+                            "utf-8"
+                        )
+                    )
+            trace_temporary.replace(trace_path)
             self._trace_buffer.clear()
         summary = {
             "identity": self._identity,
@@ -786,10 +899,7 @@ class WebcamCalibrationDialog(QDialog):
         if self._closed:
             return
         if self._reviewing:
-            if self._validation_passed:
-                self.accept()
-            else:
-                self.reject()
+            self.accept()
             QMessageBox.warning(self.parentWidget(), "校准记录已保存，试看中断", message)
             return
         if self._attempt_path is not None:
@@ -804,7 +914,7 @@ class WebcamCalibrationDialog(QDialog):
         QMessageBox.warning(self.parentWidget(), "摄像头校准未完成", message)
 
     def done(self, result: int) -> None:
-        if self._reviewing and self._validation_passed:
+        if self._reviewing:
             result = QDialog.DialogCode.Accepted
         if self._armed and not self._attempt_finished:
             try:
@@ -873,7 +983,7 @@ class WebcamCalibrationDialog(QDialog):
             result_note = (
                 "采集完成，已保存 · 达到精度目标"
                 if self._validation_passed
-                else "采集完成，候选已保存 · 精度待改进"
+                else "采集完成，已保存可复用 · 精度待改进"
             )
             text = (
                 f"ACIES {ACIES_VERSION} · {result_note} · 自由看向四周检查准心\n"
@@ -902,13 +1012,7 @@ class WebcamCalibrationDialog(QDialog):
         )
         if self._reviewing:
             cursor_note = (
-                self.summary_text
-                + (
-                    "\n重启后沿用当前保存模型。"
-                    if self._validation_passed
-                    else "\n本轮仅供试看，原有合格校准保持不变。"
-                )
-                + "自然看向四周检查准心。"
+                self.summary_text + "\n重启后沿用当前保存模型。" + "自然看向四周检查准心。"
             )
         elif not training:
             cursor_note = "独立验证隐藏准心，避免视觉反馈改变测量；只注视蓝点。"
