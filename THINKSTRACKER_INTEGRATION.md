@@ -7,9 +7,10 @@ v0.1.3 在“眼动设备设置”提供独立的 **ThinksTracker（120 / 300 Hz
 ## 使用
 
 1. 关闭占用设备的厂家测试软件，选择当前受试者及患者显示屏。
-2. 在眼动设备设置选择 ThinksTracker，打开“屏幕 / SDK 设置”，选择 SDK 的
-   `ThinksTracker.dll`，核对采集模式和实际安装几何参数后保存。
-   屏幕宽高来自系统屏幕信息；默认角度、距离及底部高度仅是厂商示例，需要现场确认。
+2. 在眼动设备设置选择 ThinksTracker，打开“屏幕 / SDK 设置”。首次设置会在约定的
+   私有侧载目录中查找 `ThinksTracker.dll` 并填入路径；未找到时再手动选择。核对采集
+   模式和实际安装几何参数后保存。屏幕宽高初值来自系统屏幕信息；角度、距离及底部
+   高度初值仅供填写参考，必须按当前安装位置现场核对。
 3. 点击“九点校准”，在目标屏幕看蓝点，按空格开始；Esc 可取消。
    每个点等待厂商完成回调，九点及厂商最终检查均成功后才原子保存校准数据。
 4. 运行自检并保存设备选择。正式任务仍执行原有预检。
@@ -19,10 +20,20 @@ v0.1.3 在“眼动设备设置”提供独立的 **ThinksTracker（120 / 300 Hz
 SDK 返回校准成功不等于临床有效性或注视精度验收。一次成功校准会按上述绑定
 保存在本机，同一受试者、设备、屏幕与安装参数下再次启动可沿用，仍须运行自检。
 
-本机 SDK 配置默认为工程 `data/runtime/thinks_tracker.json`，也可设置
+SDK 配置默认保存在当前 `OCULIDOC_DATA_DIR` 对应的
+`runtime/thinks_tracker.json`。未设置 `OCULIDOC_DATA_DIR` 时使用应用默认数据目录。
+如果新位置没有配置，程序可读取旧版的 `<应用目录>/data/runtime/thinks_tracker.json`；
+下一次通过设置窗口保存时写入当前数据目录，不覆盖旧文件。也可设置
 `OCULIDOC_THINKS_CONFIG_PATH` 或在设备设置中指定配置文件。
 运行时校准保存在当前数据目录的 `runtime/thinks_tracker/calibration`；不写患者主数据库。
 独立验收窗口使用单独数据目录，其校准不会自动移入正式患者目录。
+
+SDK 自动发现仅检查 `<应用目录>/vendor/ThinksTracker/`、
+`<应用目录>/External/ThinksTracker/` 和 `<应用目录的父目录>/External/ThinksTracker/`。
+每处支持直接放置 `ThinksTracker.dll`，或保留
+`SDKV2.3/300hz/bin/ThinksTracker.dll`、`VendorApp120-300/ThinksTracker.dll` 的原目录结构。
+厂商依赖 DLL 应与主 DLL 一起侧载；自动发现不会将这些私有文件打入安装包，也不会
+绕过厂商授权。自动填入 DLL 后仍须确认安装几何参数、完成当前受试者的校准和自检。
 
 配置示例（路径均需替换为本机实际位置）：
 
@@ -31,7 +42,7 @@ SDK 返回校准成功不等于临床有效性或注视精度验收。一次成�
   "dll_path": "C:/vendor/sdk/bin/ThinksTracker.dll",
   "license_file": null,
   "resolution": "1920x1080x120",
-  "screen_physical": [20, 25, 354, 200, 60],
+  "screen_physical": [20, 350, 354, 200, 60],
   "geometry_confirmed": false,
   "python_executable": null
 }
@@ -39,7 +50,9 @@ SDK 返回校准成功不等于临床有效性或注视精度验收。一次成�
 
 `screen_physical` 顺序为：屏幕与设备平面角度（度）、设备中心到屏幕平面距离（mm）、
 有效屏幕宽高（mm）、设备底部到设备中心在屏幕上垂直投影点的距离（mm）。
-确认实际几何参数后通过设置窗口保存。授权始终调用厂商接口检查；部分设备可以使用
+示例中的 `350 mm` 只是本机照片对应的工程估算，**不是现场测量值**，其余数值也不
+代表其他安装位置。`geometry_confirmed` 为 `false` 时不能直接校准或追踪；确认实际
+几何参数后通过设置窗口保存。授权始终调用厂商接口检查；部分设备可以使用
 设备内授权而不需要外部文件。缺失授权或许可被拒绝时不会开始追踪。
 
 ## 数据与故障行为

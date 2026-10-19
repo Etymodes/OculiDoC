@@ -15,6 +15,7 @@ from oculidoc.devices.thinks_tracker import (
     ThinksProcess,
     ThinksTrackerDevice,
     _worker_command,
+    discover_thinks_sdk_dll,
     read_thinks_config,
 )
 from oculidoc.vendor_helpers.thinks_tracker_worker import (
@@ -41,6 +42,169 @@ def config_file(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def test_thinks_config_defaults_to_active_data_dir_and_reads_legacy(tmp_path, monkeypatch):
+    from oculidoc import config as config_module
+
+    application = tmp_path / "application"
+    data = tmp_path / "patient-data"
+    monkeypatch.setattr(config_module, "application_root", lambda: application)
+    settings = Settings(environment="test", data_dir=data)
+    current = data / "runtime" / "thinks_tracker.json"
+    legacy = application / "data" / "runtime" / "thinks_tracker.json"
+
+    assert settings.thinks_tracker_config_path == current
+    assert settings.thinks_tracker_write_path == current
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("legacy", encoding="utf-8")
+    assert settings.thinks_tracker_config_path == legacy
+    assert settings.thinks_tracker_write_path == current
+    current.parent.mkdir(parents=True)
+    current.write_text("current", encoding="utf-8")
+    assert settings.thinks_tracker_config_path == current
+
+
+def test_thinks_setup_discovers_private_dll_and_writes_current_data_dir(
+    qtbot, tmp_path, monkeypatch
+):
+    from oculidoc import config as config_module
+    from oculidoc.devices import thinks_tracker as thinks_module
+    from oculidoc.ui.thinks_calibration import ThinksSetupDialog
+
+    application = tmp_path / "development" / "OculiDoC"
+    dll = (
+        application.parent
+        / "External"
+        / "ThinksTracker"
+        / "SDKV2.3"
+        / "300hz"
+        / "bin"
+        / "ThinksTracker.dll"
+    )
+    dll.parent.mkdir(parents=True)
+    dll.write_bytes(b"private SDK placeholder")
+    monkeypatch.setattr(config_module, "application_root", lambda: application)
+    monkeypatch.setattr(thinks_module, "application_root", lambda: application)
+    settings = Settings(environment="test", data_dir=tmp_path / "data")
+    dialog = ThinksSetupDialog(settings)
+    qtbot.addWidget(dialog)
+
+    assert discover_thinks_sdk_dll() == dll.resolve()
+    assert dialog.dll.text() == str(dll.resolve())
+    assert dialog.license.text() == ""
+    dialog._save()
+    assert settings.thinks_tracker_write_path.is_file()
+    assert read_thinks_config(settings.thinks_tracker_config_path).dll_path == dll.resolve()
+
+
+def test_thinks_legacy_config_is_read_only_on_next_setup_save(qtbot, tmp_path, monkeypatch):
+    from oculidoc import config as config_module
+    from oculidoc.ui.thinks_calibration import ThinksSetupDialog
+
+    application = tmp_path / "application"
+    monkeypatch.setattr(config_module, "application_root", lambda: application)
+    legacy = application / "data" / "runtime" / "thinks_tracker.json"
+    legacy.parent.mkdir(parents=True)
+    dll = tmp_path / "ThinksTracker.dll"
+    dll.write_bytes(b"private SDK placeholder")
+    original = ThinksConfig(
+        dll_path=dll, screen_physical=(20, 25, 354, 200, 60), geometry_confirmed=True
+    ).model_dump_json()
+    legacy.write_text(original, encoding="utf-8")
+    settings = Settings(environment="test", data_dir=tmp_path / "data")
+
+    dialog = ThinksSetupDialog(settings)
+    qtbot.addWidget(dialog)
+    assert dialog.dll.text() == str(dll)
+    dialog.geometry_controls[1].setValue(35)
+    dialog._save()
+
+    assert legacy.read_text(encoding="utf-8") == original
+    assert read_thinks_config(settings.thinks_tracker_write_path).screen_physical[1] == 35
+
+
+def test_thinks_sdk_discovery_supports_portable_side_load(tmp_path, monkeypatch):
+    from oculidoc.devices import thinks_tracker as thinks_module
+
+    application = tmp_path / "OculiDoC"
+    dll = application / "vendor" / "ThinksTracker" / "ThinksTracker.dll"
+    dll.parent.mkdir(parents=True)
+    dll.write_bytes(b"private SDK placeholder")
+    monkeypatch.setattr(thinks_module, "application_root", lambda: application)
+
+    assert discover_thinks_sdk_dll() == dll.resolve()
+
+
+def test_thinks_setup_replaces_stale_dll_without_resetting_saved_settings(
+    qtbot, tmp_path, monkeypatch
+):
+    from oculidoc.devices import thinks_tracker as thinks_module
+    from oculidoc.ui.thinks_calibration import ThinksSetupDialog
+
+    application = tmp_path / "OculiDoC"
+    dll = application / "vendor" / "ThinksTracker" / "ThinksTracker.dll"
+    dll.parent.mkdir(parents=True)
+    dll.write_bytes(b"private SDK placeholder")
+    monkeypatch.setattr(thinks_module, "application_root", lambda: application)
+    settings = Settings(environment="test", data_dir=tmp_path / "data")
+    original = ThinksConfig(
+        dll_path=tmp_path / "moved-sdk" / "ThinksTracker.dll",
+        license_file=tmp_path / "license_aiotTracker.lic",
+        resolution="1920x608x300",
+        screen_physical=(35, 350, 345, 215, 75),
+        geometry_confirmed=True,
+        python_executable=tmp_path / "python.exe",
+    )
+    path = settings.thinks_tracker_write_path
+    path.parent.mkdir(parents=True)
+    path.write_text(original.model_dump_json(), encoding="utf-8")
+
+    dialog = ThinksSetupDialog(settings)
+    qtbot.addWidget(dialog)
+    assert dialog.dll.text() == str(dll.resolve())
+    assert dialog.license.text() == str(original.license_file)
+    assert dialog.resolution.currentText() == original.resolution
+    assert tuple(control.value() for control in dialog.geometry_controls) == (
+        original.screen_physical
+    )
+    dialog._save()
+
+    saved = read_thinks_config(path)
+    assert saved.dll_path == dll.resolve()
+    assert saved.license_file == original.license_file
+    assert saved.resolution == original.resolution
+    assert saved.screen_physical == original.screen_physical
+    assert saved.geometry_confirmed is True
+    assert saved.python_executable == original.python_executable
+
+
+def test_thinks_missing_sdk_stays_explicit(qtbot, tmp_path, monkeypatch):
+    from oculidoc.devices import thinks_tracker as thinks_module
+    from oculidoc.ui.thinks_calibration import ThinksSetupDialog
+
+    monkeypatch.setattr(thinks_module, "application_root", lambda: tmp_path / "empty")
+    settings = Settings(
+        environment="test",
+        data_dir=tmp_path / "data",
+        thinks_config_path=tmp_path / "missing.json",
+    )
+    dialog = ThinksSetupDialog(settings)
+    qtbot.addWidget(dialog)
+    assert dialog.dll.text() == ""
+    assert discover_thinks_sdk_dll() is None
+    with pytest.raises(DeviceConnectionError, match="ThinksTracker 配置不可用"):
+        read_thinks_config(settings.thinks_tracker_config_path)
+
+    missing_dll = tmp_path / "configured.json"
+    missing_dll.write_text(
+        ThinksConfig(
+            dll_path=tmp_path / "missing.dll", screen_physical=(20, 25, 354, 200, 60)
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    with pytest.raises(DeviceConnectionError, match="找不到 ThinksTracker.dll"):
+        read_thinks_config(missing_dll)
 
 
 def test_sdk_abi_matches_msvc_x64_header():
@@ -295,11 +459,44 @@ def test_unconfirmed_geometry_prevents_launch(tmp_path):
     assert process.process is None
 
 
-def test_real_child_missing_symbols_fails_and_is_reaped(tmp_path):
+def test_child_error_is_reported_and_handle_closed(tmp_path, monkeypatch):
+    from io import StringIO
+
+    from oculidoc.devices import thinks_tracker as thinks_module
+    from oculidoc.vendor_helpers.thinks_tracker_worker import PREFIX
+
+    class FailedChild:
+        def __init__(self, *_args, **_kwargs):
+            self.stdin = StringIO()
+            self.stdout = StringIO(
+                PREFIX + json.dumps({"event": "error", "message": "必需接口不可用"}) + "\n"
+            )
+            self.reaped = False
+
+        def poll(self):
+            return None
+
+        def wait(self, *, timeout):
+            self.reaped = True
+            return 1
+
+        def kill(self):
+            self.reaped = True
+
+    children = []
+
+    def create_child(*args, **kwargs):
+        child = FailedChild(*args, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(thinks_module.subprocess, "Popen", create_child)
     process = ThinksProcess(read_thinks_config(config_file(tmp_path)), tmp_path / "runtime", {})
-    with pytest.raises(DeviceConnectionError):
+    with pytest.raises(DeviceConnectionError, match="必需接口不可用"):
         process.start("probe")
     assert process.process is None
+    assert children[0].reaped
+    assert children[0].stdin.closed and children[0].stdout.closed
 
 
 class FakeProcess:

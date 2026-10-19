@@ -27,7 +27,12 @@ from PySide6.QtWidgets import (
 )
 
 from oculidoc.config import Settings
-from oculidoc.devices.thinks_tracker import ThinksConfig, ThinksProcess, read_thinks_config
+from oculidoc.devices.thinks_tracker import (
+    ThinksConfig,
+    ThinksProcess,
+    discover_thinks_sdk_dll,
+    read_thinks_config,
+)
 
 POINTS = tuple((x, y) for y in (0.1, 0.5, 0.9) for x in (0.1, 0.5, 0.9))
 
@@ -114,15 +119,25 @@ class ThinksSetupDialog(QDialog):
             form.addRow(label, control)
         self._python: Path | None = None
         try:
-            config = read_thinks_config(settings.thinks_tracker_config_path)
-            self.dll.setText(str(config.dll_path))
+            # Parse the saved settings independently of the DLL's current path.
+            # Moving a private SDK must not discard the participant's geometry,
+            # acquisition mode, license path or helper choice.
+            config = ThinksConfig.model_validate_json(
+                settings.thinks_tracker_config_path.read_text(encoding="utf-8-sig")
+            )
+            dll = config.dll_path
+            if not dll.is_file():
+                dll = discover_thinks_sdk_dll() or dll
+            self.dll.setText(str(dll))
             self.license.setText(str(config.license_file or ""))
             self.resolution.setCurrentText(config.resolution)
             for control, value in zip(self.geometry_controls, config.screen_physical, strict=True):
                 control.setValue(value)
             self._python = config.python_executable
         except Exception:
-            pass
+            discovered = discover_thinks_sdk_dll()
+            if discovered is not None:
+                self.dll.setText(str(discovered))
         layout.addLayout(form)
         note = QLabel(
             "宽高初值来自屏幕信息，安装角度和距离初值仅为 SDK 示例。请按实际安装核对。"
@@ -160,7 +175,7 @@ class ThinksSetupDialog(QDialog):
             )
             if not config.dll_path.is_file():
                 raise ValueError("请选择有效的 ThinksTracker.dll。")
-            path = self.settings.thinks_tracker_config_path
+            path = self.settings.thinks_tracker_write_path
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_suffix(".pending.json")
             temporary.write_text(config.model_dump_json(indent=2), encoding="utf-8")
