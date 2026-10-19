@@ -28,6 +28,15 @@ PREVIEW_MAX_HEIGHT = 180
 EMIT_LOCK = threading.Lock()
 
 
+class CalibrationPointTimeout(RuntimeError):
+    """The SDK timed out collecting this point without confirming its completion."""
+
+    status = -8  # ThinksTracker.hpp: Calib_TIMEOUT
+
+    def __init__(self) -> None:
+        super().__init__("当前校准点采集超时，请保持看蓝点并调整眼部位置后重试。")
+
+
 class Device(c.Structure):
     _fields_ = [
         ("name", c.c_char * 128),
@@ -130,14 +139,13 @@ def preview_bbox(
     preview_width: int,
     preview_height: int,
 ) -> list[int] | None:
-    """Map SDK eye boxes using the vendor demo's /8-on-a-half-size-image rule."""
+    """Project SDK pixel boxes from the camera frame into the preview."""
     if bbox is None or bbox[2] <= 0 or bbox[3] <= 0:
         return None
-    # The demo halves camera frames and divides boxes by eight. Therefore the
-    # SDK box coordinates are four times camera-frame coordinates. This mapping
-    # remains marked in the packet until confirmed on the attached device.
-    scale_x = preview_width / (source_width * 4)
-    scale_y = preview_height / (source_height * 4)
+    # The header specifies pixels. The demo's extra /4 display factor placed
+    # 120 Hz eye boxes in the wrong corner; camera-pixel mapping needs live review.
+    scale_x = preview_width / source_width
+    scale_y = preview_height / source_height
     left = round(bbox[0] * scale_x)
     top = round(bbox[1] * scale_y)
     right = round((bbox[0] + bbox[2]) * scale_x)
@@ -415,7 +423,7 @@ class NativeTracker:
                 "left_bbox": preview_bbox(boxes[0], width, height, preview_width, preview_height),
                 "right_bbox": preview_bbox(boxes[1], width, height, preview_width, preview_height),
                 "eye_detection": state,
-                "bbox_mapping": "vendor_demo_div4",
+                "bbox_mapping": "camera_frame_pixels",
             }
             try:
                 emit(packet)
@@ -487,12 +495,19 @@ class NativeTracker:
     def calibrate_point(self, x: float, y: float, expected_count: int) -> None:
         self.point_finished.clear()
         point = Point(x, y)
-        self.check(
+        status = self.dll.ThinksTracker_startCalibration(
             # The vendor demo supplies a real path even with saveImg=0. Passing
             # NULL makes this DLL dereference address zero during calibration.
-            self.dll.ThinksTracker_startCalibration(self.handle, c.byref(point), 5, 0, b"./"),
-            "采集校准点",
+            self.handle,
+            c.byref(point),
+            5,
+            0,
+            b"./",
         )
+        if status == CalibrationPointTimeout.status:
+            self.point_finished.clear()
+            raise CalibrationPointTimeout()
+        self.check(status, "采集校准点")
         if not self.point_finished.wait(6) or self.finished_count != expected_count:
             raise RuntimeError("SDK 未确认当前校准点完成，请重新校准。")
 
@@ -597,10 +612,22 @@ def main() -> int:
                 if not all(math.isfinite(v) and 0 <= v <= 1 for v in (x, y)) or points >= 9:
                     raise RuntimeError("无效的校准点。")
                 tracker.pause_eye_detection()
-                tracker.calibrate_point(x, y, points + 1)
-                tracker.resume_eye_detection()
-                points += 1
-                emit({"event": "point_done", "count": points})
+                try:
+                    tracker.calibrate_point(x, y, points + 1)
+                except CalibrationPointTimeout as error:
+                    tracker.resume_eye_detection()
+                    emit(
+                        {
+                            "event": "point_retry",
+                            "count": points + 1,
+                            "status": error.status,
+                            "message": str(error),
+                        }
+                    )
+                else:
+                    tracker.resume_eye_detection()
+                    points += 1
+                    emit({"event": "point_done", "count": points})
             if action == "save" and mode == "calibrate":
                 if points != 9:
                     raise RuntimeError("九点校准未完成。")
@@ -618,7 +645,7 @@ def main() -> int:
                 if not temporary.is_file() or temporary.stat().st_size == 0:
                     raise RuntimeError("SDK 未生成校准文件。")
                 temporary.replace(calibration)
-                emit({"event": "saved"})
+                emit({"event": "saved", "calibration_path": str(calibration.resolve())})
             if action == "status":
                 emit({"event": "status", "frames": tracker.frames})
             for _ in range(64):

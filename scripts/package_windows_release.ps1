@@ -59,7 +59,7 @@ Set-Location $repositoryRoot
 $version = (& $PythonCommand -c `
     "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
 ).Trim()
-if ($LASTEXITCODE -ne 0 -or $version -notmatch "^[0-9]+\.[0-9]+\.[0-9]+$") {
+if ($LASTEXITCODE -ne 0 -or $version -notmatch "^[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?$") {
     throw "无法读取正式版本号。"
 }
 

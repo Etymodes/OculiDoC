@@ -7,8 +7,8 @@ import zlib
 from pathlib import Path
 from time import monotonic
 
-from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QColor, QImage, QKeyEvent, QPainter, QPaintEvent, QPen
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtGui import QColor, QDesktopServices, QImage, QKeyEvent, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -216,7 +216,10 @@ class ThinksCalibrationDialog(QDialog):
         self._index = 0
         self._ready = False
         self._busy = False
+        self._point_in_flight = False
+        self._point_confirmed = False
         self._closed = False
+        self.saved_path: Path | None = None
         self._message = "正在连接 ThinksTracker；Esc 取消。"
         self._preview_image: QImage | None = None
         self._preview_boxes: dict[str, tuple[int, int, int, int] | None] = {}
@@ -225,6 +228,12 @@ class ThinksCalibrationDialog(QDialog):
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(500)
         self._preview_timer.timeout.connect(self._expire_preview)
+        self._collect_timer = QTimer(self)
+        self._collect_timer.setSingleShot(True)
+        self._collect_timer.timeout.connect(self._collect_point)
+        self._advance_timer = QTimer(self)
+        self._advance_timer.setSingleShot(True)
+        self._advance_timer.timeout.connect(self._advance_point)
         self.setWindowTitle("ThinksTracker 九点校准")
 
     def start(self) -> None:
@@ -265,6 +274,29 @@ class ThinksCalibrationDialog(QDialog):
         self._preview_timer.start()
         self._worker.start()
         self.exec()
+        if self.result() == QDialog.DialogCode.Accepted and self.saved_path is not None:
+            self._show_saved_result()
+
+    def _show_saved_result(self) -> None:
+        assert self.saved_path is not None
+        message = QMessageBox(self.parentWidget())
+        message.setWindowTitle("ThinksTracker 校准完成")
+        message.setIcon(QMessageBox.Icon.Information)
+        message.setText("九点校准已完成，结果文件已保存。")
+        message.setInformativeText(
+            f"保存位置：\n{self.saved_path}\n\n"
+            "同一受试者、设备、屏幕及安装参数下，下次启动会自动加载此校准。\n"
+            "请继续运行自检并保存设备设置，以验证实际注视表现。"
+        )
+        message.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        open_folder = message.addButton("打开结果文件夹", QMessageBox.ButtonRole.ActionRole)
+        message.addButton(QMessageBox.StandardButton.Ok)
+        message.exec()
+        if message.clickedButton() == open_folder:
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.saved_path.parent))):
+                QMessageBox.warning(
+                    self.parentWidget(), "无法打开文件夹", str(self.saved_path.parent)
+                )
 
     def _packet(self, packet: dict) -> None:
         if self._closed:
@@ -272,7 +304,9 @@ class ThinksCalibrationDialog(QDialog):
         event = packet.get("event")
         if event == "ready":
             self._ready = True
-            self._message = "看屏幕上的蓝点，准备好后按空格开始九点校准；Esc 取消。"
+            self._message = (
+                "看蓝点，按空格开始；绿圈表示双眼检测可用，采点成功后自动换点；Esc 取消。"
+            )
         elif event == "preview":
             self._show_preview(packet)
         elif event == "eye_detection_paused":
@@ -284,13 +318,38 @@ class ThinksCalibrationDialog(QDialog):
             self._preview_detection_state = "off"
             self._preview_boxes.clear()
         elif event == "point_done":
-            self._index += 1
-            if self._index == len(POINTS):
-                self._send({"command": "save"})
-                self._message = "正在检查并保存校准…"
-            else:
-                self._show_point()
+            if not self._point_in_flight or packet.get("count") != self._index + 1:
+                return
+            self._point_in_flight = False
+            self._point_confirmed = True
+            self._message = f"当前点已采集 · {self._index + 1} / 9 · Esc 取消"
+            self._advance_timer.start(350)
+        elif event == "point_retry":
+            if not self._point_in_flight or packet.get("count") != self._index + 1:
+                return
+            self._point_in_flight = False
+            self._preview_boxes.clear()
+            self._message = f"当前点等待有效眼部信号，将自动重试 · {self._index + 1} / 9 · Esc 取消"
+            self._collect_timer.start(1200)
         elif event == "saved":
+            value = packet.get("calibration_path")
+            try:
+                path = Path(value).resolve() if isinstance(value, str) and value else None
+                directory = (
+                    self.settings.data_dir / "runtime/thinks_tracker/calibration"
+                ).resolve()
+                if (
+                    path is None
+                    or path.parent != directory
+                    or path.suffix != ".dat"
+                    or not path.is_file()
+                    or path.stat().st_size == 0
+                ):
+                    raise ValueError("Missing calibration result")
+            except (OSError, ValueError):
+                self._fail("未找到完整的校准结果文件，请重新校准。")
+                return
+            self.saved_path = path
             self.accept()
         self.update()
 
@@ -336,7 +395,16 @@ class ThinksCalibrationDialog(QDialog):
         if self._preview_image is not None and monotonic() - self._preview_last_at > 1.5:
             self._preview_image = None
             self._preview_boxes.clear()
-            self.update()
+        self.update()
+
+    def _eyes_detected(self) -> bool:
+        # Before calibration the SDK exposes eye boxes, not validated screen gaze.
+        return (
+            self._preview_image is not None
+            and self._preview_detection_state == "running"
+            and monotonic() - self._preview_last_at <= 0.5
+            and all(self._preview_boxes.get(name) is not None for name in ("left", "right"))
+        )
 
     def _send(self, packet: dict) -> None:
         if self._closed or self._worker is None:
@@ -347,14 +415,31 @@ class ThinksCalibrationDialog(QDialog):
             self._fail(str(error))
 
     def _show_point(self) -> None:
+        self._point_confirmed = False
         self._message = f"请看蓝点并保持自然坐姿 · {self._index + 1} / 9 · Esc 取消"
         self.update()
         # Give the participant time to saccade and settle before SDK collection begins.
-        QTimer.singleShot(900, self._collect_point)
+        self._collect_timer.start(900)
+
+    def _advance_point(self) -> None:
+        if self._closed or not self._point_confirmed:
+            return
+        self._point_confirmed = False
+        self._index += 1
+        if self._index == len(POINTS):
+            self._message = "正在检查并保存校准…"
+            self._send({"command": "save"})
+            self.update()
+        else:
+            self._show_point()
 
     def _collect_point(self) -> None:
-        if not self._closed and self._index < len(POINTS):
-            self._send({"command": "point", "point": POINTS[self._index]})
+        if self._closed or self._index >= len(POINTS) or self._point_in_flight:
+            return
+        self._point_in_flight = True
+        self._message = f"正在采集当前点，请保持注视 · {self._index + 1} / 9 · Esc 取消"
+        self._send({"command": "point", "point": POINTS[self._index]})
+        self.update()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Escape:
@@ -378,6 +463,10 @@ class ThinksCalibrationDialog(QDialog):
         painter.setPen(QColor("#168dcc"))
         painter.setBrush(QColor("#168dcc"))
         painter.drawEllipse(round(x * self.width()) - 12, round(y * self.height()) - 12, 24, 24)
+        if self._point_confirmed or self._eyes_detected():
+            painter.setPen(QPen(QColor("#27ae60"), 3))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(round(x * self.width()) - 18, round(y * self.height()) - 18, 36, 36)
 
     def _paint_preview(self, painter: QPainter, panel: QRect) -> None:
         painter.setPen(QPen(QColor("#183246"), 2))
@@ -440,6 +529,8 @@ class ThinksCalibrationDialog(QDialog):
     def done(self, result: int) -> None:
         self._closed = True
         self._preview_timer.stop()
+        self._collect_timer.stop()
+        self._advance_timer.stop()
         if self._worker:
             self._worker.requestInterruption()
             self._worker.process.close()

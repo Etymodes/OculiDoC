@@ -31,7 +31,7 @@ OpenCV 等 wheel 内附带的第三方归属正文由 `THIRD_PARTY_LICENSES.json
 
 ## PySide6 / Qt
 
-OculiDoC v0.1.3 使用未修改的 PySide6 / Qt 6.11 动态库，并选择其 LGPL-3.0 许可路径；
+OculiDoC v0.1.3 及 v0.1.3.1 使用未修改的 PySide6 / Qt 6.11 动态库，并选择其 LGPL-3.0 许可路径；
 Qt/PySide 库在安装目录的 `_internal/PySide6` 下保持为可替换的独立文件。GNU LGPL
 3.0 与 GPL 3.0 完整文本分别见 `licenses/LGPL-3.0-only.txt` 和
 `licenses/GPL-3.0-only.txt`。Qt/PySide 6.11.1 官方源码标签中的开源许可文本及精确

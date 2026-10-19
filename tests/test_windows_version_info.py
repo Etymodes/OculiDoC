@@ -28,6 +28,13 @@ def test_version_resource_contains_brand_fields() -> None:
     assert "filevers=(2, 5, 1, 0)" in text
 
 
+def test_maintenance_version_keeps_windows_revision() -> None:
+    text = render_version_info("0.1.3.1")
+
+    assert "filevers=(0, 1, 3, 1)" in text
+    assert "ProductVersion', '0.1.3.1" in text
+
+
 def test_project_version_and_output(
     tmp_path: Path,
 ) -> None:
