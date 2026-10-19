@@ -154,7 +154,7 @@ def test_release_license_material_is_version_scoped_and_complete() -> None:
 
     assert "official OculiDoC v0.1.3" in license_text
     assert "official OculiDoC v0.1.1" in historical_license
-    assert "any version other than official v0.1.3" in license_text
+    assert "any version other than official v0.1.3 or v0.1.3.1" in license_text
     assert "solely for non-clinical engineering evaluation" in normalized_license
     assert "any real patient" in license_text
     assert 'PROVIDED "AS IS"' in license_text
@@ -163,7 +163,7 @@ def test_release_license_material_is_version_scoped_and_complete() -> None:
     assert "Qt WebEngine/Chromium" in notices
     assert "LGPL-3.0" in notices
     assert "reverse engineering" in qt_offer
-    assert "public `v0.1.3` tag" in qt_offer
+    assert "public `v0.1.3` and `v0.1.3.1` tags" in qt_offer
     assert (license_root / "LGPL-3.0-only.txt").is_file()
     assert (license_root / "GPL-3.0-only.txt").is_file()
     qt_license_root = license_root / "qt-6.11.1"

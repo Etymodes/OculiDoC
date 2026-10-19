@@ -2,11 +2,60 @@
 
 from __future__ import annotations
 
+from math import isfinite
+from time import monotonic_ns
+
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen
 from PySide6.QtWidgets import QWidget
 
+from oculidoc.devices.acies import GazeSmoother
 from oculidoc.devices.contracts import EyeTrackerSample
+
+
+class GazeCursorFilter:
+    """Filter display coordinates only; never replace recorded or scored samples."""
+
+    def __init__(self) -> None:
+        self._smoother = GazeSmoother(min_cutoff=1.5, speed_gain=4.0)
+        self._position: tuple[float, float] | None = None
+        self._received_ns: int | None = None
+
+    @property
+    def position(self) -> tuple[float, float] | None:
+        if self._received_ns is not None and monotonic_ns() - self._received_ns > 250_000_000:
+            self.clear()
+        return self._position
+
+    def clear(self) -> None:
+        self._smoother.reset()
+        self._position = None
+        self._received_ns = None
+
+    def consume_sample(self, sample: EyeTrackerSample) -> None:
+        if (
+            not sample.gaze_valid
+            or sample.gaze_x_normalized is None
+            or sample.gaze_y_normalized is None
+        ):
+            self.clear()
+            return
+        self.update_position(
+            sample.gaze_x_normalized,
+            sample.gaze_y_normalized,
+            sample.timestamp.monotonic_timestamp_ns,
+        )
+
+    def update_position(self, x: float, y: float, timestamp_ns: int) -> None:
+        if not all(isfinite(value) and 0 <= value <= 1 for value in (x, y)):
+            self.clear()
+            return
+        now = monotonic_ns()
+        if self._received_ns is not None and now - self._received_ns > 250_000_000:
+            self.clear()
+        # Constant filter strength for every source: SDK confidence is not comparable.
+        self._position = self._smoother.update((x, y), timestamp_ns, quality=1.0)
+        self._received_ns = now
 
 
 class GazeCursorOverlay(QWidget):

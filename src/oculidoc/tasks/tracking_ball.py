@@ -49,6 +49,7 @@ from oculidoc.image_library import (
     ImageLibraryDialog,
     ImageLibraryStore,
 )
+from oculidoc.tasks.gaze_cursor import GazeCursorFilter
 from oculidoc.tasks.tracking_dwell import (
     DwellPhase,
     DwellSnapshot,
@@ -187,6 +188,7 @@ class TrackingBallTask(QWidget):
 
         self._elapsed = QElapsedTimer()
         self._last_gaze_normalized: tuple[float, float] | None = None
+        self._gaze_cursor = GazeCursorFilter()
         self._valid_sample_count = 0
         self._invalid_sample_count = 0
         self._dwell = TrackingDwellController(
@@ -667,6 +669,7 @@ class TrackingBallTask(QWidget):
         return result
 
     def start(self) -> None:
+        self._gaze_cursor.clear()
         self._dwell.reset()
         self._reset_recording_state()
         self._ensure_tracking_started(monotonic_ns())
@@ -676,14 +679,18 @@ class TrackingBallTask(QWidget):
 
     def stop(self) -> None:
         self._timer.stop()
+        self._gaze_cursor.clear()
+        self.update()
 
     def consume_sample(
         self,
         sample: EyeTrackerSample,
     ) -> None:
         inside_target = self._observe_tracking_sample(sample)
+        self._gaze_cursor.consume_sample(sample)
 
         if inside_target is None:
+            self._gaze_cursor.clear()
             self._invalid_sample_count += 1
             self._last_gaze_normalized = None
             self._dwell.observe(
@@ -1253,8 +1260,9 @@ class TrackingBallTask(QWidget):
             diameter=diameter,
         )
 
-        if self.config.show_gaze_cursor and self._last_gaze_normalized is not None:
-            gaze_x, gaze_y = self._last_gaze_normalized
+        cursor_position = self._gaze_cursor.position
+        if self.config.show_gaze_cursor and cursor_position is not None:
+            gaze_x, gaze_y = cursor_position
             gaze_point = QPointF(
                 gaze_x * self.width(),
                 gaze_y * self.height(),
@@ -1327,6 +1335,9 @@ class TrackingBallTask(QWidget):
                 ),
             ),
         )
+        # Keep manual mouse demonstrations immediate; only eye samples are smoothed.
+        self._gaze_cursor.clear()
+        self._gaze_cursor.update_position(*self._last_gaze_normalized, monotonic_ns())
         self.update()
 
 

@@ -15,10 +15,12 @@ from oculidoc.devices.thinks_tracker import (
     ThinksProcess,
     ThinksTrackerDevice,
     _worker_command,
+    discover_thinks_sdk_dll,
     read_thinks_config,
 )
 from oculidoc.vendor_helpers.thinks_tracker_worker import (
     Bbox,
+    CalibrationPointTimeout,
     Device,
     NativeTracker,
     Output,
@@ -43,6 +45,169 @@ def config_file(tmp_path: Path) -> Path:
     return path
 
 
+def test_thinks_config_defaults_to_active_data_dir_and_reads_legacy(tmp_path, monkeypatch):
+    from oculidoc import config as config_module
+
+    application = tmp_path / "application"
+    data = tmp_path / "patient-data"
+    monkeypatch.setattr(config_module, "application_root", lambda: application)
+    settings = Settings(environment="test", data_dir=data)
+    current = data / "runtime" / "thinks_tracker.json"
+    legacy = application / "data" / "runtime" / "thinks_tracker.json"
+
+    assert settings.thinks_tracker_config_path == current
+    assert settings.thinks_tracker_write_path == current
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("legacy", encoding="utf-8")
+    assert settings.thinks_tracker_config_path == legacy
+    assert settings.thinks_tracker_write_path == current
+    current.parent.mkdir(parents=True)
+    current.write_text("current", encoding="utf-8")
+    assert settings.thinks_tracker_config_path == current
+
+
+def test_thinks_setup_discovers_private_dll_and_writes_current_data_dir(
+    qtbot, tmp_path, monkeypatch
+):
+    from oculidoc import config as config_module
+    from oculidoc.devices import thinks_tracker as thinks_module
+    from oculidoc.ui.thinks_calibration import ThinksSetupDialog
+
+    application = tmp_path / "development" / "OculiDoC"
+    dll = (
+        application.parent
+        / "External"
+        / "ThinksTracker"
+        / "SDKV2.3"
+        / "300hz"
+        / "bin"
+        / "ThinksTracker.dll"
+    )
+    dll.parent.mkdir(parents=True)
+    dll.write_bytes(b"private SDK placeholder")
+    monkeypatch.setattr(config_module, "application_root", lambda: application)
+    monkeypatch.setattr(thinks_module, "application_root", lambda: application)
+    settings = Settings(environment="test", data_dir=tmp_path / "data")
+    dialog = ThinksSetupDialog(settings)
+    qtbot.addWidget(dialog)
+
+    assert discover_thinks_sdk_dll() == dll.resolve()
+    assert dialog.dll.text() == str(dll.resolve())
+    assert dialog.license.text() == ""
+    dialog._save()
+    assert settings.thinks_tracker_write_path.is_file()
+    assert read_thinks_config(settings.thinks_tracker_config_path).dll_path == dll.resolve()
+
+
+def test_thinks_legacy_config_is_read_only_on_next_setup_save(qtbot, tmp_path, monkeypatch):
+    from oculidoc import config as config_module
+    from oculidoc.ui.thinks_calibration import ThinksSetupDialog
+
+    application = tmp_path / "application"
+    monkeypatch.setattr(config_module, "application_root", lambda: application)
+    legacy = application / "data" / "runtime" / "thinks_tracker.json"
+    legacy.parent.mkdir(parents=True)
+    dll = tmp_path / "ThinksTracker.dll"
+    dll.write_bytes(b"private SDK placeholder")
+    original = ThinksConfig(
+        dll_path=dll, screen_physical=(20, 25, 354, 200, 60), geometry_confirmed=True
+    ).model_dump_json()
+    legacy.write_text(original, encoding="utf-8")
+    settings = Settings(environment="test", data_dir=tmp_path / "data")
+
+    dialog = ThinksSetupDialog(settings)
+    qtbot.addWidget(dialog)
+    assert dialog.dll.text() == str(dll)
+    dialog.geometry_controls[1].setValue(35)
+    dialog._save()
+
+    assert legacy.read_text(encoding="utf-8") == original
+    assert read_thinks_config(settings.thinks_tracker_write_path).screen_physical[1] == 35
+
+
+def test_thinks_sdk_discovery_supports_portable_side_load(tmp_path, monkeypatch):
+    from oculidoc.devices import thinks_tracker as thinks_module
+
+    application = tmp_path / "OculiDoC"
+    dll = application / "vendor" / "ThinksTracker" / "ThinksTracker.dll"
+    dll.parent.mkdir(parents=True)
+    dll.write_bytes(b"private SDK placeholder")
+    monkeypatch.setattr(thinks_module, "application_root", lambda: application)
+
+    assert discover_thinks_sdk_dll() == dll.resolve()
+
+
+def test_thinks_setup_replaces_stale_dll_without_resetting_saved_settings(
+    qtbot, tmp_path, monkeypatch
+):
+    from oculidoc.devices import thinks_tracker as thinks_module
+    from oculidoc.ui.thinks_calibration import ThinksSetupDialog
+
+    application = tmp_path / "OculiDoC"
+    dll = application / "vendor" / "ThinksTracker" / "ThinksTracker.dll"
+    dll.parent.mkdir(parents=True)
+    dll.write_bytes(b"private SDK placeholder")
+    monkeypatch.setattr(thinks_module, "application_root", lambda: application)
+    settings = Settings(environment="test", data_dir=tmp_path / "data")
+    original = ThinksConfig(
+        dll_path=tmp_path / "moved-sdk" / "ThinksTracker.dll",
+        license_file=tmp_path / "license_aiotTracker.lic",
+        resolution="1920x608x300",
+        screen_physical=(35, 350, 345, 215, 75),
+        geometry_confirmed=True,
+        python_executable=tmp_path / "python.exe",
+    )
+    path = settings.thinks_tracker_write_path
+    path.parent.mkdir(parents=True)
+    path.write_text(original.model_dump_json(), encoding="utf-8")
+
+    dialog = ThinksSetupDialog(settings)
+    qtbot.addWidget(dialog)
+    assert dialog.dll.text() == str(dll.resolve())
+    assert dialog.license.text() == str(original.license_file)
+    assert dialog.resolution.currentText() == original.resolution
+    assert tuple(control.value() for control in dialog.geometry_controls) == (
+        original.screen_physical
+    )
+    dialog._save()
+
+    saved = read_thinks_config(path)
+    assert saved.dll_path == dll.resolve()
+    assert saved.license_file == original.license_file
+    assert saved.resolution == original.resolution
+    assert saved.screen_physical == original.screen_physical
+    assert saved.geometry_confirmed is True
+    assert saved.python_executable == original.python_executable
+
+
+def test_thinks_missing_sdk_stays_explicit(qtbot, tmp_path, monkeypatch):
+    from oculidoc.devices import thinks_tracker as thinks_module
+    from oculidoc.ui.thinks_calibration import ThinksSetupDialog
+
+    monkeypatch.setattr(thinks_module, "application_root", lambda: tmp_path / "empty")
+    settings = Settings(
+        environment="test",
+        data_dir=tmp_path / "data",
+        thinks_config_path=tmp_path / "missing.json",
+    )
+    dialog = ThinksSetupDialog(settings)
+    qtbot.addWidget(dialog)
+    assert dialog.dll.text() == ""
+    assert discover_thinks_sdk_dll() is None
+    with pytest.raises(DeviceConnectionError, match="ThinksTracker 配置不可用"):
+        read_thinks_config(settings.thinks_tracker_config_path)
+
+    missing_dll = tmp_path / "configured.json"
+    missing_dll.write_text(
+        ThinksConfig(
+            dll_path=tmp_path / "missing.dll", screen_physical=(20, 25, 354, 200, 60)
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    with pytest.raises(DeviceConnectionError, match="找不到 ThinksTracker.dll"):
+        read_thinks_config(missing_dll)
+
+
 def test_sdk_abi_matches_msvc_x64_header():
     assert ctypes.sizeof(Device) == 260
     assert ctypes.sizeof(Output) == 256
@@ -52,16 +217,34 @@ def test_sdk_abi_matches_msvc_x64_header():
     assert Output.distance.offset == 248
 
 
-def test_preview_is_bounded_grayscale_and_boxes_use_vendor_demo_scale():
+def test_preview_is_bounded_grayscale_and_boxes_use_camera_pixels():
     raw = bytes((x + y) % 256 for y in range(360) for x in range(640))
     pixels, width, height = downsample_gray(raw, 640, 360)
     assert (width, height) == (320, 180)
     assert len(pixels) == width * height
     assert pixels[0] == raw[0]
     assert pixels[width + 1] == raw[2 * 640 + 2]
-    assert preview_bbox((400, 200, 160, 80), 640, 360, width, height) == [50, 25, 20, 10]
+    assert preview_bbox((400, 200, 160, 80), 640, 360, width, height) == [200, 100, 80, 40]
     assert preview_bbox(None, 640, 360, width, height) is None
     assert preview_bbox((0, 0, 0, 80), 640, 360, width, height) is None
+
+
+@pytest.mark.parametrize(
+    "source_size,bbox,expected",
+    [
+        ((1920, 1080), (1200, 600, 480, 240), [200, 100, 80, 40]),
+        ((640, 360), (-20, -10, 60, 50), [0, 0, 20, 20]),
+        ((640, 360), (600, 340, 80, 40), [300, 170, 20, 10]),
+        ((640, 360), (-100, 20, 40, 40), None),
+        ((640, 360), (20, -100, 40, 40), None),
+        ((640, 360), (640, 20, 40, 40), None),
+        ((640, 360), (20, 360, 40, 40), None),
+        ((640, 360), (20, 20, -1, 40), None),
+        ((640, 360), (20, 20, 40, 0), None),
+    ],
+)
+def test_preview_pixel_projection_clips_only_visible_boxes(source_size, bbox, expected):
+    assert preview_bbox(bbox, *source_size, 320, 180) == expected
 
 
 def test_native_camera_callback_rate_limits_and_replaces_old_frame():
@@ -118,6 +301,7 @@ def test_preview_packets_are_volatile_and_pause_hides_stale_eye_boxes(monkeypatc
     assert len(zlib.decompress(base64.b64decode(packets[0]["image_base64"]))) == 320 * 180
     assert packets[0]["left_bbox"] is None and packets[0]["right_bbox"] is None
     assert packets[0]["eye_detection"] == "paused"
+    assert packets[0]["bbox_mapping"] == "camera_frame_pixels"
 
 
 def test_eye_detection_stops_before_point_capture(monkeypatch):
@@ -246,6 +430,55 @@ def test_calibration_requires_matching_finished_callback(finished_count, success
             native.calibrate_point(0.1, 0.1, 1)
 
 
+def test_calibration_timeout_and_late_callback_do_not_confirm_retried_point(monkeypatch):
+    from threading import Event
+    from types import SimpleNamespace
+
+    native = NativeTracker.__new__(NativeTracker)
+    native.handle = 1
+    native.point_finished = Event()
+    native.finished_count = 0
+    monkeypatch.setattr(
+        native.point_finished, "wait", lambda _timeout: native.point_finished.is_set()
+    )
+
+    def timeout(*_args):
+        native._on_point_finished(None, 1)
+        return -8
+
+    native.dll = SimpleNamespace(ThinksTracker_startCalibration=timeout)
+    with pytest.raises(CalibrationPointTimeout):
+        native.calibrate_point(0.1, 0.1, 1)
+    assert not native.point_finished.is_set()
+
+    # A delayed callback from the timed-out call must not confirm a new attempt.
+    native._on_point_finished(None, 1)
+    native.dll.ThinksTracker_startCalibration = lambda *_args: 0
+    with pytest.raises(RuntimeError, match="未确认"):
+        native.calibrate_point(0.1, 0.1, 1)
+
+    def completed(*_args):
+        native._on_point_finished(None, 1)
+        return 0
+
+    native.dll.ThinksTracker_startCalibration = completed
+    native.calibrate_point(0.1, 0.1, 1)
+
+
+@pytest.mark.parametrize("status", [-9, -1, -6])
+def test_calibration_only_vendor_timeout_is_retryable(status):
+    from threading import Event
+    from types import SimpleNamespace
+
+    native = NativeTracker.__new__(NativeTracker)
+    native.handle = 1
+    native.point_finished = Event()
+    native.dll = SimpleNamespace(ThinksTracker_startCalibration=lambda *_args: status)
+    with pytest.raises(RuntimeError, match=str(status)) as error:
+        native.calibrate_point(0.1, 0.1, 1)
+    assert not isinstance(error.value, CalibrationPointTimeout)
+
+
 def test_calibration_reconfigures_vendor_for_all_nine_points():
     from types import SimpleNamespace
 
@@ -274,6 +507,169 @@ def test_calibration_bound_to_person_screen_geometry_and_device():
     assert key != profile_key({**config, "resolution": "1920x608x300"}, identity, "device-A")
 
 
+@pytest.mark.parametrize("saved_data", [b"new calibration", b"", None])
+def test_worker_reports_saved_path_only_after_valid_file_replaces_previous(
+    tmp_path, monkeypatch, saved_data
+):
+    from io import StringIO
+    from queue import Queue
+    from types import SimpleNamespace
+
+    from oculidoc.vendor_helpers import thinks_tracker_worker as worker
+
+    monkeypatch.chdir(tmp_path)
+    runtime = Path("relative-runtime")
+    config = {"resolution": "1920x1080x120", "screen_physical": [20, 25, 354, 200, 60]}
+    identity = {"patient_id": "synthetic-A", "screen": ["display", 1920, 1080]}
+    calibration = runtime / "calibration" / f"{profile_key(config, identity, 'device-A')}.dat"
+    calibration.parent.mkdir(parents=True)
+    calibration.write_bytes(b"previous calibration")
+    packets = []
+    closed = []
+
+    def save_calibration(_handle, path):
+        if saved_data is not None:
+            Path(path.decode("utf-8")).write_bytes(saved_data)
+        return 0
+
+    def emit(packet):
+        if packet["event"] == "saved":
+            assert packet["calibration_path"] == str(calibration.resolve())
+            assert calibration.read_bytes() == saved_data
+            assert not calibration.with_suffix(".pending.dat").exists()
+        packets.append(packet)
+
+    tracker = SimpleNamespace(
+        device_uid="device-A",
+        handle=1,
+        open=lambda: {"event": "ready"},
+        begin_calibration=lambda: None,
+        start_preview=lambda: None,
+        pause_eye_detection=lambda: None,
+        resume_eye_detection=lambda: None,
+        calibrate_point=lambda *_args: None,
+        check=NativeTracker.check,
+        path_bytes=lambda path: str(path).encode("utf-8"),
+        dll=SimpleNamespace(
+            ThinksTracker_checkCalibrationFinished=lambda _handle: 0,
+            ThinksTracker_SaveCalibrationData=save_calibration,
+        ),
+        samples=Queue(),
+        streaming=False,
+        close=lambda: closed.append(True),
+    )
+    messages = [
+        {"config": config, "identity": identity, "runtime": str(runtime), "mode": "calibrate"},
+        *({"command": "point", "point": [0.5, 0.5]} for _ in range(9)),
+        {"command": "save"},
+        {"command": "close"},
+    ]
+    monkeypatch.setattr(worker, "NativeTracker", lambda *_args: tracker)
+    monkeypatch.setattr(worker, "emit", emit)
+    monkeypatch.setattr(worker.sys, "stdin", StringIO("\n".join(map(json.dumps, messages))))
+
+    assert worker.main() == (0 if saved_data else 1)
+    assert closed == [True]
+    if saved_data:
+        assert packets[-1] == {
+            "event": "saved",
+            "calibration_path": str(calibration.resolve()),
+        }
+    else:
+        assert not any(packet["event"] == "saved" for packet in packets)
+        assert packets[-1]["event"] == "error"
+        assert calibration.read_bytes() == b"previous calibration"
+
+
+@pytest.mark.parametrize(
+    "attempts,failure,success",
+    [
+        (10, CalibrationPointTimeout(), True),
+        (9, CalibrationPointTimeout(), False),
+        (10, RuntimeError("SDK licence rejected (-9)"), False),
+        (10, OSError("access violation"), False),
+    ],
+)
+def test_worker_retries_timed_out_point_without_losing_progress(
+    tmp_path, monkeypatch, attempts, failure, success
+):
+    from io import StringIO
+    from queue import Queue
+    from types import SimpleNamespace
+
+    from oculidoc.vendor_helpers import thinks_tracker_worker as worker
+
+    counts = []
+    detection = []
+    saves = []
+    packets = []
+    closed = []
+
+    def collect(_x, _y, count):
+        counts.append(count)
+        if len(counts) == 3:
+            raise failure
+
+    def save(_handle, path):
+        saves.append(path)
+        Path(path.decode("utf-8")).write_bytes(b"nine completed points")
+        return 0
+
+    tracker = SimpleNamespace(
+        device_uid="device-A",
+        handle=1,
+        open=lambda: {"event": "ready"},
+        begin_calibration=lambda: None,
+        start_preview=lambda: None,
+        pause_eye_detection=lambda: detection.append("pause"),
+        resume_eye_detection=lambda: detection.append("resume"),
+        calibrate_point=collect,
+        check=NativeTracker.check,
+        path_bytes=lambda path: str(path).encode("utf-8"),
+        dll=SimpleNamespace(
+            ThinksTracker_checkCalibrationFinished=lambda _handle: 0,
+            ThinksTracker_SaveCalibrationData=save,
+        ),
+        samples=Queue(),
+        streaming=False,
+        close=lambda: closed.append(True),
+    )
+    messages = [
+        {
+            "config": {"resolution": "1920x1080x120", "screen_physical": [20, 25, 354, 200, 60]},
+            "identity": {"patient_id": "synthetic-A", "screen": ["display", 1920, 1080]},
+            "runtime": str(tmp_path),
+            "mode": "calibrate",
+        },
+        *({"command": "point", "point": [0.5, 0.5]} for _ in range(attempts)),
+        {"command": "save"},
+        {"command": "close"},
+    ]
+    monkeypatch.setattr(worker, "NativeTracker", lambda *_args: tracker)
+    monkeypatch.setattr(worker, "emit", packets.append)
+    monkeypatch.setattr(worker.sys, "stdin", StringIO("\n".join(map(json.dumps, messages))))
+
+    assert worker.main() == (0 if success else 1)
+    assert closed == [True]
+    done = [packet["count"] for packet in packets if packet["event"] == "point_done"]
+    retries = [packet for packet in packets if packet["event"] == "point_retry"]
+    if isinstance(failure, CalibrationPointTimeout):
+        assert counts == [1, 2, 3, 3, 4, 5, 6, 7, 8, 9][:attempts]
+        assert done == list(range(1, attempts))
+        assert detection == ["pause", "resume"] * attempts
+        assert retries == [
+            {"event": "point_retry", "count": 3, "status": -8, "message": str(failure)}
+        ]
+    else:
+        assert counts == [1, 2, 3]
+        assert done == [1, 2]
+        assert not retries
+    assert len(saves) == int(success)
+    assert packets[-1]["event"] == ("saved" if success else "error")
+    if not success and isinstance(failure, CalibrationPointTimeout):
+        assert "九点校准未完成" in packets[-1]["message"]
+
+
 def test_packaged_app_runs_isolated_worker_without_external_python(monkeypatch, tmp_path):
     config = read_thinks_config(config_file(tmp_path))
     app_executable = tmp_path / "OculiDoC.exe"
@@ -295,11 +691,44 @@ def test_unconfirmed_geometry_prevents_launch(tmp_path):
     assert process.process is None
 
 
-def test_real_child_missing_symbols_fails_and_is_reaped(tmp_path):
+def test_child_error_is_reported_and_handle_closed(tmp_path, monkeypatch):
+    from io import StringIO
+
+    from oculidoc.devices import thinks_tracker as thinks_module
+    from oculidoc.vendor_helpers.thinks_tracker_worker import PREFIX
+
+    class FailedChild:
+        def __init__(self, *_args, **_kwargs):
+            self.stdin = StringIO()
+            self.stdout = StringIO(
+                PREFIX + json.dumps({"event": "error", "message": "必需接口不可用"}) + "\n"
+            )
+            self.reaped = False
+
+        def poll(self):
+            return None
+
+        def wait(self, *, timeout):
+            self.reaped = True
+            return 1
+
+        def kill(self):
+            self.reaped = True
+
+    children = []
+
+    def create_child(*args, **kwargs):
+        child = FailedChild(*args, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(thinks_module.subprocess, "Popen", create_child)
     process = ThinksProcess(read_thinks_config(config_file(tmp_path)), tmp_path / "runtime", {})
-    with pytest.raises(DeviceConnectionError):
+    with pytest.raises(DeviceConnectionError, match="必需接口不可用"):
         process.start("probe")
     assert process.process is None
+    assert children[0].reaped
+    assert children[0].stdin.closed and children[0].stdout.closed
 
 
 class FakeProcess:

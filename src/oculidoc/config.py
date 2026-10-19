@@ -94,7 +94,22 @@ class Settings(BaseSettings):
 
     @property
     def thinks_tracker_config_path(self) -> Path:
-        return self.thinks_config_path or application_root() / "data/runtime/thinks_tracker.json"
+        if self.thinks_config_path is not None:
+            return self.thinks_config_path
+        current = self.thinks_tracker_write_path
+        if current.is_file():
+            return current
+        # Existing source-checkout installs may have saved this beside the app.
+        # Read it until the administrator saves settings into the data directory.
+        legacy = application_root() / "data" / "runtime" / "thinks_tracker.json"
+        return legacy if legacy.is_file() else current
+
+    @property
+    def thinks_tracker_write_path(self) -> Path:
+        return (
+            self.thinks_config_path
+            or self.data_dir.expanduser() / "runtime" / "thinks_tracker.json"
+        )
 
     @property
     def webcam_providers_path(self) -> Path:

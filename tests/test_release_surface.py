@@ -12,15 +12,16 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_release_uses_one_consistent_version() -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert metadata["project"]["version"] == "0.1.3"
-    assert oculidoc.__version__ == "0.1.3"
+    assert metadata["project"]["version"] == "0.1.3.1"
+    assert oculidoc.__version__ == "0.1.3.1"
 
 
 def test_public_readme_has_evaluation_license_and_support_path() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert "面向意识障碍患者的眼动仪操作界面与实验数据台" in readme
-    assert "公众可下载、安装和运行官方 v0.1.3" in readme
+    assert "公众可下载、安装和运行这些官方版本" in readme
+    assert "v0.1.3 与 v0.1.3.1" in readme
     assert "76 张刺激图和品牌资源" in readme
     assert "仅限非临床工程评估" in readme
     assert "不代表医院或科室的官方发布" in readme
@@ -42,7 +43,7 @@ def test_public_readme_has_evaluation_license_and_support_path() -> None:
 def test_notice_limits_public_permission_to_v013_nonclinical_evaluation() -> None:
     notice = (ROOT / "NOTICE.md").read_text(encoding="utf-8")
 
-    assert "`v0.1.3` 标签及其官方 GitHub Release" in notice
+    assert "`v0.1.3`、`v0.1.3.1` 标签及其官方 GitHub Release" in notice
     assert "76 张刺激图和品牌资源" in notice
     assert "安装和运行 OculiDoC v0.1.3" in notice
     assert "仅限非临床工程评估" in notice

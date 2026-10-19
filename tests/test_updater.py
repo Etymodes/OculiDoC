@@ -46,6 +46,20 @@ def test_installed_version_works_without_distribution_metadata() -> None:
     assert updater.installed_version() == oculidoc.__version__
 
 
+@pytest.mark.parametrize(
+    ("current", "status"),
+    [("0.1.3", "update_available"), ("0.1.3.1", "up_to_date"), ("0.1.4", "up_to_date")],
+)
+def test_maintenance_release_update_check(monkeypatch, current: str, status: str) -> None:
+    monkeypatch.setattr(updater, "_latest_release", lambda: {"tag_name": "v0.1.3.1"})
+
+    assert updater.check_release_update(current) == {
+        "status": status,
+        "current_version": current,
+        "latest_version": "0.1.3.1",
+    }
+
+
 @pytest.mark.parametrize("valid_hash", [True, False])
 def test_release_installer_starts_only_after_hash_match(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, valid_hash: bool
@@ -53,7 +67,7 @@ def test_release_installer_starts_only_after_hash_match(
     payload = b"synthetic installer bytes"
     expected_hash = sha256(payload).hexdigest() if valid_hash else "0" * 64
     release = {
-        "tag_name": "v99.0.0",
+        "tag_name": "v0.1.3.1",
         "assets": [
             {"name": name, "browser_download_url": f"https://example.test/{name}"}
             for name in (updater.SETUP_ASSET_NAME, updater.SETUP_HASH_ASSET_NAME)

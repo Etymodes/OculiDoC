@@ -15,6 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, field_validator
 
+from oculidoc.app_paths import application_root
 from oculidoc.devices.contracts import (
     DeviceInfo,
     DeviceKind,
@@ -56,6 +57,24 @@ class ThinksConfig(BaseModel):
         ):
             raise ValueError("屏幕及安装几何参数超出合理范围。")
         return value
+
+
+def discover_thinks_sdk_dll() -> Path | None:
+    """Find an explicitly side-loaded SDK beside a portable app or its development tree."""
+    root = application_root()
+    for base in (
+        root / "vendor" / "ThinksTracker",
+        root / "External" / "ThinksTracker",
+        root.parent / "External" / "ThinksTracker",
+    ):
+        for candidate in (
+            base / "ThinksTracker.dll",
+            base / "SDKV2.3" / "300hz" / "bin" / "ThinksTracker.dll",
+            base / "VendorApp120-300" / "ThinksTracker.dll",
+        ):
+            if candidate.is_file():
+                return candidate.resolve()
+    return None
 
 
 def read_thinks_config(path: Path) -> ThinksConfig:
